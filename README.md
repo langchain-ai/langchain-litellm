@@ -25,7 +25,7 @@
 </td>
 
 <td align="center">
-<img src="https://img.shields.io/badge/Platform-Linux%2C%20Windows%2C%20macOS-blue" alt="Platform">
+<img src="https://img.shields.io/badge/Platform-OS%20Independent-blue" alt="Platform">
 <br>
 <a href="https://www.python.org">
 <img src="https://img.shields.io/badge/Python-3670A0?style=flat&logo=python&logoColor=ffdd54" alt="Python">
