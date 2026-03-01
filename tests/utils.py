@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 from litellm import Router
 
 
@@ -31,3 +33,33 @@ def test_router() -> Router:
         },
     ]
     return Router(model_list)
+
+
+def test_embedding_router() -> Router:
+    fake_api_key = "fakekeyvalue"
+    model_list = [
+        {
+            "model_name": "openai/text-embedding-3-small",
+            "litellm_params": {
+                "model": "openai/text-embedding-3-small",
+                "api_key": fake_api_key,
+            },
+        },
+        {
+            "model_name": "openai/text-embedding-3-small",
+            "litellm_params": {
+                "model": "openai/text-embedding-3-small",
+                "api_key": fake_api_key,
+            },
+        },
+    ]
+    return Router(model_list)
+
+
+def mock_embedding_response(texts):
+    """Create a mock litellm embedding response."""
+    mock_response = MagicMock()
+    mock_response.data = [
+        {"embedding": [0.1, 0.2, 0.3], "index": i} for i in range(len(texts))
+    ]
+    return mock_response

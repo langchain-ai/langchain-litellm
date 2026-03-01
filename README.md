@@ -57,6 +57,76 @@ For conceptual guides, tutorials, and examples on using these classes, see the [
 ### Advanced Features
 
 <details>
+<summary><strong>Embeddings</strong></summary>
+
+Use `LiteLLMEmbeddings` to embed text across 100+ providers with a single, consistent interface. All configuration is explicit -- no environment variables required.
+
+```python
+from langchain_litellm import LiteLLMEmbeddings
+
+embeddings = LiteLLMEmbeddings(
+    model="openai/text-embedding-3-small",
+    api_key="sk-...",
+)
+
+vectors = embeddings.embed_documents(["hello", "world"])
+query_vector = embeddings.embed_query("hello")
+```
+
+Switch providers by changing `model` -- the interface stays the same:
+
+```python
+# Cohere
+embeddings = LiteLLMEmbeddings(
+    model="cohere/embed-english-v3.0",
+    api_key="...",
+    document_input_type="search_document",
+    query_input_type="search_query",
+)
+
+# Azure OpenAI
+embeddings = LiteLLMEmbeddings(
+    model="azure/my-embedding-deployment",
+    api_key="...",
+    api_base="https://my-resource.openai.azure.com",
+    api_version="2024-02-01",
+)
+
+# Bedrock
+embeddings = LiteLLMEmbeddings(
+    model="bedrock/amazon.titan-embed-text-v1",
+)
+```
+
+For load-balancing across multiple deployments of the same model, use `LiteLLMEmbeddingsRouter`:
+
+```python
+from litellm import Router
+from langchain_litellm import LiteLLMEmbeddingsRouter
+
+router = Router(model_list=[
+    {
+        "model_name": "text-embedding-3-small",
+        "litellm_params": {
+            "model": "openai/text-embedding-3-small",
+            "api_key": "sk-key1",
+        },
+    },
+    {
+        "model_name": "text-embedding-3-small",
+        "litellm_params": {
+            "model": "openai/text-embedding-3-small",
+            "api_key": "sk-key2",
+        },
+    },
+])
+
+embeddings = LiteLLMEmbeddingsRouter(router=router)
+```
+
+</details>
+
+<details>
 <summary><strong>Vertex AI Grounding (Google Search)</strong></summary>
 
 _Supported in v0.3.5+_
