@@ -59,6 +59,8 @@ For conceptual guides, tutorials, and examples on using these classes, see the [
 <details>
 <summary><strong>Embeddings</strong></summary>
 
+_Supported in v0.6.1+_
+
 Use `LiteLLMEmbeddings` to embed text across 100+ providers with a single, consistent interface. All configuration is explicit -- no environment variables required.
 
 ```python
