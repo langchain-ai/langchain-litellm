@@ -17,8 +17,6 @@
 <a href="https://pepy.tech/projects/langchain-litellm">
 <img src="https://static.pepy.tech/personalized-badge/langchain-litellm?period=total&units=INTERNATIONAL_SYSTEM&left_color=GREY&right_color=BLUE&left_text=downloads" alt="PyPI Downloads">
 </a><br/>
-<a href="https://github.com/Akshay-Dongare/langchain-litellm/actions/workflows/pypi-release.yml">
-</a>
 <a href="https://opensource.org/licenses/MIT">
 <img src="https://img.shields.io/badge/License-MIT-brightgreen.svg" alt="License: MIT">
 </a>
@@ -37,10 +35,10 @@
 </td>
 
 <td align="center">
-<img src="https://img.shields.io/github/issues-closed/Akshay-Dongare/langchain-litellm" alt="GitHub Issues Closed"><br/>
-<img src="https://img.shields.io/github/issues/Akshay-Dongare/langchain-litellm" alt="GitHub Issues Open"><br/>
-<img src="https://img.shields.io/github/issues-pr/Akshay-Dongare/langchain-litellm" alt="GitHub PRs Open"><br/>
-<img src="https://img.shields.io/github/issues-pr-closed/Akshay-Dongare/langchain-litellm" alt="GitHub PRs Closed">
+<img src="https://img.shields.io/github/issues-closed/langchain-ai/langchain-litellm" alt="GitHub Issues Closed"><br/>
+<img src="https://img.shields.io/github/issues/langchain-ai/langchain-litellm" alt="GitHub Issues Open"><br/>
+<img src="https://img.shields.io/github/issues-pr/langchain-ai/langchain-litellm" alt="GitHub PRs Open"><br/>
+<img src="https://img.shields.io/github/issues-pr-closed/langchain-ai/langchain-litellm" alt="GitHub PRs Closed">
 </td>
 </tr>
 </tbody>
