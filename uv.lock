@@ -1454,7 +1454,7 @@ wheels = [
 
 [[package]]
 name = "langchain-core"
-version = "1.2.14"
+version = "1.2.21"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jsonpatch" },
@@ -1466,9 +1466,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "uuid-utils" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3f/ff/c5e3da8eca8a18719b300ef6c29e28208ee4e9da7f9749022b96292b6541/langchain_core-1.2.14.tar.gz", hash = "sha256:09549d838a2672781da3a9502f3b9c300863284b77b27e2a6dac4e6e650acfed", size = 833399, upload-time = "2026-02-19T14:22:33.514Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8b/e4/135ef5bbb5b97bdf15f777b86d7fba2ef8a162723ae96b3c7c1add9891a9/langchain_core-1.2.21.tar.gz", hash = "sha256:1a121d13976dc0908d5a8222262810ea483a4cf2b05006bdba75df5b11b554b3", size = 841063, upload-time = "2026-03-23T18:01:01.674Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/71/41/fe6ae9065b866b1397adbfc98db5e1648e8dcd78126b8e1266fcbe2d6395/langchain_core-1.2.14-py3-none-any.whl", hash = "sha256:b349ca28c057ac1f9b5280ea091bddb057db24d0f1c3c89bbb590713e1715838", size = 501411, upload-time = "2026-02-19T14:22:32.013Z" },
+    { url = "https://files.pythonhosted.org/packages/5d/ae/f7591e57d4c6b64b521f9832fc471070902718c59bf135401f3b90a3f7ef/langchain_core-1.2.21-py3-none-any.whl", hash = "sha256:486cb405e2ecb0c407cb5fb5379ed0f919eb4b8a868b60cc8c3c15a3dfb560a7", size = 505756, upload-time = "2026-03-23T18:01:00.176Z" },
 ]
 
 [[package]]
@@ -1499,7 +1499,6 @@ test = [
     { name = "duckdb-engine" },
     { name = "freezegun" },
     { name = "langchain" },
-    { name = "langchain-core" },
     { name = "langchain-tests" },
     { name = "lark" },
     { name = "pandas" },
@@ -1519,7 +1518,6 @@ test = [
 typing = [
     { name = "cffi" },
     { name = "langchain" },
-    { name = "langchain-core" },
     { name = "langchain-text-splitters" },
     { name = "mypy" },
     { name = "mypy-protobuf" },
@@ -1535,8 +1533,8 @@ typing = [
 requires-dist = [
     { name = "cryptography", specifier = ">=46.0.5,<47.0.0" },
     { name = "httpx", specifier = ">=0.28.1,<0.29.0" },
-    { name = "langchain-core", specifier = ">0.3.15,<2.0.0" },
-    { name = "litellm", specifier = ">=1.77.2,<2.0.0" },
+    { name = "langchain-core", specifier = ">=1.2.21,<2.0.0" },
+    { name = "litellm", specifier = ">=1.77.2,!=1.82.7,!=1.82.8,<2.0.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -1552,7 +1550,6 @@ test = [
     { name = "duckdb-engine", specifier = ">=0.13.6,<1.0.0" },
     { name = "freezegun", specifier = ">=1.2.2,<2.0.0" },
     { name = "langchain", specifier = ">=1.0.0,<2.0.0" },
-    { name = "langchain-core", specifier = ">=1.0.0,<2.0.0" },
     { name = "langchain-tests", specifier = ">=1.0.0,<2.0.0" },
     { name = "lark", specifier = ">=1.1.5,<2.0.0" },
     { name = "pandas", specifier = ">=2.0.0,<3.0.0" },
@@ -1573,7 +1570,6 @@ test-integration = []
 typing = [
     { name = "cffi", specifier = ">=2.0.0,<3.0.0" },
     { name = "langchain", specifier = ">=1.0.0,<2.0.0" },
-    { name = "langchain-core", specifier = ">=1.0.0,<2.0.0" },
     { name = "langchain-text-splitters", specifier = ">=0.3.7,<0.4.0" },
     { name = "mypy", specifier = ">=1.12,<2.0" },
     { name = "mypy-protobuf", specifier = ">=3.0.0,<4.0.0" },
