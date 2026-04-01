@@ -4,12 +4,12 @@
     ".": {
       "release-type": "python",
       "package-name": "langchain-litellm",
-      "component": "litellm",
+      "component": "langchain-litellm",
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": false
     }
   },
-  "pull-request-title-pattern": "release(${component}): ${version}",
+  "pull-request-title-pattern": "release(litellm): ${version}",
   "component-no-space": true,
   "tag-separator": "==",
   "include-component-in-tag": true,
