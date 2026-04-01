@@ -4,7 +4,7 @@
     ".": {
       "release-type": "python",
       "package-name": "langchain-litellm",
-      "component": "langchain-litellm",
+      "component": "litellm",
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": false
     }
