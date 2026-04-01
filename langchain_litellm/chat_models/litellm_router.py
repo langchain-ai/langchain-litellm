@@ -1,4 +1,4 @@
-"""LiteLLM Router as LangChain Model."""
+"""LiteLLM Router as LangChain."""
 
 from typing import Any, AsyncIterator, Iterator, List, Mapping, Optional
 
@@ -96,7 +96,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
 
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs}
-        params = {k:v for k, v in params.items() if v is not None}
+        params = {k: v for k, v in params.items() if v is not None}
         self._prepare_params_for_router(params)
 
         response = self.router.completion(
@@ -115,12 +115,11 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         default_chunk_class = AIMessageChunk
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs, "stream": True}
-        params = {k:v for k, v in params.items() if v is not None}
+        params = {k: v for k, v in params.items() if v is not None}
         params["stream_options"] = self.stream_options
         self._prepare_params_for_router(params)
 
         for chunk in self.router.completion(messages=message_dicts, **params):
-
             usage_metadata = None
             if "usage" in chunk and chunk["usage"]:
                 usage_metadata = _create_usage_metadata(chunk["usage"])
@@ -129,7 +128,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                 # If the chunk has usage metadata but no content (typical for final stream chunk),
                 # yield it so the usage is not lost.
                 if usage_metadata:
-                    chunk_obj = default_chunk_class(content="", usage_metadata=usage_metadata)
+                    chunk_obj = default_chunk_class(
+                        content="", usage_metadata=usage_metadata
+                    )
                     cg_chunk = ChatGenerationChunk(message=chunk_obj)
                     if run_manager:
                         run_manager.on_llm_new_token("", chunk=cg_chunk, **params)
@@ -159,7 +160,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         default_chunk_class = AIMessageChunk
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs, "stream": True}
-        params = {k:v for k, v in params.items() if v is not None}
+        params = {k: v for k, v in params.items() if v is not None}
         params["stream_options"] = self.stream_options
         self._prepare_params_for_router(params)
 
@@ -175,12 +176,12 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             if len(chunk["choices"]) == 0:
                 # Yield pure usage chunk if present
                 if usage_metadata:
-                    chunk_obj = default_chunk_class(content="", usage_metadata=usage_metadata)
+                    chunk_obj = default_chunk_class(
+                        content="", usage_metadata=usage_metadata
+                    )
                     cg_chunk = ChatGenerationChunk(message=chunk_obj)
                     if run_manager:
-                        await run_manager.on_llm_new_token(
-                            "", chunk=cg_chunk, **params
-                        )
+                        await run_manager.on_llm_new_token("", chunk=cg_chunk, **params)
                     yield cg_chunk
                 continue
 
@@ -215,7 +216,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
 
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs}
-        params = {k:v for k, v in params.items() if v is not None}
+        params = {k: v for k, v in params.items() if v is not None}
         self._prepare_params_for_router(params)
 
         response = await self.router.acompletion(
@@ -276,5 +277,5 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         # Add top-level provider_specific_fields if present in response
         if provider_specific_fields:
             llm_output["provider_specific_fields"] = provider_specific_fields
-            
+
         return ChatResult(generations=generations, llm_output=llm_output)
