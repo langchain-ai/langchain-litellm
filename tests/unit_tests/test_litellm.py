@@ -2,7 +2,7 @@
 
 from typing import Type
 
-from langchain_core.messages import AIMessageChunk, AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_tests.unit_tests import ChatModelUnitTests
 from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function
 
@@ -10,6 +10,7 @@ from langchain_litellm.chat_models import ChatLiteLLM
 from langchain_litellm.chat_models.litellm import (
     _convert_delta_to_message_chunk,
     _convert_dict_to_message,
+    _create_usage_metadata,
     _inject_reasoning_content_into_content,
 )
 
@@ -159,6 +160,42 @@ class TestChatLiteLLMUnit(ChatModelUnitTests):
         
         assert "provider_specific_fields" in result.llm_output
         assert result.llm_output["provider_specific_fields"]["citations"][0]["source"] == "test"
+
+
+def test_create_usage_metadata_reads_pydantic_prompt_details() -> None:
+    """Cache token details should be extracted from Pydantic prompt_tokens_details."""
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=30,
+            cache_creation_tokens=10,
+        ),
+    )
+    meta = _create_usage_metadata(usage)
+    assert meta["input_tokens"] == 100
+    assert meta["input_token_details"]["cache_read"] == 30
+    assert meta["input_token_details"]["cache_creation"] == 10
+
+
+def test_create_usage_metadata_reads_dict_prompt_details() -> None:
+    """Cache token details should also work from plain dict prompt_tokens_details."""
+    usage = {
+        "prompt_tokens": 50,
+        "completion_tokens": 25,
+        "total_tokens": 75,
+        "prompt_tokens_details": {
+            "cached_tokens": 15,
+            "cache_creation_tokens": 5,
+        },
+    }
+    meta = _create_usage_metadata(usage)
+    assert meta["input_tokens"] == 50
+    assert meta["input_token_details"]["cache_read"] == 15
+    assert meta["input_token_details"]["cache_creation"] == 5
 
 
 def test_inject_reasoning_content_into_string_content() -> None:

@@ -554,13 +554,14 @@ class ChatLiteLLM(BaseChatModel):
     def _create_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
         generations = []
         token_usage = response.get("usage", {})
+        usage_metadata = _create_usage_metadata(token_usage)
         for res in response["choices"]:
             message = _convert_dict_to_message(res["message"])
             if isinstance(message, AIMessage):
                 message.response_metadata = {
                     "model_name": self.model_name or self.model
                 }
-                message.usage_metadata = _create_usage_metadata(token_usage)
+                message.usage_metadata = usage_metadata
             gen = ChatGeneration(
                 message=message,
                 generation_info=dict(finish_reason=res.get("finish_reason"), logprobs=res.get("logprobs")),
@@ -935,11 +936,20 @@ def _create_usage_metadata(token_usage: Mapping[str, Any]) -> UsageMetadata:
     # Fallback to nested prompt_tokens_details (Anthropic standard)
     if cache_read is None or cache_creation is None:
         prompt_details = token_usage.get("prompt_tokens_details")
-        if isinstance(prompt_details, dict):
-            if cache_read is None:
-                cache_read = prompt_details.get("cached_tokens")
-            if cache_creation is None:
-                cache_creation = prompt_details.get("cache_creation_tokens")
+        if prompt_details is not None:
+            if isinstance(prompt_details, dict):
+                if cache_read is None:
+                    cache_read = prompt_details.get("cached_tokens")
+                if cache_creation is None:
+                    cache_creation = prompt_details.get("cache_creation_tokens")
+            else:
+                # Handle Pydantic models (e.g. LiteLLM PromptTokensDetailsWrapper)
+                if cache_read is None:
+                    cache_read = getattr(prompt_details, "cached_tokens", None)
+                if cache_creation is None:
+                    cache_creation = getattr(
+                        prompt_details, "cache_creation_tokens", None
+                    )
 
     if cache_read is not None:
         input_token_details["cache_read"] = int(cache_read)

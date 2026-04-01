@@ -2,10 +2,11 @@
 
 from typing import Type
 
+from langchain_core.messages import AIMessage
 from langchain_tests.unit_tests import ChatModelUnitTests
 
 from langchain_litellm.chat_models import ChatLiteLLMRouter
-from tests.utils import test_router  
+from tests.utils import test_router
 
 
 class TestChatLiteLLMRouterUnit(ChatModelUnitTests):
@@ -74,3 +75,30 @@ class TestChatLiteLLMRouterUnit(ChatModelUnitTests):
         
         assert "provider_specific_fields" in result.llm_output
         assert result.llm_output["provider_specific_fields"]["citations"][0]["source"] == "vertex"
+
+    def test_router_create_chat_result_sets_usage_metadata(self):
+        """Router _create_chat_result should set usage_metadata on AIMessage."""
+        router = test_router()
+        llm = ChatLiteLLMRouter(router=router)
+
+        mock_response = {
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": "hello"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 12,
+                "completion_tokens": 8,
+                "total_tokens": 20,
+            },
+        }
+
+        result = llm._create_chat_result(mock_response, metadata={})
+        msg = result.generations[0].message
+        assert isinstance(msg, AIMessage)
+        assert msg.usage_metadata is not None
+        assert msg.usage_metadata["input_tokens"] == 12
+        assert msg.usage_metadata["output_tokens"] == 8
+        assert msg.usage_metadata["total_tokens"] == 20
