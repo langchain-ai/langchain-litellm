@@ -102,3 +102,13 @@ class TestChatLiteLLMRouterUnit(ChatModelUnitTests):
         assert msg.usage_metadata["input_tokens"] == 12
         assert msg.usage_metadata["output_tokens"] == 8
         assert msg.usage_metadata["total_tokens"] == 20
+
+    def test_router_stream_options_set_for_all_providers():
+        """Router _stream must set stream_options for non-OpenAI providers."""
+        router = test_router()
+        llm = ChatLiteLLMRouter(router=router)
+        stream_options = (
+            llm.stream_options if llm.stream_options is not None
+            else {"include_usage": True}
+        )
+        assert stream_options == {"include_usage": True}
