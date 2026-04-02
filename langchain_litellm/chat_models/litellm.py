@@ -74,7 +74,6 @@ from langchain_core.utils.pydantic import TypeBaseModel, is_basemodel_subclass
 from langchain_core.utils import get_from_dict_or_env, pre_init
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from litellm.types.utils import Delta
-from litellm.utils import get_valid_models
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -354,9 +353,6 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
         
     return message_dict
 
-_OPENAI_MODELS = get_valid_models(custom_llm_provider="openai")
-
-
 class ChatLiteLLM(BaseChatModel):
     """Chat model that uses the LiteLLM API."""
 
@@ -591,15 +587,6 @@ class ChatLiteLLM(BaseChatModel):
             params["stop"] = stop
         message_dicts = [_convert_message_to_dict(m) for m in messages]
         return message_dicts, params
-    
-    def _is_openai(self) -> bool:
-        """Check if the current model is OpenAI or Azure."""
-        model = self.model_name or self.model or ""
-        if self.custom_llm_provider == "openai" or self.custom_llm_provider == "azure":
-            return True
-        if "azure" in model or model in _OPENAI_MODELS:
-            return True
-        return False
 
     def _stream(
         self,
