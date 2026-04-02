@@ -1,7 +1,7 @@
 """Unit tests for LiteLLMEmbeddings."""
 
 from typing import Type
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from langchain_tests.unit_tests import EmbeddingsUnitTests

@@ -10,7 +10,6 @@ import pytest
 
 from langchain_litellm.document_loaders import LiteLLMOCRLoader
 
-
 # Skip tests if proxy is not configured
 PROXY_URL = os.getenv("LITELLM_PROXY_URL")
 PROXY_API_KEY = os.getenv("LITELLM_API_KEY")

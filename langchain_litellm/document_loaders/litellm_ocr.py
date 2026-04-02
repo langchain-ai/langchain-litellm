@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import httpx
 import mimetypes
 import time
-from typing import Any, Dict, Iterator, List, Literal, Optional
 from pathlib import Path
+from typing import Any, Dict, Iterator, List, Literal, Optional
 
+import httpx
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents import Document
 

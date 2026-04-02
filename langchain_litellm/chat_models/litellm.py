@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from operator import itemgetter
 from typing import (
     Any,
     AsyncIterator,
@@ -17,12 +18,9 @@ from typing import (
     Sequence,
     Tuple,
     Type,
-    TypedDict,
     Union,
     cast,
 )
-from typing_extensions import is_typeddict
-from operator import itemgetter
 
 from langchain_core.callbacks import (
     AsyncCallbackManagerForLLMRun,
@@ -52,29 +50,30 @@ from langchain_core.messages import (
     ToolCallChunk,
     ToolMessage,
 )
+from langchain_core.messages.ai import UsageMetadata
 from langchain_core.messages.utils import (
     convert_to_openai_data_block,
     is_data_content_block,
 )
-from langchain_core.messages.ai import UsageMetadata
+from langchain_core.output_parsers import (
+    JsonOutputKeyToolsParser,
+    JsonOutputParser,
+    PydanticOutputParser,
+    PydanticToolsParser,
+)
 from langchain_core.outputs import (
     ChatGeneration,
     ChatGenerationChunk,
     ChatResult,
 )
-from langchain_core.output_parsers import (
-    JsonOutputParser,
-    PydanticOutputParser,
-    PydanticToolsParser,
-    JsonOutputKeyToolsParser,
-)
 from langchain_core.runnables import Runnable, RunnablePassthrough
 from langchain_core.tools import BaseTool
-from langchain_core.utils.pydantic import TypeBaseModel, is_basemodel_subclass
 from langchain_core.utils import get_from_dict_or_env, pre_init
 from langchain_core.utils.function_calling import convert_to_openai_tool
+from langchain_core.utils.pydantic import TypeBaseModel, is_basemodel_subclass
 from litellm.types.utils import Delta
 from pydantic import BaseModel, Field
+from typing_extensions import is_typeddict
 
 logger = logging.getLogger(__name__)
 

@@ -1,13 +1,13 @@
 """Unit tests for LiteLLMEmbeddingsRouter."""
 
 from typing import Type
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_tests.unit_tests import EmbeddingsUnitTests
 
 from langchain_litellm.embeddings import LiteLLMEmbeddingsRouter
-from tests.utils import test_embedding_router, mock_embedding_response
+from tests.utils import mock_embedding_response, test_embedding_router
 
 
 class TestLiteLLMEmbeddingsRouterUnit(EmbeddingsUnitTests):
