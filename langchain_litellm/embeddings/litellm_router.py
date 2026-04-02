@@ -19,22 +19,24 @@ class LiteLLMEmbeddingsRouter(LiteLLMEmbeddings):
             from litellm import Router
             from langchain_litellm import LiteLLMEmbeddingsRouter
 
-            router = Router(model_list=[
-                {
-                    "model_name": "text-embedding-3-small",
-                    "litellm_params": {
-                        "model": "openai/text-embedding-3-small",
-                        "api_key": "sk-key1",
+            router = Router(
+                model_list=[
+                    {
+                        "model_name": "text-embedding-3-small",
+                        "litellm_params": {
+                            "model": "openai/text-embedding-3-small",
+                            "api_key": "sk-key1",
+                        },
                     },
-                },
-                {
-                    "model_name": "text-embedding-3-small",
-                    "litellm_params": {
-                        "model": "openai/text-embedding-3-small",
-                        "api_key": "sk-key2",
+                    {
+                        "model_name": "text-embedding-3-small",
+                        "litellm_params": {
+                            "model": "openai/text-embedding-3-small",
+                            "api_key": "sk-key2",
+                        },
                     },
-                },
-            ])
+                ]
+            )
             embeddings = LiteLLMEmbeddingsRouter(router=router)
     """
 

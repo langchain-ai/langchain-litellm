@@ -51,7 +51,7 @@ class LiteLLMOCRLoader(BaseLoader):
         loader = LiteLLMOCRLoader(
             url_path="https://example.com/document.pdf",
             model="azure-document",
-            mode="page"
+            mode="page",
         )
         documents = loader.load()
         ```
@@ -64,7 +64,7 @@ class LiteLLMOCRLoader(BaseLoader):
             api_key="my-bearer-token",
             file_path="/path/to/document.pdf",
             model="azure-document",
-            mode="single"
+            mode="single",
         )
         documents = await loader.aload()
         ```
