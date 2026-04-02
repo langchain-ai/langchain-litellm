@@ -50,7 +50,11 @@ from langchain_core.messages import (
     ToolCallChunk,
     ToolMessage,
 )
-from langchain_core.messages.ai import InputTokenDetails, UsageMetadata
+from langchain_core.messages.ai import (
+    InputTokenDetails,
+    OutputTokenDetails,
+    UsageMetadata,
+)
 from langchain_core.messages.utils import (
     convert_to_openai_data_block,
     is_data_content_block,
@@ -929,49 +933,73 @@ class ChatLiteLLM(BaseChatModel):
         return "litellm-chat"
 
 
-def _create_usage_metadata(token_usage: Mapping[str, Any]) -> UsageMetadata:
-    input_tokens = token_usage.get("prompt_tokens", 0)
-    output_tokens = token_usage.get("completion_tokens", 0)
+def _create_usage_metadata(token_usage: Any) -> UsageMetadata:
+    """Create `UsageMetadata` from a LiteLLM usage object.
 
+    `token_usage` may be a plain dict (streaming path, after `model_dump()`) or
+    a Pydantic `Usage` model (non-streaming path, where
+    `ModelResponse.get("usage")` returns the raw model).
+
+    Both are handled uniformly via `_get`.
+    """
+
+    def _get(obj: Any, key: str) -> Any:
+        """Retrieve *key* via dict lookup or attribute access."""
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    input_tokens = int(_get(token_usage, "prompt_tokens") or 0)
+    output_tokens = int(_get(token_usage, "completion_tokens") or 0)
+    _raw_total = _get(token_usage, "total_tokens")
+    total_tokens = (
+        int(_raw_total) if _raw_total is not None else (input_tokens + output_tokens)
+    )
+
+    # ── input token details (cache) ───────────────────────────────────────
+    cache_read = _get(token_usage, "cache_read_input_tokens")
+    cache_creation = _get(token_usage, "cache_creation_input_tokens")
+
+    # Fallback: some providers nest cache info inside prompt_tokens_details
+    # instead of top-level keys.
+    if cache_read is None or cache_creation is None:
+        prompt_details = _get(token_usage, "prompt_tokens_details")
+        if prompt_details is not None:
+            if cache_read is None:
+                cache_read = _get(prompt_details, "cached_tokens")
+            if cache_creation is None:
+                cache_creation = _get(prompt_details, "cache_creation_tokens")
+
+    input_token_details: dict = {
+        "cache_read": int(cache_read) if cache_read is not None else None,
+        "cache_creation": int(cache_creation) if cache_creation is not None else None,
+    }
+
+    # ── output token details (reasoning) ──────────────────────────────────
+    completion_details = _get(token_usage, "completion_tokens_details")
+    reasoning = (
+        _get(completion_details, "reasoning_tokens")
+        if completion_details is not None
+        else None
+    )
+    output_token_details: dict = {
+        "reasoning": int(reasoning) if reasoning is not None else None,
+    }
+
+    # ── assemble ──────────────────────────────────────────────────────────
     usage_metadata = UsageMetadata(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
-        total_tokens=input_tokens + output_tokens,
+        total_tokens=total_tokens,
     )
 
-    # Extract cache token details from LiteLLM usage
-    input_token_details: InputTokenDetails = {}
+    filtered_input = {k: v for k, v in input_token_details.items() if v is not None}
+    if filtered_input:
+        usage_metadata["input_token_details"] = InputTokenDetails(**filtered_input)
 
-    # Try top-level keys (LiteLLM convenience fields)
-    cache_read = token_usage.get("cache_read_input_tokens")
-    cache_creation = token_usage.get("cache_creation_input_tokens")
-
-    # Fallback to nested prompt_tokens_details (Anthropic standard)
-    if cache_read is None or cache_creation is None:
-        prompt_details = token_usage.get("prompt_tokens_details")
-        if prompt_details is not None:
-            if isinstance(prompt_details, dict):
-                if cache_read is None:
-                    cache_read = prompt_details.get("cached_tokens")
-                if cache_creation is None:
-                    cache_creation = prompt_details.get("cache_creation_tokens")
-            else:
-                # Handle Pydantic models (e.g. LiteLLM PromptTokensDetailsWrapper)
-                if cache_read is None:
-                    cache_read = getattr(prompt_details, "cached_tokens", None)
-                if cache_creation is None:
-                    cache_creation = getattr(
-                        prompt_details, "cache_creation_tokens", None
-                    )
-
-    if cache_read is not None:
-        input_token_details["cache_read"] = int(cache_read)
-
-    if cache_creation is not None:
-        input_token_details["cache_creation"] = int(cache_creation)
-
-    if input_token_details:
-        usage_metadata["input_token_details"] = input_token_details
+    filtered_output = {k: v for k, v in output_token_details.items() if v is not None}
+    if filtered_output:
+        usage_metadata["output_token_details"] = OutputTokenDetails(**filtered_output)
 
     return usage_metadata
 

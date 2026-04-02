@@ -166,6 +166,7 @@ def test_provider_specific_fields_in_chat_result() -> None:
 
     result = llm._create_chat_result(mock_response)
 
+    assert result.llm_output is not None
     assert "provider_specific_fields" in result.llm_output
     assert (
         result.llm_output["provider_specific_fields"]["citations"][0]["source"]
@@ -210,6 +211,59 @@ def test_create_usage_metadata_reads_dict_prompt_details() -> None:
     assert meta["input_tokens"] == 50
     assert meta["input_token_details"]["cache_read"] == 15
     assert meta["input_token_details"]["cache_creation"] == 5
+
+
+def test_create_usage_metadata_uses_total_tokens_from_response() -> None:
+    """total_tokens should be read from the response, not recomputed."""
+    usage = {
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "total_tokens": 20,  # deliberately != 10 + 5
+    }
+    meta = _create_usage_metadata(usage)
+    assert meta["total_tokens"] == 20
+
+
+def test_create_usage_metadata_extracts_reasoning_tokens() -> None:
+    """Reasoning tokens from completion_tokens_details should populate
+    output_token_details."""
+    usage = {
+        "prompt_tokens": 10,
+        "completion_tokens": 50,
+        "total_tokens": 60,
+        "completion_tokens_details": {"reasoning_tokens": 30},
+    }
+    meta = _create_usage_metadata(usage)
+    assert meta["output_token_details"]["reasoning"] == 30
+
+
+def test_create_usage_metadata_extracts_reasoning_tokens_pydantic() -> None:
+    """Reasoning tokens should be extracted from Pydantic Usage models too."""
+    from litellm.types.utils import CompletionTokensDetailsWrapper, Usage
+
+    usage = Usage(
+        prompt_tokens=10,
+        completion_tokens=50,
+        total_tokens=60,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            reasoning_tokens=30,
+        ),
+    )
+    meta = _create_usage_metadata(usage)
+    assert meta["output_token_details"]["reasoning"] == 30
+
+
+def test_create_usage_metadata_handles_none_values() -> None:
+    """Explicit None values for token counts should be treated as 0."""
+    usage = {
+        "prompt_tokens": None,
+        "completion_tokens": None,
+        "total_tokens": None,
+    }
+    meta = _create_usage_metadata(usage)
+    assert meta["input_tokens"] == 0
+    assert meta["output_tokens"] == 0
+    assert meta["total_tokens"] == 0
 
 
 # ── reasoning content injection ────────────────────────────────────────────────
