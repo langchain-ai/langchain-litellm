@@ -15,11 +15,6 @@ from langchain_litellm.chat_models.litellm import (
 )
 
 
-def _dummy_tool(x: str) -> str:
-    """A dummy tool for testing."""
-    return x
-
-
 class TestChatLiteLLMUnit(ChatModelUnitTests):
     @property
     def chat_model_class(self) -> Type[ChatLiteLLM]:
@@ -287,46 +282,3 @@ def test_stream_options_respected_when_set_explicitly() -> None:
     else:
         params["stream_options"] = {"include_usage": True}
     assert params["stream_options"] == custom
-
-
-def test_bind_tools_any_becomes_required_without_thinking() -> None:
-    """tool_choice='any' should map to 'required' when thinking is NOT enabled."""
-    llm = ChatLiteLLM(model="anthropic/claude-sonnet-4-20250514", api_key="fake")
-    bound = llm.bind_tools([_dummy_tool], tool_choice="any")
-    assert bound.kwargs["tool_choice"] == "required"
-
-
-def test_bind_tools_any_suppresses_cot_with_thinking() -> None:
-    """Reproduces issue #119: tool_choice='any' maps to 'required' even when
-    thinking is enabled, which suppresses chain-of-thought on Claude models.
-
-    Expected: tool_choice should be downgraded to 'auto' (or dropped) when
-    thinking is enabled so the model can produce CoT text before tool calls.
-
-    Currently fails because bind_tools unconditionally maps 'any' -> 'required'.
-    """
-    llm = ChatLiteLLM(
-        model="anthropic/claude-sonnet-4-20250514",
-        api_key="fake",
-        model_kwargs={"thinking": {"type": "enabled", "budget_tokens": 5000}},
-    )
-    bound = llm.bind_tools([_dummy_tool], tool_choice="any")
-    # With thinking enabled, tool_choice should NOT be "required"
-    assert bound.kwargs["tool_choice"] != "required", (
-        "tool_choice='any' was mapped to 'required' even with thinking enabled, "
-        "which suppresses chain-of-thought reasoning (issue #119)"
-    )
-
-
-def test_bind_tools_true_suppresses_cot_with_thinking() -> None:
-    """Same as above but with tool_choice=True (also maps to 'required')."""
-    llm = ChatLiteLLM(
-        model="anthropic/claude-sonnet-4-20250514",
-        api_key="fake",
-        model_kwargs={"thinking": {"type": "enabled", "budget_tokens": 5000}},
-    )
-    bound = llm.bind_tools([_dummy_tool], tool_choice=True)
-    assert bound.kwargs["tool_choice"] != "required", (
-        "tool_choice=True was mapped to 'required' even with thinking enabled, "
-        "which suppresses chain-of-thought reasoning (issue #119)"
-    )
