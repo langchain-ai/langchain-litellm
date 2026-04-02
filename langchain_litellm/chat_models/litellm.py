@@ -50,7 +50,7 @@ from langchain_core.messages import (
     ToolCallChunk,
     ToolMessage,
 )
-from langchain_core.messages.ai import UsageMetadata
+from langchain_core.messages.ai import InputTokenDetails, UsageMetadata
 from langchain_core.messages.utils import (
     convert_to_openai_data_block,
     is_data_content_block,
@@ -648,7 +648,7 @@ class ChatLiteLLM(BaseChatModel):
                     )
                     cg_chunk = ChatGenerationChunk(message=chunk_obj)
                     if run_manager:
-                        run_manager.on_llm_new_token(chunk_obj.content, chunk=cg_chunk)
+                        run_manager.on_llm_new_token("", chunk=cg_chunk)
                     yield cg_chunk
                 continue
 
@@ -708,9 +708,7 @@ class ChatLiteLLM(BaseChatModel):
                     )
                     cg_chunk = ChatGenerationChunk(message=chunk_obj)
                     if run_manager:
-                        await run_manager.on_llm_new_token(
-                            chunk_obj.content, chunk=cg_chunk
-                        )
+                        await run_manager.on_llm_new_token("", chunk=cg_chunk)
                     yield cg_chunk
                 continue
 
@@ -831,6 +829,7 @@ class ChatLiteLLM(BaseChatModel):
             msg = f"Received unsupported arguments {kwargs}"
             raise ValueError(msg)
 
+        parser: Runnable[Any, Any]
         if method == "function_calling":
             # Determine appropriate tool_choice based on model
             # Use "required" for most models, which is more widely supported than "any"
@@ -941,7 +940,7 @@ def _create_usage_metadata(token_usage: Mapping[str, Any]) -> UsageMetadata:
     )
 
     # Extract cache token details from LiteLLM usage
-    input_token_details = {}
+    input_token_details: InputTokenDetails = {}
 
     # Try top-level keys (LiteLLM convenience fields)
     cache_read = token_usage.get("cache_read_input_tokens")

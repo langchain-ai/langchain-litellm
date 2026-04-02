@@ -50,7 +50,7 @@ class LiteLLMEmbeddingsRouter(LiteLLMEmbeddings):
             router: A litellm.Router instance.
             **kwargs: Additional parameters passed to LiteLLMEmbeddings.
         """
-        super().__init__(router=router, **kwargs)
+        super().__init__(**{**kwargs, "router": router})  # type: ignore[call-arg]
         self.router = router
 
     def _get_router_params(self, *, input_type: Optional[str] = None) -> Dict[str, Any]:
