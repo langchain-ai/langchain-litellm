@@ -612,7 +612,7 @@ class ChatLiteLLM(BaseChatModel):
         params = {**params, **kwargs, "stream": True}
         if self.stream_options is not None:
             params["stream_options"] = self.stream_options
-        elif self._is_openai():
+        else:
             params["stream_options"] = {"include_usage": True}
         default_chunk_class = AIMessageChunk
         
@@ -671,7 +671,7 @@ class ChatLiteLLM(BaseChatModel):
         params = {**params, **kwargs, "stream": True}
         if self.stream_options is not None:
             params["stream_options"] = self.stream_options
-        elif self._is_openai():
+        else:
             params["stream_options"] = {"include_usage": True}
         default_chunk_class = AIMessageChunk
         

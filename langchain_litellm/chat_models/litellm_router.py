@@ -116,7 +116,10 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs, "stream": True}
         params = {k: v for k, v in params.items() if v is not None}
-        params["stream_options"] = self.stream_options
+        params["stream_options"] = (
+            self.stream_options if self.stream_options is not None
+            else {"include_usage": True}
+        )
         self._prepare_params_for_router(params)
 
         for chunk in self.router.completion(messages=message_dicts, **params):
@@ -161,7 +164,10 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs, "stream": True}
         params = {k: v for k, v in params.items() if v is not None}
-        params["stream_options"] = self.stream_options
+        params["stream_options"] = (
+            self.stream_options if self.stream_options is not None
+            else {"include_usage": True}
+        )
         self._prepare_params_for_router(params)
 
         async for chunk in await self.router.acompletion(
