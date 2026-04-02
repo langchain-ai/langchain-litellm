@@ -56,7 +56,7 @@ def test_embedding_router() -> Router:
     return Router(model_list)
 
 
-def mock_embedding_response(texts):
+def mock_embedding_response(texts):  # type: ignore[no-untyped-def]
     """Create a mock litellm embedding response."""
     mock_response = MagicMock()
     mock_response.data = [

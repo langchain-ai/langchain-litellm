@@ -318,7 +318,7 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
 
     # Handle multimodal content conversion if the content is a list
     if isinstance(content, list):
-        new_content = []
+        new_content: List[Any] = []
         for item in content:
             if isinstance(item, dict):
                 # Check for LiteLLM's native format which expects a 'file' key
@@ -844,7 +844,7 @@ class ChatLiteLLM(BaseChatModel):
                 llm = self.bind_tools([schema], tool_choice=tool_choice_value)
             # dict or typeddict
             elif is_typeddict(schema) or isinstance(schema, dict):
-                tool_def = convert_to_openai_tool(schema)
+                tool_def = convert_to_openai_tool(schema)  # type: ignore[arg-type]
                 function_name = tool_def["function"]["name"]
                 parser = JsonOutputKeyToolsParser(
                     key_name=function_name, first_tool_only=True
@@ -867,7 +867,7 @@ class ChatLiteLLM(BaseChatModel):
                 parser = JsonOutputParser()
 
             # Setup LLM with json_schema
-            tool_def = convert_to_openai_tool(schema)
+            tool_def = convert_to_openai_tool(schema)  # type: ignore[arg-type]
             raw_schema = tool_def["function"]["parameters"]
             json_schema = _ensure_additional_properties_false(raw_schema)
 

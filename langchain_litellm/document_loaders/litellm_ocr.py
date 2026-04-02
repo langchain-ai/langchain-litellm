@@ -183,7 +183,7 @@ class LiteLLMOCRLoader(BaseLoader):
 
     def _make_ocr_request(
         self, document_payload: Dict[str, Any], sync: bool = True
-    ) -> Dict[str, Any]:
+    ) -> Any:
         """Make synchronous or asynchronous OCR request with retries."""
         url = f"{self.proxy_base_url}/ocr"
         headers = {"Content-Type": "application/json"}
@@ -354,21 +354,21 @@ class LiteLLMOCRLoader(BaseLoader):
             # Concatenate all pages
             all_content = "\n\n".join(page.get("markdown", "") for page in pages)
 
-            metadata: Dict[str, Any] = {
+            single_metadata: Dict[str, Any] = {
                 "total_pages": len(pages),
             }
 
             # Add source info
             if self.file_path:
-                metadata["source"] = self.file_path
+                single_metadata["source"] = self.file_path
             elif self.url_path:
-                metadata["source"] = self.url_path
+                single_metadata["source"] = self.url_path
 
             # Add model info
             if "model" in response:
-                metadata["model"] = response["model"]
+                single_metadata["model"] = response["model"]
 
-            return [Document(page_content=all_content, metadata=metadata)]
+            return [Document(page_content=all_content, metadata=single_metadata)]
 
     def load(self) -> List[Document]:
         """Load documents synchronously.
