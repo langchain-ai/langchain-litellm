@@ -19,16 +19,16 @@ def mock_ocr_response() -> Dict[str, Any]:
             {
                 "index": 0,
                 "markdown": "# Page 1\n\nThis is the first page.",
-                "dimensions": {"width": 612, "height": 792}
+                "dimensions": {"width": 612, "height": 792},
             },
             {
                 "index": 1,
                 "markdown": "# Page 2\n\nThis is the second page.",
-                "dimensions": {"width": 612, "height": 792}
-            }
+                "dimensions": {"width": 612, "height": 792},
+            },
         ],
         "model": "azure_ai/doc-intelligence/prebuilt-layout",
-        "object": "ocr"
+        "object": "ocr",
     }
 
 
@@ -44,8 +44,7 @@ class TestLiteLLMOCRLoaderValidation:
         """Test that multiple input sources raises ValueError."""
         with pytest.raises(ValueError, match="Must provide exactly one"):
             LiteLLMOCRLoader(
-                file_path="/tmp/test.pdf",
-                url_path="https://example.com/doc.pdf"
+                file_path="/tmp/test.pdf", url_path="https://example.com/doc.pdf"
             )
 
     def test_invalid_mode_raises_error(self) -> None:
@@ -53,38 +52,28 @@ class TestLiteLLMOCRLoaderValidation:
         with pytest.raises(ValueError, match="mode must be"):
             LiteLLMOCRLoader(
                 url_path="https://example.com/doc.pdf",
-                mode="invalid"  # type: ignore
+                mode="invalid",  # type: ignore
             )
 
     def test_invalid_proxy_url_raises_error(self) -> None:
         """Test that invalid proxy URL raises ValueError."""
         with pytest.raises(ValueError, match="proxy_base_url must start with"):
             LiteLLMOCRLoader(
-                proxy_base_url="invalid-url",
-                url_path="https://example.com/doc.pdf"
+                proxy_base_url="invalid-url", url_path="https://example.com/doc.pdf"
             )
 
     def test_invalid_timeout_raises_error(self) -> None:
         """Test that non-positive timeout raises ValueError."""
         with pytest.raises(ValueError, match="timeout must be positive"):
-            LiteLLMOCRLoader(
-                url_path="https://example.com/doc.pdf",
-                timeout=0
-            )
-        
+            LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", timeout=0)
+
         with pytest.raises(ValueError, match="timeout must be positive"):
-            LiteLLMOCRLoader(
-                url_path="https://example.com/doc.pdf",
-                timeout=-1.0
-            )
+            LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", timeout=-1.0)
 
     def test_invalid_max_retries_raises_error(self) -> None:
         """Test that negative max_retries raises ValueError."""
         with pytest.raises(ValueError, match="max_retries must be non-negative"):
-            LiteLLMOCRLoader(
-                url_path="https://example.com/doc.pdf",
-                max_retries=-1
-            )
+            LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", max_retries=-1)
 
 
 class TestLiteLLMOCRLoaderDocumentPreparation:
@@ -97,7 +86,7 @@ class TestLiteLLMOCRLoaderDocumentPreparation:
 
         assert payload == {
             "type": "document_url",
-            "document_url": "https://example.com/doc.pdf"
+            "document_url": "https://example.com/doc.pdf",
         }
 
     def test_prepare_base64_payload(self) -> None:
@@ -116,10 +105,7 @@ class TestLiteLLMOCRLoaderDocumentPreparation:
         loader = LiteLLMOCRLoader(base64_content=data_uri)
         payload = loader._prepare_document_payload()
 
-        assert payload == {
-            "type": "document_url",
-            "document_url": data_uri
-        }
+        assert payload == {"type": "document_url", "document_url": data_uri}
 
     def test_prepare_bytes_payload(self) -> None:
         """Test preparing payload for bytes input."""
@@ -158,12 +144,11 @@ class TestLiteLLMOCRLoaderDocumentPreparation:
 class TestLiteLLMOCRLoaderResponseProcessing:
     """Test response processing."""
 
-    def test_process_response_page_mode(self, mock_ocr_response: Dict[str, Any]) -> None:
+    def test_process_response_page_mode(
+        self, mock_ocr_response: Dict[str, Any]
+    ) -> None:
         """Test processing response in page mode."""
-        loader = LiteLLMOCRLoader(
-            url_path="https://example.com/doc.pdf",
-            mode="page"
-        )
+        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", mode="page")
         documents = loader._process_response(mock_ocr_response)
 
         assert len(documents) == 2
@@ -174,18 +159,20 @@ class TestLiteLLMOCRLoaderResponseProcessing:
         assert documents[0].metadata["width"] == 612
         assert documents[0].metadata["height"] == 792
         assert documents[0].metadata["source"] == "https://example.com/doc.pdf"
-        assert documents[0].metadata["model"] == "azure_ai/doc-intelligence/prebuilt-layout"
+        assert (
+            documents[0].metadata["model"]
+            == "azure_ai/doc-intelligence/prebuilt-layout"
+        )
 
         # Check second page
         assert documents[1].page_content == "# Page 2\n\nThis is the second page."
         assert documents[1].metadata["page"] == 1
 
-    def test_process_response_single_mode(self, mock_ocr_response: Dict[str, Any]) -> None:
+    def test_process_response_single_mode(
+        self, mock_ocr_response: Dict[str, Any]
+    ) -> None:
         """Test processing response in single mode."""
-        loader = LiteLLMOCRLoader(
-            url_path="https://example.com/doc.pdf",
-            mode="single"
-        )
+        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", mode="single")
         documents = loader._process_response(mock_ocr_response)
 
         assert len(documents) == 1
@@ -197,7 +184,10 @@ class TestLiteLLMOCRLoaderResponseProcessing:
         assert documents[0].page_content == expected_content
         assert documents[0].metadata["total_pages"] == 2
         assert documents[0].metadata["source"] == "https://example.com/doc.pdf"
-        assert documents[0].metadata["model"] == "azure_ai/doc-intelligence/prebuilt-layout"
+        assert (
+            documents[0].metadata["model"]
+            == "azure_ai/doc-intelligence/prebuilt-layout"
+        )
 
     def test_process_response_missing_pages_field(self) -> None:
         """Test that missing pages field raises ValueError."""
@@ -212,9 +202,7 @@ class TestLiteLLMOCRLoaderLoad:
 
     @patch("httpx.Client")
     def test_load_success(
-        self,
-        mock_client_class: MagicMock,
-        mock_ocr_response: Dict[str, Any]
+        self, mock_client_class: MagicMock, mock_ocr_response: Dict[str, Any]
     ) -> None:
         """Test successful synchronous load."""
         # Setup mock
@@ -228,10 +216,7 @@ class TestLiteLLMOCRLoaderLoad:
         mock_client_class.return_value = mock_client
 
         # Load documents
-        loader = LiteLLMOCRLoader(
-            url_path="https://example.com/doc.pdf",
-            mode="page"
-        )
+        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", mode="page")
         documents = loader.load()
 
         # Verify results
@@ -247,9 +232,7 @@ class TestLiteLLMOCRLoaderLoad:
 
     @patch("httpx.Client")
     def test_load_with_auth(
-        self,
-        mock_client_class: MagicMock,
-        mock_ocr_response: Dict[str, Any]
+        self, mock_client_class: MagicMock, mock_ocr_response: Dict[str, Any]
     ) -> None:
         """Test load with authentication."""
         # Setup mock
@@ -266,7 +249,7 @@ class TestLiteLLMOCRLoaderLoad:
             proxy_base_url="https://my-proxy.com",
             api_key="test-key",
             url_path="https://example.com/doc.pdf",
-            model="custom-model"
+            model="custom-model",
         )
         loader.load()
 
@@ -288,18 +271,13 @@ class TestLiteLLMOCRLoaderLoad:
         mock_client = MagicMock()
         mock_client.__enter__.return_value = mock_client
         mock_client.post.side_effect = httpx.HTTPStatusError(
-            "Error",
-            request=MagicMock(),
-            response=mock_response
+            "Error", request=MagicMock(), response=mock_response
         )
         mock_client_class.return_value = mock_client
 
         # Load should raise RuntimeError
         # Set max_retries=0 to avoid waiting/sleeping during this test
-        loader = LiteLLMOCRLoader(
-            url_path="https://example.com/doc.pdf",
-            max_retries=0
-        )
+        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", max_retries=0)
 
         # HTTP errors should contain "LiteLLM OCR request" and status code
         with pytest.raises(RuntimeError, match="LiteLLM OCR request.*Status: 500"):
@@ -318,10 +296,7 @@ class TestLiteLLMOCRLoaderLoad:
 
         # Load should raise RuntimeError
         # Set max_retries=0 to avoid waiting/sleeping during this test
-        loader = LiteLLMOCRLoader(
-            url_path="https://example.com/doc.pdf",
-            max_retries=0
-        )
+        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", max_retries=0)
 
         # Connection errors should contain "Failed to connect"
         with pytest.raises(RuntimeError, match="Failed to connect"):
@@ -334,9 +309,7 @@ class TestLiteLLMOCRLoaderAsyncLoad:
     @pytest.mark.asyncio
     @patch("httpx.AsyncClient")
     async def test_aload_success(
-        self,
-        mock_client_class: MagicMock,
-        mock_ocr_response: Dict[str, Any]
+        self, mock_client_class: MagicMock, mock_ocr_response: Dict[str, Any]
     ) -> None:
         """Test successful asynchronous load."""
         # Setup mock
@@ -351,10 +324,7 @@ class TestLiteLLMOCRLoaderAsyncLoad:
         mock_client_class.return_value = mock_client
 
         # Load documents
-        loader = LiteLLMOCRLoader(
-            url_path="https://example.com/doc.pdf",
-            mode="single"
-        )
+        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", mode="single")
         documents = await loader.aload()
 
         # Verify results
@@ -371,9 +341,7 @@ class TestLiteLLMOCRLoaderLazyLoad:
 
     @patch("httpx.Client")
     def test_lazy_load(
-        self,
-        mock_client_class: MagicMock,
-        mock_ocr_response: Dict[str, Any]
+        self, mock_client_class: MagicMock, mock_ocr_response: Dict[str, Any]
     ) -> None:
         """Test lazy loading yields documents."""
         # Setup mock
@@ -386,10 +354,7 @@ class TestLiteLLMOCRLoaderLazyLoad:
         mock_client_class.return_value = mock_client
 
         # Lazy load documents
-        loader = LiteLLMOCRLoader(
-            url_path="https://example.com/doc.pdf",
-            mode="page"
-        )
+        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", mode="page")
         documents = list(loader.lazy_load())
 
         # Verify results
@@ -397,11 +362,14 @@ class TestLiteLLMOCRLoaderLazyLoad:
         assert documents[0].page_content == "# Page 1\n\nThis is the first page."
         assert documents[1].page_content == "# Page 2\n\nThis is the second page."
 
+
 class TestLiteLLMOCRLoaderResilience:
     """Test timeout and retry logic."""
 
     @patch("httpx.Client")
-    def test_custom_timeout(self, mock_client_class: MagicMock, mock_ocr_response: Dict[str, Any]) -> None:
+    def test_custom_timeout(
+        self, mock_client_class: MagicMock, mock_ocr_response: Dict[str, Any]
+    ) -> None:
         """Test that custom timeout is passed to httpx client."""
         # Setup successful mock
         mock_response = MagicMock()
@@ -411,10 +379,7 @@ class TestLiteLLMOCRLoaderResilience:
         mock_client.post.return_value = mock_response
         mock_client_class.return_value = mock_client
 
-        loader = LiteLLMOCRLoader(
-            url_path="https://example.com/doc.pdf",
-            timeout=123.0
-        )
+        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", timeout=123.0)
         loader.load()
 
         # Verify timeout
@@ -426,7 +391,7 @@ class TestLiteLLMOCRLoaderResilience:
         self,
         mock_sleep: MagicMock,
         mock_client_class: MagicMock,
-        mock_ocr_response: Dict[str, Any]
+        mock_ocr_response: Dict[str, Any],
     ) -> None:
         """Test that loader retries on failure and eventually succeeds."""
         import httpx
@@ -437,23 +402,22 @@ class TestLiteLLMOCRLoaderResilience:
 
         mock_client = MagicMock()
         mock_client.__enter__.return_value = mock_client
-        
+
         # Create a proper mock response for HTTPStatusError (transient 500 error)
         mock_error_response = MagicMock()
         mock_error_response.status_code = 500
-        
+
         # Side effect: Raise error twice, then return response
         mock_client.post.side_effect = [
             httpx.RequestError("Fail 1"),
-            httpx.HTTPStatusError("Fail 2", request=MagicMock(), response=mock_error_response),
-            mock_response
+            httpx.HTTPStatusError(
+                "Fail 2", request=MagicMock(), response=mock_error_response
+            ),
+            mock_response,
         ]
         mock_client_class.return_value = mock_client
 
-        loader = LiteLLMOCRLoader(
-            url_path="https://example.com/doc.pdf",
-            max_retries=3
-        )
+        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", max_retries=3)
         result = loader.load()
 
         assert len(result) > 0
@@ -465,9 +429,7 @@ class TestLiteLLMOCRLoaderResilience:
     @patch("httpx.Client")
     @patch("time.sleep")
     def test_retry_exhaustion(
-        self,
-        mock_sleep: MagicMock,
-        mock_client_class: MagicMock
+        self, mock_sleep: MagicMock, mock_client_class: MagicMock
     ) -> None:
         """Test that loader raises error after exhausting retries."""
         import httpx
@@ -478,10 +440,7 @@ class TestLiteLLMOCRLoaderResilience:
         mock_client.post.side_effect = httpx.RequestError("Always failing")
         mock_client_class.return_value = mock_client
 
-        loader = LiteLLMOCRLoader(
-            url_path="https://example.com/doc.pdf",
-            max_retries=2
-        )
+        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", max_retries=2)
 
         with pytest.raises(RuntimeError, match="3 attempts made"):
             loader.load()
@@ -492,9 +451,7 @@ class TestLiteLLMOCRLoaderResilience:
     @patch("httpx.Client")
     @patch("time.sleep")
     def test_non_transient_errors_not_retried(
-        self,
-        mock_sleep: MagicMock,
-        mock_client_class: MagicMock
+        self, mock_sleep: MagicMock, mock_client_class: MagicMock
     ) -> None:
         """Test that non-transient HTTP errors (like 404) are not retried."""
         import httpx
@@ -503,20 +460,15 @@ class TestLiteLLMOCRLoaderResilience:
         mock_error_response = MagicMock()
         mock_error_response.status_code = 404
         mock_error_response.text = "Not Found"
-        
+
         mock_client = MagicMock()
         mock_client.__enter__.return_value = mock_client
         mock_client.post.side_effect = httpx.HTTPStatusError(
-            "Not Found",
-            request=MagicMock(),
-            response=mock_error_response
+            "Not Found", request=MagicMock(), response=mock_error_response
         )
         mock_client_class.return_value = mock_client
 
-        loader = LiteLLMOCRLoader(
-            url_path="https://example.com/doc.pdf",
-            max_retries=3
-        )
+        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", max_retries=3)
 
         with pytest.raises(RuntimeError, match="Status: 404"):
             loader.load()
@@ -529,9 +481,7 @@ class TestLiteLLMOCRLoaderResilience:
     @patch("httpx.Client")
     @patch("time.sleep")
     def test_transient_errors_are_retried(
-        self,
-        mock_sleep: MagicMock,
-        mock_client_class: MagicMock
+        self, mock_sleep: MagicMock, mock_client_class: MagicMock
     ) -> None:
         """Test that transient HTTP errors (429, 500) are retried."""
         import httpx
@@ -540,24 +490,29 @@ class TestLiteLLMOCRLoaderResilience:
         mock_error_response_429 = MagicMock()
         mock_error_response_429.status_code = 429
         mock_error_response_429.text = "Too Many Requests"
-        
+
         mock_error_response_503 = MagicMock()
         mock_error_response_503.status_code = 503
         mock_error_response_503.text = "Service Unavailable"
-        
+
         mock_client = MagicMock()
         mock_client.__enter__.return_value = mock_client
         mock_client.post.side_effect = [
-            httpx.HTTPStatusError("Too Many", request=MagicMock(), response=mock_error_response_429),
-            httpx.HTTPStatusError("Unavailable", request=MagicMock(), response=mock_error_response_503),
-            httpx.HTTPStatusError("Still Unavailable", request=MagicMock(), response=mock_error_response_503),
+            httpx.HTTPStatusError(
+                "Too Many", request=MagicMock(), response=mock_error_response_429
+            ),
+            httpx.HTTPStatusError(
+                "Unavailable", request=MagicMock(), response=mock_error_response_503
+            ),
+            httpx.HTTPStatusError(
+                "Still Unavailable",
+                request=MagicMock(),
+                response=mock_error_response_503,
+            ),
         ]
         mock_client_class.return_value = mock_client
 
-        loader = LiteLLMOCRLoader(
-            url_path="https://example.com/doc.pdf",
-            max_retries=2
-        )
+        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", max_retries=2)
 
         with pytest.raises(RuntimeError, match="Status: 503"):
             loader.load()

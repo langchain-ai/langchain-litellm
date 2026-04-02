@@ -50,7 +50,9 @@ class TestLiteLLMEmbeddingsParams:
 
     def test_none_params_excluded(self):
         """Test that None-valued params are excluded from the litellm call."""
-        embeddings = LiteLLMEmbeddings(model="openai/text-embedding-3-small", api_key="fake")
+        embeddings = LiteLLMEmbeddings(
+            model="openai/text-embedding-3-small", api_key="fake"
+        )
         params = embeddings._get_litellm_params()
         assert "api_base" not in params
         assert "api_version" not in params

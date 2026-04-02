@@ -43,7 +43,9 @@ class TestLiteLLMEmbeddingsRouterParams:
         router = MagicMock()
         router.embedding.return_value = mock_embedding_response(["hello", "world"])
 
-        embeddings = LiteLLMEmbeddingsRouter(router=router, model="text-embedding-3-small")
+        embeddings = LiteLLMEmbeddingsRouter(
+            router=router, model="text-embedding-3-small"
+        )
         result = embeddings.embed_documents(["hello", "world"])
 
         router.embedding.assert_called_once()
@@ -58,7 +60,9 @@ class TestLiteLLMEmbeddingsRouterParams:
         router = MagicMock()
         router.embedding.return_value = mock_embedding_response(["hello"])
 
-        embeddings = LiteLLMEmbeddingsRouter(router=router, model="text-embedding-3-small")
+        embeddings = LiteLLMEmbeddingsRouter(
+            router=router, model="text-embedding-3-small"
+        )
         result = embeddings.embed_query("hello")
 
         router.embedding.assert_called_once()
@@ -72,7 +76,9 @@ class TestLiteLLMEmbeddingsRouterParams:
             return_value=mock_embedding_response(["hello", "world"])
         )
 
-        embeddings = LiteLLMEmbeddingsRouter(router=router, model="text-embedding-3-small")
+        embeddings = LiteLLMEmbeddingsRouter(
+            router=router, model="text-embedding-3-small"
+        )
         result = await embeddings.aembed_documents(["hello", "world"])
 
         router.aembedding.assert_called_once()
@@ -83,11 +89,11 @@ class TestLiteLLMEmbeddingsRouterParams:
     async def test_aembed_query_uses_router(self):
         """Test that aembed_query delegates to router.aembedding()."""
         router = MagicMock()
-        router.aembedding = AsyncMock(
-            return_value=mock_embedding_response(["hello"])
-        )
+        router.aembedding = AsyncMock(return_value=mock_embedding_response(["hello"]))
 
-        embeddings = LiteLLMEmbeddingsRouter(router=router, model="text-embedding-3-small")
+        embeddings = LiteLLMEmbeddingsRouter(
+            router=router, model="text-embedding-3-small"
+        )
         result = await embeddings.aembed_query("hello")
 
         router.aembedding.assert_called_once()

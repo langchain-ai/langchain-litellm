@@ -51,9 +51,7 @@ class LiteLLMEmbeddingsRouter(LiteLLMEmbeddings):
         super().__init__(router=router, **kwargs)
         self.router = router
 
-    def _get_router_params(
-        self, *, input_type: Optional[str] = None
-    ) -> Dict[str, Any]:
+    def _get_router_params(self, *, input_type: Optional[str] = None) -> Dict[str, Any]:
         """Build parameter dict for router.embedding(), excluding None values."""
         params: Dict[str, Any] = {
             **self.model_kwargs,

@@ -66,7 +66,7 @@ from langchain_core.output_parsers import (
     JsonOutputParser,
     PydanticOutputParser,
     PydanticToolsParser,
-    JsonOutputKeyToolsParser
+    JsonOutputKeyToolsParser,
 )
 from langchain_core.runnables import Runnable, RunnablePassthrough
 from langchain_core.tools import BaseTool
@@ -81,6 +81,7 @@ logger = logging.getLogger(__name__)
 
 class ChatLiteLLMException(Exception):
     """Error with the `LiteLLM I/O` library"""
+
 
 def _create_retry_decorator(
     llm: ChatLiteLLM,
@@ -100,6 +101,7 @@ def _create_retry_decorator(
     return create_base_retry_decorator(
         error_types=errors, max_retries=llm.max_retries, run_manager=run_manager
     )
+
 
 def _inject_reasoning_content_into_content(
     content: Any, reasoning_content: str
@@ -123,6 +125,7 @@ def _inject_reasoning_content_into_content(
 
     return [thinking_block, content]
 
+
 def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
     role = _dict["role"]
     if role == "user":
@@ -138,34 +141,50 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
 
         if _dict.get("tool_calls"):
             additional_kwargs["tool_calls"] = _dict["tool_calls"]
-            
+
             # Populate standard tool_calls attribute
             for tc in _dict["tool_calls"]:
                 try:
                     # Handle both dict and object (Pydantic) access safely
-                    tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
-                    
-                    func = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
+                    tc_id = (
+                        tc.get("id")
+                        if isinstance(tc, dict)
+                        else getattr(tc, "id", None)
+                    )
+
+                    func = (
+                        tc.get("function")
+                        if isinstance(tc, dict)
+                        else getattr(tc, "function", None)
+                    )
                     if func:
-                        func_name = func.get("name") if isinstance(func, dict) else getattr(func, "name", None)
-                        func_args = func.get("arguments") if isinstance(func, dict) else getattr(func, "arguments", None)
-                        
+                        func_name = (
+                            func.get("name")
+                            if isinstance(func, dict)
+                            else getattr(func, "name", None)
+                        )
+                        func_args = (
+                            func.get("arguments")
+                            if isinstance(func, dict)
+                            else getattr(func, "arguments", None)
+                        )
+
                         # Handle JSON String arguments (e.g., OpenAI)
                         if isinstance(func_args, str):
                             try:
                                 func_args = json.loads(func_args)
                             except json.JSONDecodeError:
-                                pass # Keep as string or empty if strictly required
-                        
+                                pass  # Keep as string or empty if strictly required
+
                         # Ensure args is a dict (e.g., already parsed Dict from Vertex)
                         if not isinstance(func_args, dict):
                             func_args = {}
 
-                        tool_calls.append(ToolCall(
-                            name=func_name or "",
-                            args=func_args,
-                            id=tc_id or ""
-                        ))
+                        tool_calls.append(
+                            ToolCall(
+                                name=func_name or "", args=func_args, id=tc_id or ""
+                            )
+                        )
                 except Exception:
                     # Prevent crash on malformed tool call
                     pass
@@ -175,17 +194,19 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
             content = _inject_reasoning_content_into_content(
                 content, _dict["reasoning_content"]
             )
-        
+
         # Check standard field first, then fallback to Vertex specific field
         provider_specific_fields = _dict.get("provider_specific_fields")
         if not provider_specific_fields:
             provider_specific_fields = _dict.get("vertex_ai_grounding_metadata")
-        
+
         if provider_specific_fields:
             additional_kwargs["provider_specific_fields"] = provider_specific_fields
 
-        return AIMessage(content=content, additional_kwargs=additional_kwargs, tool_calls=tool_calls)
-        
+        return AIMessage(
+            content=content, additional_kwargs=additional_kwargs, tool_calls=tool_calls
+        )
+
     elif role == "system":
         return SystemMessage(content=_dict["content"])
     elif role == "function":
@@ -217,11 +238,13 @@ def _convert_delta_to_message_chunk(
         function_call = getattr(delta, "function_call", None)
         raw_tool_calls = getattr(delta, "tool_calls", None)
         reasoning_content = getattr(delta, "reasoning_content", None)
-        
+
         # Check standard field first, then fallback to Vertex specific field
         provider_specific_fields = getattr(delta, "provider_specific_fields", None)
         if not provider_specific_fields:
-            provider_specific_fields = getattr(delta, "vertex_ai_grounding_metadata", None)
+            provider_specific_fields = getattr(
+                delta, "vertex_ai_grounding_metadata", None
+            )
 
     additional_kwargs = {}
     if function_call:
@@ -231,7 +254,7 @@ def _convert_delta_to_message_chunk(
 
     if reasoning_content and (role == "assistant" or default_class == AIMessageChunk):
         content = _inject_reasoning_content_into_content(content, reasoning_content)
-    
+
     if provider_specific_fields is not None:
         additional_kwargs["provider_specific_fields"] = provider_specific_fields
 
@@ -278,6 +301,7 @@ def _convert_delta_to_message_chunk(
     else:
         return default_class(content=content)  # type: ignore[call-arg]
 
+
 def _lc_tool_call_to_openai_tool_call(tool_call: ToolCall) -> dict:
     return {
         "type": "function",
@@ -288,10 +312,11 @@ def _lc_tool_call_to_openai_tool_call(tool_call: ToolCall) -> dict:
         },
     }
 
+
 def _convert_message_to_dict(message: BaseMessage) -> dict:
     # Capture the original content from the message
     content = message.content
-    
+
     # Handle multimodal content conversion if the content is a list
     if isinstance(content, list):
         new_content = []
@@ -301,25 +326,25 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
                 # Preserve this format exactly as-is to avoid breaking existing LiteLLM implementations
                 if item.get("type") == "file" and "file" in item:
                     new_content.append(item)
-                
+
                 # Check for LangChain's standard multimodal format (e.g., 'media', 'image_url')
                 # Convert these to the OpenAI/LiteLLM compatible format using the core utility
                 elif is_data_content_block(item):
                     new_content.append(convert_to_openai_data_block(item))
-                
+
                 # Pass through standard text blocks or other unrecognized dict formats unchanged
                 else:
                     new_content.append(item)
             else:
                 # Append non-dict items (like strings) directly
                 new_content.append(item)
-        
+
         # Update content with the processed list
         content = new_content
 
     # Initialize the message dictionary with the processed content
     message_dict: Dict[str, Any] = {"content": content}
-    
+
     # Determine the role and specific attributes based on the message type
     if isinstance(message, ChatMessage):
         message_dict["role"] = message.role
@@ -346,12 +371,13 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
         message_dict["tool_call_id"] = message.tool_call_id
     else:
         raise ValueError(f"Got unknown type {message}")
-    
+
     # Attach the name field if it exists in additional arguments
     if "name" in message.additional_kwargs:
         message_dict["name"] = message.additional_kwargs["name"]
-        
+
     return message_dict
+
 
 class ChatLiteLLM(BaseChatModel):
     """Chat model that uses the LiteLLM API."""
@@ -462,11 +488,8 @@ class ChatLiteLLM(BaseChatModel):
 
         return _completion_with_retry(**kwargs)
 
-
     async def acompletion_with_retry(
-        self,
-        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
-        **kwargs: Any
+        self, run_manager: Optional[AsyncCallbackManagerForLLMRun] = None, **kwargs: Any
     ) -> Any:
         """Use tenacity to retry the async completion call."""
         retry_decorator = _create_retry_decorator(self, run_manager=run_manager)
@@ -560,7 +583,9 @@ class ChatLiteLLM(BaseChatModel):
                 message.usage_metadata = usage_metadata
             gen = ChatGeneration(
                 message=message,
-                generation_info=dict(finish_reason=res.get("finish_reason"), logprobs=res.get("logprobs")),
+                generation_info=dict(
+                    finish_reason=res.get("finish_reason"), logprobs=res.get("logprobs")
+                ),
             )
             generations.append(gen)
         set_model_value = self.model
@@ -602,24 +627,26 @@ class ChatLiteLLM(BaseChatModel):
         else:
             params["stream_options"] = {"include_usage": True}
         default_chunk_class = AIMessageChunk
-        
+
         for chunk in self.completion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
         ):
             # Ensure chunk is a dict
             if not isinstance(chunk, dict):
                 chunk = chunk.model_dump()
-            
+
             # Extract usage metadata first
             usage_metadata = None
             if "usage" in chunk and chunk["usage"]:
                 usage_metadata = _create_usage_metadata(chunk["usage"])
-            
+
             # Handle empty choices (usage-only chunks)
             if len(chunk["choices"]) == 0:
                 if usage_metadata:
                     # Create an empty chunk just to carry the metadata
-                    chunk_obj = default_chunk_class(content="", usage_metadata=usage_metadata)
+                    chunk_obj = default_chunk_class(
+                        content="", usage_metadata=usage_metadata
+                    )
                     cg_chunk = ChatGenerationChunk(message=chunk_obj)
                     if run_manager:
                         run_manager.on_llm_new_token(chunk_obj.content, chunk=cg_chunk)
@@ -627,17 +654,17 @@ class ChatLiteLLM(BaseChatModel):
                 continue
 
             delta = chunk["choices"][0]["delta"]
-            
+
             # Inject Root Metadata into Delta
             root_metadata = chunk.get("provider_specific_fields")
             if not root_metadata:
                 root_metadata = chunk.get("vertex_ai_grounding_metadata")
-            
+
             if root_metadata:
                 delta["provider_specific_fields"] = root_metadata
 
             chunk = _convert_delta_to_message_chunk(delta, default_chunk_class)
-            
+
             if usage_metadata and isinstance(chunk, AIMessageChunk):
                 chunk.usage_metadata = usage_metadata
 
@@ -661,44 +688,48 @@ class ChatLiteLLM(BaseChatModel):
         else:
             params["stream_options"] = {"include_usage": True}
         default_chunk_class = AIMessageChunk
-        
+
         async for chunk in await self.acompletion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
         ):
             # Ensure chunk is a dict
             if not isinstance(chunk, dict):
                 chunk = chunk.model_dump()
-            
+
             # Extract usage metadata first
             usage_metadata = None
             if "usage" in chunk and chunk["usage"]:
                 usage_metadata = _create_usage_metadata(chunk["usage"])
-            
+
             # Handle empty choices (usage-only chunks)
             if len(chunk["choices"]) == 0:
                 if usage_metadata:
-                    chunk_obj = default_chunk_class(content="", usage_metadata=usage_metadata)
+                    chunk_obj = default_chunk_class(
+                        content="", usage_metadata=usage_metadata
+                    )
                     cg_chunk = ChatGenerationChunk(message=chunk_obj)
                     if run_manager:
-                        await run_manager.on_llm_new_token(chunk_obj.content, chunk=cg_chunk)
+                        await run_manager.on_llm_new_token(
+                            chunk_obj.content, chunk=cg_chunk
+                        )
                     yield cg_chunk
                 continue
 
             delta = chunk["choices"][0]["delta"]
-            
-            # Inject Root Metadata into Delta 
+
+            # Inject Root Metadata into Delta
             root_metadata = chunk.get("provider_specific_fields")
             if not root_metadata:
                 root_metadata = chunk.get("vertex_ai_grounding_metadata")
-            
+
             if root_metadata:
                 delta["provider_specific_fields"] = root_metadata
-            
+
             chunk = _convert_delta_to_message_chunk(delta, default_chunk_class)
-            
+
             if usage_metadata and isinstance(chunk, AIMessageChunk):
                 chunk.usage_metadata = usage_metadata
-                
+
             default_chunk_class = chunk.__class__
             cg_chunk = ChatGenerationChunk(message=chunk)
             if run_manager:
@@ -768,7 +799,7 @@ class ChatLiteLLM(BaseChatModel):
             if tool_choice is True or tool_choice == "any":
                 tool_choice = "required"
             # if tool_choice is False, we leave it (it behaves like None/auto depending on provider)
-        
+
         # Handle dict tool_choice logic
         elif isinstance(tool_choice, dict):
             tool_names = [
@@ -783,12 +814,14 @@ class ChatLiteLLM(BaseChatModel):
                 )
 
         return super().bind(tools=formatted_tools, tool_choice=tool_choice, **kwargs)
-    
+
     def with_structured_output(
         self,
         schema: Union[Dict[str, Any], type, BaseModel],
         *,
-        method: Optional[Literal["json_schema", "function_calling", "json_mode"]] = "json_schema",
+        method: Optional[
+            Literal["json_schema", "function_calling", "json_mode"]
+        ] = "json_schema",
         include_raw: bool = False,
         strict: Optional[bool] = None,
         **kwargs: Any,
@@ -797,35 +830,32 @@ class ChatLiteLLM(BaseChatModel):
         _ = kwargs.pop("tools", None)
         if kwargs:
             msg = f"Received unsupported arguments {kwargs}"
-            raise ValueError(msg)         
+            raise ValueError(msg)
 
         if method == "function_calling":
             # Determine appropriate tool_choice based on model
             # Use "required" for most models, which is more widely supported than "any"
             tool_choice_value = "required"
-            
+
             # pydantic
             if isinstance(schema, type) and is_basemodel_subclass(schema):
                 parser = PydanticToolsParser(
-                    tools=[cast(TypeBaseModel, schema)], 
-                    first_tool_only=True
+                    tools=[cast(TypeBaseModel, schema)], first_tool_only=True
                 )
                 llm = self.bind_tools([schema], tool_choice=tool_choice_value)
             # dict or typeddict
             elif is_typeddict(schema) or isinstance(schema, dict):
                 tool_def = convert_to_openai_tool(schema)
-                function_name = tool_def['function']['name']
+                function_name = tool_def["function"]["name"]
                 parser = JsonOutputKeyToolsParser(
-                    key_name=function_name,
-                    first_tool_only=True
+                    key_name=function_name, first_tool_only=True
                 )
                 llm = self.bind_tools([tool_def], tool_choice=tool_choice_value)
-            else:                
+            else:
                 msg = f"Unsupported schema type {type(schema)}"
                 raise ValueError(msg)
 
         elif method == "json_schema":
-
             if strict is None:
                 strict_flag = True
             else:
@@ -836,14 +866,14 @@ class ChatLiteLLM(BaseChatModel):
                 parser = PydanticOutputParser(pydantic_object=schema)
             else:
                 parser = JsonOutputParser()
-            
+
             # Setup LLM with json_schema
             tool_def = convert_to_openai_tool(schema)
             raw_schema = tool_def["function"]["parameters"]
             json_schema = _ensure_additional_properties_false(raw_schema)
-            
+
             # Safe schema name extraction
-            schema_name = getattr(schema, '__name__', tool_def["function"]["name"])
+            schema_name = getattr(schema, "__name__", tool_def["function"]["name"])
 
             llm = self.bind(
                 response_format={
@@ -851,37 +881,34 @@ class ChatLiteLLM(BaseChatModel):
                     "json_schema": {
                         "name": schema_name,
                         "schema": json_schema,
-                        "strict": strict_flag
-                    }
+                        "strict": strict_flag,
+                    },
                 }
             )
-        
+
         elif method == "json_mode":
             # Setup parser for JSON text
             if isinstance(schema, type) and is_basemodel_subclass(schema):
                 parser = PydanticOutputParser(pydantic_object=schema)
             else:
                 parser = JsonOutputParser()
-            
+
             # Setup LLM with json_mode (simpler than json_schema)
-            llm = self.bind(
-                response_format={"type": "json_object"}
-            )
-        
+            llm = self.bind(response_format={"type": "json_object"})
+
         else:
             msg = f"Unsupported method '{method}'. Must be 'json_schema', 'function_calling', or 'json_mode'"
             raise ValueError(msg)
-    
+
         if include_raw:
             parser_with_fallback = RunnablePassthrough.assign(
-                parsed=itemgetter("raw") | parser,
-                parsing_error=lambda _: None
+                parsed=itemgetter("raw") | parser, parsing_error=lambda _: None
             ).with_fallbacks(
                 [RunnablePassthrough.assign(parsed=lambda _: None)],
                 exception_key="parsing_error",
             )
             return {"raw": llm} | parser_with_fallback
-        
+
         return llm | parser
 
     @property
@@ -903,10 +930,11 @@ class ChatLiteLLM(BaseChatModel):
     def _llm_type(self) -> str:
         return "litellm-chat"
 
+
 def _create_usage_metadata(token_usage: Mapping[str, Any]) -> UsageMetadata:
     input_tokens = token_usage.get("prompt_tokens", 0)
     output_tokens = token_usage.get("completion_tokens", 0)
-    
+
     usage_metadata = UsageMetadata(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
@@ -915,7 +943,7 @@ def _create_usage_metadata(token_usage: Mapping[str, Any]) -> UsageMetadata:
 
     # Extract cache token details from LiteLLM usage
     input_token_details = {}
-    
+
     # Try top-level keys (LiteLLM convenience fields)
     cache_read = token_usage.get("cache_read_input_tokens")
     cache_creation = token_usage.get("cache_creation_input_tokens")
@@ -940,7 +968,7 @@ def _create_usage_metadata(token_usage: Mapping[str, Any]) -> UsageMetadata:
 
     if cache_read is not None:
         input_token_details["cache_read"] = int(cache_read)
-    
+
     if cache_creation is not None:
         input_token_details["cache_creation"] = int(cache_creation)
 
@@ -949,24 +977,26 @@ def _create_usage_metadata(token_usage: Mapping[str, Any]) -> UsageMetadata:
 
     return usage_metadata
 
+
 def _ensure_additional_properties_false(schema_dict: dict) -> dict:
     """Recursively ensure additionalProperties is set to false for all objects."""
     if isinstance(schema_dict, dict):
         result = schema_dict.copy()
-        
+
         if result.get("type") == "object":
             result["additionalProperties"] = False
-        
+
         for key, value in result.items():
             if isinstance(value, dict):
                 result[key] = _ensure_additional_properties_false(value)
             elif isinstance(value, list):
                 result[key] = [
-                    _ensure_additional_properties_false(item) 
-                    if isinstance(item, dict) else item 
+                    _ensure_additional_properties_false(item)
+                    if isinstance(item, dict)
+                    else item
                     for item in value
                 ]
-        
+
         return result
 
     return schema_dict

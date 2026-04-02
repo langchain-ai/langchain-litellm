@@ -17,8 +17,7 @@ PROXY_API_KEY = os.getenv("LITELLM_API_KEY")
 PROXY_MODEL = os.getenv("LITELLM_OCR_MODEL", "azure-document")
 
 pytestmark = pytest.mark.skipif(
-    not PROXY_URL,
-    reason="LITELLM_PROXY_URL not set. Set it to run integration tests."
+    not PROXY_URL, reason="LITELLM_PROXY_URL not set. Set it to run integration tests."
 )
 
 
@@ -36,7 +35,7 @@ class TestLiteLLMOCRLoaderIntegration:
             api_key=PROXY_API_KEY,
             url_path=test_url,
             model=PROXY_MODEL,
-            mode="page"
+            mode="page",
         )
 
         documents = loader.load()
@@ -63,7 +62,7 @@ class TestLiteLLMOCRLoaderIntegration:
             api_key=PROXY_API_KEY,
             url_path=test_url,
             model=PROXY_MODEL,
-            mode="single"
+            mode="single",
         )
 
         documents = loader.load()
@@ -75,7 +74,9 @@ class TestLiteLLMOCRLoaderIntegration:
         assert "total_pages" in documents[0].metadata
         assert documents[0].metadata["total_pages"] > 0
 
-        print(f"Loaded single document with {documents[0].metadata['total_pages']} pages")
+        print(
+            f"Loaded single document with {documents[0].metadata['total_pages']} pages"
+        )
 
     @pytest.mark.asyncio
     async def test_aload_from_url(self) -> None:
@@ -87,7 +88,7 @@ class TestLiteLLMOCRLoaderIntegration:
             api_key=PROXY_API_KEY,
             url_path=test_url,
             model=PROXY_MODEL,
-            mode="page"
+            mode="page",
         )
 
         documents = await loader.aload()
@@ -107,7 +108,7 @@ class TestLiteLLMOCRLoaderIntegration:
             api_key=PROXY_API_KEY,
             url_path=test_url,
             model=PROXY_MODEL,
-            mode="page"
+            mode="page",
         )
 
         # Consume iterator
@@ -129,7 +130,7 @@ def test_load_with_invalid_proxy() -> None:
     loader = LiteLLMOCRLoader(
         proxy_base_url="http://nonexistent-proxy.example.com:9999",
         url_path="https://example.com/doc.pdf",
-        model="test-model"
+        model="test-model",
     )
 
     with pytest.raises(RuntimeError, match="Failed to connect"):
