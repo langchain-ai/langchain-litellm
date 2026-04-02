@@ -61,7 +61,9 @@ class TestChatLiteLLMUnit(ChatModelUnitTests):
     def supports_image_tool_message(self) -> bool:
         return False
 
+
 # ── delta / message conversion ────────────────────────────────────────────────
+
 
 def test_litellm_delta_to_langchain_message_chunk() -> None:
     """Test the litellm._convert_delta_to_message_chunk method, to ensure compatibility when converting a LiteLLM delta to a LangChain message chunk."""
@@ -93,6 +95,7 @@ def test_litellm_delta_to_langchain_message_chunk() -> None:
     assert tool_call_chunk["args"] == mock_tool_call_arguments
     assert tool_call_chunk["index"] == mock_tool_call_index
 
+
 def test_convert_dict_to_tool_message() -> None:
     """Ensure tool role dicts convert to ToolMessage."""
     mock_dict = {"role": "tool", "content": "result", "tool_call_id": "123"}
@@ -103,6 +106,7 @@ def test_convert_dict_to_tool_message() -> None:
     assert message.content == "result"
     assert message.tool_call_id == "123"
 
+
 def test_provider_specific_fields_in_delta() -> None:
     """Test that provider_specific_fields are preserved when converting deltas."""
     mock_delta = {
@@ -112,14 +116,18 @@ def test_provider_specific_fields_in_delta() -> None:
             "citations": [
                 {"source": "Wikipedia", "url": "https://en.wikipedia.org/wiki/Paris"}
             ]
-        }
+        },
     }
-    
+
     chunk = _convert_delta_to_message_chunk(mock_delta, AIMessageChunk)
-    
+
     assert isinstance(chunk, AIMessageChunk)
     assert "provider_specific_fields" in chunk.additional_kwargs
-    assert chunk.additional_kwargs["provider_specific_fields"]["citations"][0]["source"] == "Wikipedia"
+    assert (
+        chunk.additional_kwargs["provider_specific_fields"]["citations"][0]["source"]
+        == "Wikipedia"
+    )
+
 
 def test_provider_specific_fields_in_message() -> None:
     """Test that provider_specific_fields are preserved when converting message dicts."""
@@ -129,41 +137,44 @@ def test_provider_specific_fields_in_message() -> None:
         "provider_specific_fields": {
             "grounding_metadata": {
                 "search_queries": ["Earth orbit"],
-                "grounding_supports": [{"segment": "The Earth orbits"}]
+                "grounding_supports": [{"segment": "The Earth orbits"}],
             }
-        }
+        },
     }
-    
+
     message = _convert_dict_to_message(mock_message_dict)
-    
+
     assert isinstance(message, AIMessage)
     assert "provider_specific_fields" in message.additional_kwargs
     assert "grounding_metadata" in message.additional_kwargs["provider_specific_fields"]
 
+
 def test_provider_specific_fields_in_chat_result() -> None:
     """Test that top-level provider_specific_fields appear in llm_output."""
     llm = ChatLiteLLM(model="gpt-3.5-turbo", api_key="fake")
-    
+
     mock_response = {
-        "choices": [{
-            "message": {
-                "role": "assistant",
-                "content": "Test response"
-            },
-            "finish_reason": "stop"
-        }],
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "Test response"},
+                "finish_reason": "stop",
+            }
+        ],
         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-        "provider_specific_fields": {
-            "citations": [{"source": "test"}]
-        }
+        "provider_specific_fields": {"citations": [{"source": "test"}]},
     }
-    
+
     result = llm._create_chat_result(mock_response)
-    
+
     assert "provider_specific_fields" in result.llm_output
-    assert result.llm_output["provider_specific_fields"]["citations"][0]["source"] == "test"
+    assert (
+        result.llm_output["provider_specific_fields"]["citations"][0]["source"]
+        == "test"
+    )
+
 
 # ── usage metadata ─────────────────────────────────────────────────────────────
+
 
 def test_create_usage_metadata_reads_pydantic_prompt_details() -> None:
     """Cache token details should be extracted from Pydantic prompt_tokens_details."""
@@ -200,7 +211,9 @@ def test_create_usage_metadata_reads_dict_prompt_details() -> None:
     assert meta["input_token_details"]["cache_read"] == 15
     assert meta["input_token_details"]["cache_creation"] == 5
 
+
 # ── reasoning content injection ────────────────────────────────────────────────
+
 
 def test_inject_reasoning_content_into_string_content() -> None:
     result = _inject_reasoning_content_into_content("answer", "hidden chain")
@@ -238,7 +251,9 @@ def test_inject_reasoning_content_does_not_duplicate_existing_thinking() -> None
 
     assert result == content
 
+
 # ── stream_options ─────────────────────────────────────────────────────────────
+
 
 def test_stream_options_set_for_non_openai_model() -> None:
     """stream_options must be set for non-OpenAI providers too."""
@@ -251,6 +266,7 @@ def test_stream_options_set_for_non_openai_model() -> None:
     else:
         params["stream_options"] = {"include_usage": True}
     assert params.get("stream_options") == {"include_usage": True}
+
 
 def test_stream_options_respected_when_set_explicitly() -> None:
     """User-provided stream_options must not be overwritten."""

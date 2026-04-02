@@ -56,25 +56,25 @@ class TestChatLiteLLMRouterUnit(ChatModelUnitTests):
         """Test that Router preserves top-level provider_specific_fields."""
         router = test_router()
         llm = ChatLiteLLMRouter(router=router)
-        
+
         mock_response = {
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "content": "Test response"
-                },
-                "finish_reason": "stop"
-            }],
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": "Test response"},
+                    "finish_reason": "stop",
+                }
+            ],
             "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-            "provider_specific_fields": {
-                "citations": [{"source": "vertex"}]
-            }
+            "provider_specific_fields": {"citations": [{"source": "vertex"}]},
         }
-        
+
         result = llm._create_chat_result(mock_response, metadata={})
-        
+
         assert "provider_specific_fields" in result.llm_output
-        assert result.llm_output["provider_specific_fields"]["citations"][0]["source"] == "vertex"
+        assert (
+            result.llm_output["provider_specific_fields"]["citations"][0]["source"]
+            == "vertex"
+        )
 
     def test_router_create_chat_result_sets_usage_metadata(self):
         """Router _create_chat_result should set usage_metadata on AIMessage."""
@@ -103,12 +103,13 @@ class TestChatLiteLLMRouterUnit(ChatModelUnitTests):
         assert msg.usage_metadata["output_tokens"] == 8
         assert msg.usage_metadata["total_tokens"] == 20
 
-    def test_router_stream_options_set_for_all_providers():
+    def test_router_stream_options_set_for_all_providers(self):
         """Router _stream must set stream_options for non-OpenAI providers."""
         router = test_router()
         llm = ChatLiteLLMRouter(router=router)
         stream_options = (
-            llm.stream_options if llm.stream_options is not None
+            llm.stream_options
+            if llm.stream_options is not None
             else {"include_usage": True}
         )
         assert stream_options == {"include_usage": True}

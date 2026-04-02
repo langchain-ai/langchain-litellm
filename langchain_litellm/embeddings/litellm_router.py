@@ -19,22 +19,24 @@ class LiteLLMEmbeddingsRouter(LiteLLMEmbeddings):
             from litellm import Router
             from langchain_litellm import LiteLLMEmbeddingsRouter
 
-            router = Router(model_list=[
-                {
-                    "model_name": "text-embedding-3-small",
-                    "litellm_params": {
-                        "model": "openai/text-embedding-3-small",
-                        "api_key": "sk-key1",
+            router = Router(
+                model_list=[
+                    {
+                        "model_name": "text-embedding-3-small",
+                        "litellm_params": {
+                            "model": "openai/text-embedding-3-small",
+                            "api_key": "sk-key1",
+                        },
                     },
-                },
-                {
-                    "model_name": "text-embedding-3-small",
-                    "litellm_params": {
-                        "model": "openai/text-embedding-3-small",
-                        "api_key": "sk-key2",
+                    {
+                        "model_name": "text-embedding-3-small",
+                        "litellm_params": {
+                            "model": "openai/text-embedding-3-small",
+                            "api_key": "sk-key2",
+                        },
                     },
-                },
-            ])
+                ]
+            )
             embeddings = LiteLLMEmbeddingsRouter(router=router)
     """
 
@@ -48,12 +50,10 @@ class LiteLLMEmbeddingsRouter(LiteLLMEmbeddings):
             router: A litellm.Router instance.
             **kwargs: Additional parameters passed to LiteLLMEmbeddings.
         """
-        super().__init__(router=router, **kwargs)
+        super().__init__(**{**kwargs, "router": router})  # type: ignore[call-arg]
         self.router = router
 
-    def _get_router_params(
-        self, *, input_type: Optional[str] = None
-    ) -> Dict[str, Any]:
+    def _get_router_params(self, *, input_type: Optional[str] = None) -> Dict[str, Any]:
         """Build parameter dict for router.embedding(), excluding None values."""
         params: Dict[str, Any] = {
             **self.model_kwargs,

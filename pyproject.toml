@@ -5,10 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "langchain-litellm"
 version = "0.6.3"
+
 description = "An integration package connecting LiteLLM and LangChain"
-authors = [{name = "Akshay Dongare"}]
-license = {text = "MIT"}
 readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Akshay Dongare"}]
+requires-python = ">=3.10,<4.0"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -26,7 +28,6 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Typing :: Typed",
 ]
-requires-python = ">=3.10,<4.0"
 dependencies = [
     "langchain-core>=1.2.21,<2.0.0",
     "litellm>=1.77.2,<2.0.0,!=1.82.7,!=1.82.8",
@@ -47,11 +48,11 @@ Reddit = "https://www.reddit.com/r/LangChain/"
 [dependency-groups]
 test = [
     "langchain>=1.0.0,<2.0.0",
+    "langchain-tests>=1.0.0,<2.0.0",
     "pytest>=7.4.4,<8.0.0",
     "pytest-asyncio>=0.20.3,<1.0.0",
     "pytest-socket>=0.6.0,<1.0.0",
     "pytest-watcher>=0.2.6,<1.0.0",
-    "langchain-tests>=1.0.0,<2.0.0",
     "pytest-cov>=4.1.0,<5.0.0",
     "pytest-dotenv>=0.5.2,<1.0.0",
     "duckdb-engine>=0.13.6,<1.0.0",
@@ -71,7 +72,7 @@ codespell = [
     "codespell>=2.2.6,<3.0.0",
 ]
 lint = [
-    "ruff>=0.5.0,<0.6.0",
+    "ruff>=0.12.2,<0.16.0",
 ]
 dev = [
     "ipykernel>=6.29.5,<7.0.0",
@@ -90,13 +91,76 @@ typing = [
     "mypy-protobuf>=3.0.0,<4.0.0",
     "cffi>=2.0.0,<3.0.0",
 ]
-test_integration = []
 
 [tool.mypy]
 disallow_untyped_defs = "True"
 
+[[tool.mypy.overrides]]
+module = [
+    "pytest",
+    "pytest.*",
+    "langchain_tests.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+[tool.ruff.format]
+docstring-code-format = true  # Formats code blocks in docstrings
+
 [tool.ruff.lint]
-select = ["E", "F", "I", "T201"]
+select = [
+    #"ALL"  # Enable all rules by default (TODO)
+]
+ignore = [
+    "COM812",  # Trailing comma missing — conflicts with the ruff formatter
+    "ISC001",  # Implicit string concatenation on one line — conflicts with the ruff formatter
+    "PERF203", # `try`-`except` within a loop — incurs overhead only when exceptions are common
+    "SLF001",  # Access to a private member of an external class
+    "PLR0913", # Too many arguments to function definition
+    "PLC0414", # Import alias does not rename original package — conflicts with type-checker re-export conventions
+]
+unfixable = ["B028"]  # Rules that shouldn't be auto-fixed
+extend-safe-fixes = ["PLR6201"]
+
+[tool.ruff.lint.pyupgrade]
+keep-runtime-typing = true
+
+[tool.ruff.lint.flake8-annotations]
+allow-star-arg-any = true
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.isort]
+force-single-line = false
+combine-as-imports = true
+known-first-party = ["langchain_litellm"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"  # Google-style docstrings
+ignore-var-parameters = true
+
+[tool.ruff.lint.per-file-ignores]
+# Tests: relax annotations, docstrings, magic values, security, and assertion style
+"tests/**" = [
+    "ANN001",  # Missing type annotation for function argument
+    "ANN201",  # Missing return type annotation for public function
+    "ANN202",  # Missing return type annotation for private function
+    "ARG002",  # Unused method argument — common for pytest fixtures
+    "D1",      # Missing docstrings
+    "PLR2004", # Magic value used in comparison — fine in test assertions
+    "PT018",   # Assertion should be broken down into multiple parts
+    "S101",    # Use of `assert` detected
+    "S311",    # Pseudo-random generator not suitable for security — fine in tests
+]
+# Scripts: allow prints, broad exceptions, and standalone modules
+"scripts/**" = [
+    "BLE001",  # Blind exception catch — resilience in standalone scripts
+    "INP001",  # Missing `__init__.py` — scripts are standalone
+]
 
 [tool.coverage.run]
 omit = ["tests/*"]
@@ -105,9 +169,9 @@ omit = ["tests/*"]
 skip = "*.lock"
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
 addopts = "--strict-markers --strict-config --durations=5"
 markers = [
     "compile: mark placeholder test used to compile integration tests without running them",
     "integration: mark test as an integration test",
 ]
-asyncio_mode = "auto"

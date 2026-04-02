@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import httpx
 import mimetypes
 import time
-from typing import Any, Dict, Iterator, List, Literal, Optional
 from pathlib import Path
+from typing import Any, Dict, Iterator, List, Literal, Optional
 
+import httpx
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents import Document
 
@@ -51,7 +51,7 @@ class LiteLLMOCRLoader(BaseLoader):
         loader = LiteLLMOCRLoader(
             url_path="https://example.com/document.pdf",
             model="azure-document",
-            mode="page"
+            mode="page",
         )
         documents = loader.load()
         ```
@@ -64,7 +64,7 @@ class LiteLLMOCRLoader(BaseLoader):
             api_key="my-bearer-token",
             file_path="/path/to/document.pdf",
             model="azure-document",
-            mode="single"
+            mode="single",
         )
         documents = await loader.aload()
         ```
@@ -137,10 +137,7 @@ class LiteLLMOCRLoader(BaseLoader):
         """
         if self.url_path:
             # Direct URL
-            return {
-                "type": "document_url",
-                "document_url": self.url_path
-            }
+            return {"type": "document_url", "document_url": self.url_path}
 
         elif self.file_path:
             # Read file and convert to base64 data URI
@@ -162,10 +159,7 @@ class LiteLLMOCRLoader(BaseLoader):
             b64_data = base64.b64encode(file_bytes).decode("utf-8")
             data_uri = f"data:{mime_type};base64,{b64_data}"
 
-            return {
-                "type": "document_url",
-                "document_url": data_uri
-            }
+            return {"type": "document_url", "document_url": data_uri}
 
         elif self.base64_content:
             # User provided base64, wrap in data URI
@@ -175,29 +169,21 @@ class LiteLLMOCRLoader(BaseLoader):
             else:
                 data_uri = f"data:application/pdf;base64,{self.base64_content}"
 
-            return {
-                "type": "document_url",
-                "document_url": data_uri
-            }
+            return {"type": "document_url", "document_url": data_uri}
 
         elif self.bytes_content:
             # Convert bytes to base64 data URI
             b64_data = base64.b64encode(self.bytes_content).decode("utf-8")
             data_uri = f"data:application/pdf;base64,{b64_data}"
 
-            return {
-                "type": "document_url",
-                "document_url": data_uri
-            }
+            return {"type": "document_url", "document_url": data_uri}
 
         else:
             raise ValueError("No input source provided")
 
     def _make_ocr_request(
-        self,
-        document_payload: Dict[str, Any],
-        sync: bool = True
-    ) -> Dict[str, Any]:
+        self, document_payload: Dict[str, Any], sync: bool = True
+    ) -> Any:
         """Make synchronous or asynchronous OCR request with retries."""
         url = f"{self.proxy_base_url}/ocr"
         headers = {"Content-Type": "application/json"}
@@ -228,14 +214,14 @@ class LiteLLMOCRLoader(BaseLoader):
                         last_error = e
                         # Only retry if it's a transient error and we have retries left
                         if attempt < self.max_retries and _is_transient_error(e):
-                            sleep_time = 1 * (2 ** attempt)  # Exponential backoff
+                            sleep_time = 1 * (2**attempt)  # Exponential backoff
                             time.sleep(sleep_time)
                         else:
                             break
 
             # Build detailed error message
             attempts = attempt + 1
-            
+
             if isinstance(last_error, httpx.RequestError):
                 # Connection error - preserve "Failed to connect" for backward compatibility
                 error_msg = f"Failed to connect to LiteLLM proxy at {url}. Is the proxy running?"
@@ -258,31 +244,34 @@ class LiteLLMOCRLoader(BaseLoader):
                 else:
                     error_msg = f"LiteLLM OCR request to {url} failed after {attempts} attempts."
                 error_msg += f" Error: {last_error}"
-            
+
             raise RuntimeError(error_msg) from last_error
 
         else:
+
             async def _async_request() -> Dict[str, Any]:
                 last_error = None
                 attempt = 0
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     for attempt in range(self.max_retries + 1):
                         try:
-                            response = await client.post(url, json=payload, headers=headers)
+                            response = await client.post(
+                                url, json=payload, headers=headers
+                            )
                             response.raise_for_status()
                             return response.json()
                         except (httpx.RequestError, httpx.HTTPStatusError) as e:
                             last_error = e
                             # Only retry if it's a transient error and we have retries left
                             if attempt < self.max_retries and _is_transient_error(e):
-                                sleep_time = 1 * (2 ** attempt)
+                                sleep_time = 1 * (2**attempt)
                                 await asyncio.sleep(sleep_time)
                             else:
                                 break
 
                 # Build detailed error message
                 attempts = attempt + 1
-                
+
                 if isinstance(last_error, httpx.RequestError):
                     # Connection error - preserve "Failed to connect" for backward compatibility
                     error_msg = f"Failed to connect to LiteLLM proxy at {url}. Is the proxy running?"
@@ -294,18 +283,22 @@ class LiteLLMOCRLoader(BaseLoader):
                     status = last_error.response.status_code
                     body = last_error.response.text[:500]  # Limit body length
                     if attempts == 1:
-                        error_msg = f"LiteLLM OCR request to {url} failed after 1 attempt."
+                        error_msg = (
+                            f"LiteLLM OCR request to {url} failed after 1 attempt."
+                        )
                     else:
                         error_msg = f"LiteLLM OCR request to {url} failed after {attempts} attempts."
                     error_msg += f" Status: {status}, Response: {body}"
                 else:
                     # Fallback for any other error type
                     if attempts == 1:
-                        error_msg = f"LiteLLM OCR request to {url} failed after 1 attempt."
+                        error_msg = (
+                            f"LiteLLM OCR request to {url} failed after 1 attempt."
+                        )
                     else:
                         error_msg = f"LiteLLM OCR request to {url} failed after {attempts} attempts."
                     error_msg += f" Error: {last_error}"
-                
+
                 raise RuntimeError(error_msg) from last_error
 
             return _async_request()
@@ -359,25 +352,23 @@ class LiteLLMOCRLoader(BaseLoader):
 
         else:  # mode == "single"
             # Concatenate all pages
-            all_content = "\n\n".join(
-                page.get("markdown", "") for page in pages
-            )
+            all_content = "\n\n".join(page.get("markdown", "") for page in pages)
 
-            metadata: Dict[str, Any] = {
+            single_metadata: Dict[str, Any] = {
                 "total_pages": len(pages),
             }
 
             # Add source info
             if self.file_path:
-                metadata["source"] = self.file_path
+                single_metadata["source"] = self.file_path
             elif self.url_path:
-                metadata["source"] = self.url_path
+                single_metadata["source"] = self.url_path
 
             # Add model info
             if "model" in response:
-                metadata["model"] = response["model"]
+                single_metadata["model"] = response["model"]
 
-            return [Document(page_content=all_content, metadata=metadata)]
+            return [Document(page_content=all_content, metadata=single_metadata)]
 
     def load(self) -> List[Document]:
         """Load documents synchronously.
