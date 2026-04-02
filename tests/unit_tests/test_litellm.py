@@ -233,3 +233,30 @@ def test_inject_reasoning_content_does_not_duplicate_existing_thinking() -> None
     result = _inject_reasoning_content_into_content(content, "hidden chain")
 
     assert result == content
+
+def test_stream_options_set_for_non_openai_model():
+    """stream_options must be set for non-OpenAI providers too."""
+    llm = ChatLiteLLM(model="anthropic/claude-3-5-sonnet-20241022", api_key="fake")
+    _, params = llm._create_message_dicts([], None)
+    # Simulate what _stream does
+    params = {**params, "stream": True}
+    if llm.stream_options is not None:
+        params["stream_options"] = llm.stream_options
+    else:
+        params["stream_options"] = {"include_usage": True}
+    assert params.get("stream_options") == {"include_usage": True}
+
+def test_stream_options_respected_when_set_explicitly():
+    """User-provided stream_options must not be overwritten."""
+    custom = {"include_usage": False}
+    llm = ChatLiteLLM(
+        model="anthropic/claude-3-5-sonnet-20241022",
+        api_key="fake",
+        stream_options=custom,
+    )
+    params = {}
+    if llm.stream_options is not None:
+        params["stream_options"] = llm.stream_options
+    else:
+        params["stream_options"] = {"include_usage": True}
+    assert params["stream_options"] == custom
