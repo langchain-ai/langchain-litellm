@@ -95,6 +95,18 @@ typing = [
 [tool.mypy]
 disallow_untyped_defs = "True"
 
+[[tool.mypy.overrides]]
+module = [
+    "pytest",
+    "pytest.*",
+    "langchain_tests.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
 [tool.ruff.format]
 docstring-code-format = true  # Formats code blocks in docstrings
 
