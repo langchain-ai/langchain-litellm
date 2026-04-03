@@ -337,6 +337,30 @@ def test_bind_tools_downgraded_with_thinking(tool_choice, caplog) -> None:  # ty
 
 @pytest.mark.parametrize(
     "tool_choice",
+    [
+        "any",
+        "required",
+        True,
+        {"type": "function", "function": {"name": "_dummy_tool"}},
+    ],
+    ids=["any", "required", "True", "dict"],
+)
+def test_bind_tools_not_downgraded_with_thinking_on_non_claude_models(
+    tool_choice,
+) -> None:
+    """Forced tool choices should be preserved for non-Claude models."""
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="fake",
+        model_kwargs=_THINKING_KWARGS,
+    )
+    bound = llm.bind_tools([_dummy_tool], tool_choice=tool_choice)
+    expected_tool_choice = "required" if tool_choice in ("any", True) else tool_choice
+    assert bound.kwargs["tool_choice"] == expected_tool_choice  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
     ["auto", "none", None, False],
     ids=["auto", "none", "None", "False"],
 )

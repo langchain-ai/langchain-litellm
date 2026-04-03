@@ -817,21 +817,28 @@ class ChatLiteLLM(BaseChatModel):
 
         # When thinking/extended thinking is enabled, tool_choice="required"
         # (or a forced specific tool) suppresses chain-of-thought on Claude
-        # models. Downgrade to "auto" so the model can reason before calling
-        # tools.
+        # models. Downgrade to "auto" only for Claude so other providers keep
+        # their original forced tool-calling behavior.
         # Prior art: langchain-ai/langchain#35544, langchain-ai/langchain-aws#927.
         thinking_config = self.model_kwargs.get("thinking")
         if not isinstance(thinking_config, dict):
             thinking_config = {}
+        effective_model = (self.model_name or self.model).lower()
+        is_claude_model = "claude" in effective_model
         # "any" is already mapped to "required" above, so only check "required"
         tool_choice_is_forced = tool_choice == "required" or isinstance(
             tool_choice, dict
         )
-        if thinking_config.get("type") == "enabled" and tool_choice_is_forced:
+        if (
+            thinking_config.get("type") == "enabled"
+            and is_claude_model
+            and tool_choice_is_forced
+        ):
             logger.warning(
                 "tool_choice=%r is incompatible with thinking/extended "
-                "thinking. Downgrading tool_choice to 'auto' so the model can "
-                "produce chain-of-thought reasoning before calling tools.",
+                "thinking on Claude models. Downgrading tool_choice to 'auto' "
+                "so the model can produce chain-of-thought reasoning before "
+                "calling tools.",
                 tool_choice,
             )
             tool_choice = "auto"
