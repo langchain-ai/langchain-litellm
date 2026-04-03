@@ -335,6 +335,12 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
                 elif is_data_content_block(item):
                     new_content.append(convert_to_openai_data_block(item))
 
+                # Skip tool_use / tool_call blocks — these are handled via
+                # message.tool_calls and must not leak into content sent to
+                # providers that don't understand them (e.g. OpenAI).
+                elif item.get("type") in ("tool_use", "tool_call"):
+                    continue
+
                 # Pass through standard text blocks or other unrecognized dict formats unchanged
                 else:
                     new_content.append(item)
@@ -342,8 +348,10 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
                 # Append non-dict items (like strings) directly
                 new_content.append(item)
 
-        # Update content with the processed list
-        content = new_content
+        # Update content with the processed list.
+        # If filtering removed all blocks, collapse to empty string so the
+        # provider doesn't receive an empty list.
+        content = new_content or ""
 
     # Initialize the message dictionary with the processed content
     message_dict: Dict[str, Any] = {"content": content}
