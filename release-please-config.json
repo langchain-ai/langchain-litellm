@@ -6,7 +6,10 @@
       "package-name": "langchain-litellm",
       "component": "langchain-litellm",
       "bump-minor-pre-major": true,
-      "bump-patch-for-minor-pre-major": false
+      "bump-patch-for-minor-pre-major": false,
+      "extra-files": [
+        "pyproject.toml"
+      ]
     }
   },
   "pull-request-title-pattern": "release(litellm): ${version}",

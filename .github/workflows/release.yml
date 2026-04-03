@@ -18,12 +18,46 @@ jobs:
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
+      pr: ${{ steps.release.outputs.pr }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  # Update uv.lock when release-please creates/updates a PR
+  # release-please updates pyproject.toml versions but doesn't regenerate lockfiles
+  # https://github.com/googleapis/release-please/issues/2561
+  update-lockfile:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.pr != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ fromJson(needs.release-please.outputs.pr).headBranchName }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Update lockfile
+        run: uv lock
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add uv.lock
+          if git diff --staged --quiet; then
+            echo "No lockfile changes to commit"
+          else
+            git commit -m "chore: update uv.lock"
+            git push
+          fi
 
   pypi-publish:
     needs: release-please
