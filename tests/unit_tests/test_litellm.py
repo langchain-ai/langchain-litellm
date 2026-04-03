@@ -1,12 +1,15 @@
 """Test chat model integration."""
 
 import logging
-from typing import Type
+from typing import Any, Type
 
 import pytest
+from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.runnables import RunnableLambda
 from langchain_tests.unit_tests import ChatModelUnitTests
 from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function
+from pydantic import BaseModel
 
 from langchain_litellm.chat_models import ChatLiteLLM
 from langchain_litellm.chat_models.litellm import (
@@ -20,6 +23,10 @@ from langchain_litellm.chat_models.litellm import (
 def _dummy_tool(x: str) -> str:
     """A dummy tool for testing."""
     return x
+
+
+class _StructuredResponse(BaseModel):
+    value: str
 
 
 # ── delta / message conversion ────────────────────────────────────────────────
@@ -329,7 +336,9 @@ def test_bind_tools_downgraded_with_thinking(tool_choice, caplog) -> None:  # ty
         api_key="fake",
         model_kwargs=_THINKING_KWARGS,
     )
-    with caplog.at_level(logging.WARNING, logger="langchain_litellm.chat_models.litellm"):
+    with caplog.at_level(
+        logging.WARNING, logger="langchain_litellm.chat_models.litellm"
+    ):
         bound = llm.bind_tools([_dummy_tool], tool_choice=tool_choice)
     assert bound.kwargs["tool_choice"] == "auto"  # type: ignore[attr-defined]
     assert "incompatible with thinking" in caplog.text
@@ -406,3 +415,58 @@ def test_bind_tools_dict_validation_with_thinking() -> None:
             [_dummy_tool],
             tool_choice={"type": "function", "function": {"name": "nonexistent_tool"}},
         )
+
+
+def test_with_structured_output_function_calling_warns_and_raises_for_claude_thinking() -> (
+    None
+):
+    """Claude thinking should not silently fall back to plain-text structured output."""
+    bind_kwargs: dict[str, Any] = {}
+
+    class _FakeChatLiteLLM(ChatLiteLLM):
+        def bind_tools(self, tools, **kwargs):  # type: ignore[no-untyped-def]
+            bind_kwargs.update(kwargs)
+            return RunnableLambda(lambda _: AIMessage(content="plain text"))
+
+    llm = _FakeChatLiteLLM(
+        model="anthropic/claude-sonnet-4-20250514",
+        api_key="fake",
+        model_kwargs=_THINKING_KWARGS,
+    )
+
+    with pytest.warns(UserWarning, match="Structured output via function calling"):
+        structured = llm.with_structured_output(
+            _StructuredResponse, method="function_calling"
+        )
+
+    assert "tool_choice" not in bind_kwargs
+    with pytest.raises(OutputParserException, match="no tool call is returned"):
+        structured.invoke("Return structured output.")
+
+
+def test_with_structured_output_include_raw_preserves_raw_for_claude_thinking() -> None:
+    """`include_raw` should surface the parsing error without dropping the raw message."""
+
+    class _FakeChatLiteLLM(ChatLiteLLM):
+        def bind_tools(self, tools, **kwargs):  # type: ignore[no-untyped-def]
+            return RunnableLambda(lambda _: AIMessage(content="plain text"))
+
+    llm = _FakeChatLiteLLM(
+        model="anthropic/claude-sonnet-4-20250514",
+        api_key="fake",
+        model_kwargs=_THINKING_KWARGS,
+    )
+
+    with pytest.warns(UserWarning, match="Structured output via function calling"):
+        structured = llm.with_structured_output(
+            _StructuredResponse,
+            method="function_calling",
+            include_raw=True,
+        )
+
+    result = structured.invoke("Return structured output.")
+
+    assert isinstance(result["raw"], AIMessage)
+    assert result["raw"].content == "plain text"
+    assert result["parsed"] is None
+    assert isinstance(result["parsing_error"], OutputParserException)
