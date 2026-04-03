@@ -16,8 +16,7 @@ class TestChatLiteLLMIntegration(ChatModelIntegrationTests):
     def chat_model_params(self) -> dict:
         return {
             "custom_llm_provider": "openai",
-            "model": "gpt-3.5-turbo",
-            "api_key": "<your_api_key>",
+            "model": "gpt-4o-mini",
             "max_retries": 1,
         }
 

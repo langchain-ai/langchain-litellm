@@ -337,6 +337,12 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
                 elif is_data_content_block(item):
                     new_content.append(convert_to_openai_data_block(item))
 
+                # Skip tool_use / tool_call blocks — these are handled via
+                # message.tool_calls and must not leak into content sent to
+                # providers that don't understand them (e.g. OpenAI).
+                elif item.get("type") in ("tool_use", "tool_call"):
+                    continue
+
                 # Pass through standard text blocks or other unrecognized dict formats unchanged
                 else:
                     new_content.append(item)
@@ -344,8 +350,10 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
                 # Append non-dict items (like strings) directly
                 new_content.append(item)
 
-        # Update content with the processed list
-        content = new_content
+        # Update content with the processed list.
+        # If filtering removed all blocks, collapse to empty string so the
+        # provider doesn't receive an empty list.
+        content = new_content or ""
 
     # Initialize the message dictionary with the processed content
     message_dict: Dict[str, Any] = {"content": content}
@@ -639,6 +647,7 @@ class ChatLiteLLM(BaseChatModel):
         else:
             params["stream_options"] = {"include_usage": True}
         default_chunk_class = AIMessageChunk
+        first_chunk_yielded = False
 
         for chunk in self.completion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
@@ -680,6 +689,13 @@ class ChatLiteLLM(BaseChatModel):
             if usage_metadata and isinstance(chunk, AIMessageChunk):
                 chunk.usage_metadata = usage_metadata
 
+            # Set response_metadata on the first chunk only
+            if not first_chunk_yielded and isinstance(chunk, AIMessageChunk):
+                chunk.response_metadata = {
+                    "model_name": self.model_name or self.model
+                }
+                first_chunk_yielded = True
+
             default_chunk_class = chunk.__class__
             cg_chunk = ChatGenerationChunk(message=chunk)
             if run_manager:
@@ -700,6 +716,7 @@ class ChatLiteLLM(BaseChatModel):
         else:
             params["stream_options"] = {"include_usage": True}
         default_chunk_class = AIMessageChunk
+        first_chunk_yielded = False
 
         async for chunk in await self.acompletion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
@@ -739,6 +756,13 @@ class ChatLiteLLM(BaseChatModel):
 
             if usage_metadata and isinstance(chunk, AIMessageChunk):
                 chunk.usage_metadata = usage_metadata
+
+            # Set response_metadata on the first chunk only
+            if not first_chunk_yielded and isinstance(chunk, AIMessageChunk):
+                chunk.response_metadata = {
+                    "model_name": self.model_name or self.model
+                }
+                first_chunk_yielded = True
 
             default_chunk_class = chunk.__class__
             cg_chunk = ChatGenerationChunk(message=chunk)
