@@ -47,6 +47,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
 
     def __init__(self, *, router: Any, **kwargs: Any) -> None:
         """Construct Chat LiteLLM Router."""
+        if "model" not in kwargs and router.model_list:
+            kwargs["model"] = router.model_list[0]["model_name"]
         super().__init__(router=router, **kwargs)  # type: ignore[call-arg]
         self.router = router
 
@@ -122,6 +124,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             else {"include_usage": True}
         )
         self._prepare_params_for_router(params)
+        first_chunk_yielded = False
 
         for chunk in self.router.completion(messages=message_dicts, **params):
             usage_metadata = None
@@ -148,6 +151,14 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             # Attach usage if it exists on a content chunk
             if usage_metadata and isinstance(chunk, AIMessageChunk):
                 chunk.usage_metadata = usage_metadata
+
+            # Set response_metadata on the first chunk only
+            if not first_chunk_yielded and isinstance(chunk, AIMessageChunk):
+                chunk.response_metadata = {
+                    "model_name": self.model_name or self.model
+                }
+                first_chunk_yielded = True
+
             default_chunk_class = chunk.__class__
             cg_chunk = ChatGenerationChunk(message=chunk)
             if run_manager:
@@ -171,6 +182,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             else {"include_usage": True}
         )
         self._prepare_params_for_router(params)
+        first_chunk_yielded = False
 
         async for chunk in await self.router.acompletion(
             messages=message_dicts, **params
@@ -198,6 +210,13 @@ class ChatLiteLLMRouter(ChatLiteLLM):
 
             if usage_metadata and isinstance(chunk, AIMessageChunk):
                 chunk.usage_metadata = usage_metadata
+
+            # Set response_metadata on the first chunk only
+            if not first_chunk_yielded and isinstance(chunk, AIMessageChunk):
+                chunk.response_metadata = {
+                    "model_name": self.model_name or self.model
+                }
+                first_chunk_yielded = True
 
             default_chunk_class = chunk.__class__
             cg_chunk = ChatGenerationChunk(message=chunk)
@@ -269,6 +288,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         for res in response["choices"]:
             message = _convert_dict_to_message(res["message"])
             if isinstance(message, AIMessage):
+                message.response_metadata = {
+                    "model_name": self.model_name or self.model
+                }
                 message.usage_metadata = usage_metadata
             gen = ChatGeneration(
                 message=message,

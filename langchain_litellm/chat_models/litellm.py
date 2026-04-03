@@ -630,6 +630,7 @@ class ChatLiteLLM(BaseChatModel):
         else:
             params["stream_options"] = {"include_usage": True}
         default_chunk_class = AIMessageChunk
+        first_chunk_yielded = False
 
         for chunk in self.completion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
@@ -671,6 +672,13 @@ class ChatLiteLLM(BaseChatModel):
             if usage_metadata and isinstance(chunk, AIMessageChunk):
                 chunk.usage_metadata = usage_metadata
 
+            # Set response_metadata on the first chunk only
+            if not first_chunk_yielded and isinstance(chunk, AIMessageChunk):
+                chunk.response_metadata = {
+                    "model_name": self.model_name or self.model
+                }
+                first_chunk_yielded = True
+
             default_chunk_class = chunk.__class__
             cg_chunk = ChatGenerationChunk(message=chunk)
             if run_manager:
@@ -691,6 +699,7 @@ class ChatLiteLLM(BaseChatModel):
         else:
             params["stream_options"] = {"include_usage": True}
         default_chunk_class = AIMessageChunk
+        first_chunk_yielded = False
 
         async for chunk in await self.acompletion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
@@ -730,6 +739,13 @@ class ChatLiteLLM(BaseChatModel):
 
             if usage_metadata and isinstance(chunk, AIMessageChunk):
                 chunk.usage_metadata = usage_metadata
+
+            # Set response_metadata on the first chunk only
+            if not first_chunk_yielded and isinstance(chunk, AIMessageChunk):
+                chunk.response_metadata = {
+                    "model_name": self.model_name or self.model
+                }
+                first_chunk_yielded = True
 
             default_chunk_class = chunk.__class__
             cg_chunk = ChatGenerationChunk(message=chunk)
