@@ -1,35 +1,26 @@
-"""Chat model standard unit tests.
+"""Router chat model standard unit tests.
 
 From LangChain's standard test suite.
 """
 
 from typing import Type
 
-from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.messages import AIMessage
 from langchain_tests.unit_tests import ChatModelUnitTests
-from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function
 
-from langchain_litellm.chat_models import ChatLiteLLM
-from langchain_litellm.chat_models.litellm import (
-    _convert_delta_to_message_chunk,
-    _convert_dict_to_message,
-    _create_usage_metadata,
-    _inject_reasoning_content_into_content,
-)
+from langchain_litellm.chat_models import ChatLiteLLMRouter
+from tests.utils import test_router
 
 
-class TestChatLiteLLMUnit(ChatModelUnitTests):
+class TestChatLiteLLMRouterUnit(ChatModelUnitTests):
     @property
-    def chat_model_class(self) -> Type[ChatLiteLLM]:
-        return ChatLiteLLM
+    def chat_model_class(self) -> Type[ChatLiteLLMRouter]:
+        return ChatLiteLLMRouter
 
     @property
     def chat_model_params(self) -> dict:
         return {
-            "custom_llm_provider": "openai",
-            "model": "gpt-3.5-turbo",
-            "api_key": "<your_api_key>",
-            "max_retries": 1,
+            "router": test_router(),
         }
 
     @property
