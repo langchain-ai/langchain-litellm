@@ -3,9 +3,9 @@
 from typing import Type
 
 from langchain_tests.integration_tests import ChatModelIntegrationTests
+from litellm import Router
 
 from langchain_litellm.chat_models import ChatLiteLLMRouter
-from tests.utils import test_router
 
 
 class TestChatLiteLLMRouterIntegration(ChatModelIntegrationTests):
@@ -16,7 +16,16 @@ class TestChatLiteLLMRouterIntegration(ChatModelIntegrationTests):
     @property
     def chat_model_params(self) -> dict:
         return {
-            "router": test_router(),
+            "router": Router(
+                model_list=[
+                    {
+                        "model_name": "openai/gpt-4o-mini",
+                        "litellm_params": {
+                            "model": "openai/gpt-4o-mini",
+                        },
+                    },
+                ]
+            ),
         }
 
     @property

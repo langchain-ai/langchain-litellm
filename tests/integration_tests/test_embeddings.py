@@ -16,5 +16,4 @@ class TestLiteLLMEmbeddingsIntegration(EmbeddingsIntegrationTests):
     def embedding_model_params(self) -> dict:
         return {
             "model": "openai/text-embedding-3-small",
-            "api_key": "<your_api_key>",
         }
