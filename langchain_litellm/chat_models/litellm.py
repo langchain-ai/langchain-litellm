@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import warnings
 from operator import itemgetter
 from typing import (
     Any,
@@ -26,6 +27,7 @@ from langchain_core.callbacks import (
     AsyncCallbackManagerForLLMRun,
     CallbackManagerForLLMRun,
 )
+from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.chat_models import (
     BaseChatModel,
@@ -433,6 +435,13 @@ class ChatLiteLLM(BaseChatModel):
 
     max_retries: int = 1
 
+    def _thinking_config(self) -> Dict[str, Any]:
+        thinking_config = self.model_kwargs.get("thinking")
+        return thinking_config if isinstance(thinking_config, dict) else {}
+
+    def _is_claude_model(self) -> bool:
+        return "claude" in (self.model_name or self.model).lower()
+
     @property
     def _default_params(self) -> Dict[str, Any]:
         """Get the default parameters for calling OpenAI API."""
@@ -825,8 +834,9 @@ class ChatLiteLLM(BaseChatModel):
                 tool_choice = "required"
             # if tool_choice is False, we leave it (it behaves like None/auto depending on provider)
 
-        # Handle dict tool_choice logic
-        elif isinstance(tool_choice, dict):
+        # Handle dict tool_choice logic — validate before any downgrade so
+        # typos in tool names always raise, even when thinking is enabled.
+        if isinstance(tool_choice, dict):
             tool_names = [
                 formatted_tool["function"]["name"] for formatted_tool in formatted_tools
             ]
@@ -837,6 +847,31 @@ class ChatLiteLLM(BaseChatModel):
                     f"Tool choice {tool_choice} was specified, but the only "
                     f"provided tools were {tool_names}."
                 )
+
+        # When thinking/extended thinking is enabled, tool_choice="required"
+        # (or a forced specific tool) suppresses chain-of-thought on Claude
+        # models. Downgrade to "auto" only for Claude so other providers keep
+        # their original forced tool-calling behavior.
+        # Prior art: langchain-ai/langchain#35544, langchain-ai/langchain-aws#927.
+        thinking_config = self._thinking_config()
+        is_claude_model = self._is_claude_model()
+        # "any" is already mapped to "required" above, so only check "required"
+        tool_choice_is_forced = tool_choice == "required" or isinstance(
+            tool_choice, dict
+        )
+        if (
+            thinking_config.get("type") == "enabled"
+            and is_claude_model
+            and tool_choice_is_forced
+        ):
+            logger.warning(
+                "tool_choice=%r is incompatible with thinking/extended "
+                "thinking on Claude models. Downgrading tool_choice to 'auto' "
+                "so the model can produce chain-of-thought reasoning before "
+                "calling tools.",
+                tool_choice,
+            )
+            tool_choice = "auto"
 
         return super().bind(tools=formatted_tools, tool_choice=tool_choice, **kwargs)
 
@@ -858,17 +893,40 @@ class ChatLiteLLM(BaseChatModel):
             raise ValueError(msg)
 
         parser: Runnable[Any, Any]
+        pre_parser: Callable[[AIMessage], AIMessage] | None = None
         if method == "function_calling":
             # Determine appropriate tool_choice based on model
             # Use "required" for most models, which is more widely supported than "any"
             tool_choice_value = "required"
+            bind_kwargs = {"tool_choice": tool_choice_value}
+
+            if (
+                self._is_claude_model()
+                and self._thinking_config().get("type") == "enabled"
+            ):
+                warning_message = (
+                    "Structured output via function calling is not guaranteed on "
+                    "Claude models when `thinking` is enabled. Tool calls may be "
+                    "omitted; this runnable will raise OutputParserException when "
+                    "no tool call is returned. Consider disabling `thinking` or "
+                    "using `method=\"json_schema\"`."
+                )
+                warnings.warn(warning_message, stacklevel=2)
+                bind_kwargs = {}
+
+                def _raise_if_no_tool_calls(message: AIMessage) -> AIMessage:
+                    if not message.tool_calls:
+                        raise OutputParserException(warning_message)
+                    return message
+
+                pre_parser = _raise_if_no_tool_calls
 
             # pydantic
             if isinstance(schema, type) and is_basemodel_subclass(schema):
                 parser = PydanticToolsParser(
                     tools=[cast(TypeBaseModel, schema)], first_tool_only=True
                 )
-                llm = self.bind_tools([schema], tool_choice=tool_choice_value)
+                llm = self.bind_tools([schema], **bind_kwargs)
             # dict or typeddict
             elif is_typeddict(schema) or isinstance(schema, dict):
                 tool_def = convert_to_openai_tool(schema)  # type: ignore[arg-type]
@@ -876,7 +934,7 @@ class ChatLiteLLM(BaseChatModel):
                 parser = JsonOutputKeyToolsParser(
                     key_name=function_name, first_tool_only=True
                 )
-                llm = self.bind_tools([tool_def], tool_choice=tool_choice_value)
+                llm = self.bind_tools([tool_def], **bind_kwargs)
             else:
                 msg = f"Unsupported schema type {type(schema)}"
                 raise ValueError(msg)
@@ -926,16 +984,21 @@ class ChatLiteLLM(BaseChatModel):
             msg = f"Unsupported method '{method}'. Must be 'json_schema', 'function_calling', or 'json_mode'"
             raise ValueError(msg)
 
+        parse_chain: Runnable[Any, Any] = parser
+        if pre_parser is not None:
+            parse_chain = pre_parser | parser
+
         if include_raw:
             parser_with_fallback = RunnablePassthrough.assign(
-                parsed=itemgetter("raw") | parser, parsing_error=lambda _: None
+                parsed=itemgetter("raw") | parse_chain,
+                parsing_error=lambda _: None,
             ).with_fallbacks(
                 [RunnablePassthrough.assign(parsed=lambda _: None)],
                 exception_key="parsing_error",
             )
             return {"raw": llm} | parser_with_fallback
 
-        return llm | parser
+        return llm | parse_chain
 
     @property
     def _identifying_params(self) -> Dict[str, Any]:

@@ -1,10 +1,15 @@
 """Test chat model integration."""
 
-from typing import Type
+import logging
+from typing import Any, Type
 
+import pytest
+from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.runnables import RunnableLambda
 from langchain_tests.unit_tests import ChatModelUnitTests
 from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function
+from pydantic import BaseModel
 
 from langchain_litellm.chat_models import ChatLiteLLM
 from langchain_litellm.chat_models.litellm import (
@@ -13,6 +18,16 @@ from langchain_litellm.chat_models.litellm import (
     _create_usage_metadata,
     _inject_reasoning_content_into_content,
 )
+
+
+def _dummy_tool(x: str) -> str:
+    """A dummy tool for testing."""
+    return x
+
+
+class _StructuredResponse(BaseModel):
+    value: str
+
 
 # ── delta / message conversion ────────────────────────────────────────────────
 
@@ -288,3 +303,170 @@ def test_stream_options_respected_when_set_explicitly() -> None:
     else:
         params["stream_options"] = {"include_usage": True}
     assert params["stream_options"] == custom
+
+
+# ── tool_choice mapping with thinking enabled ──────────────────────────────────
+
+_THINKING_KWARGS = {"thinking": {"type": "enabled", "budget_tokens": 5000}}
+
+
+def test_bind_tools_any_becomes_required_without_thinking() -> None:
+    """`tool_choice='any'` should map to `'required'`."""
+    llm = ChatLiteLLM(model="anthropic/claude-sonnet-4-20250514", api_key="fake")
+    bound = llm.bind_tools([_dummy_tool], tool_choice="any")
+    assert bound.kwargs["tool_choice"] == "required"  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        "any",
+        "required",
+        True,
+        {"type": "function", "function": {"name": "_dummy_tool"}},
+    ],
+    ids=["any", "required", "True", "dict"],
+)
+def test_bind_tools_downgraded_with_thinking(tool_choice, caplog) -> None:  # type: ignore[no-untyped-def]
+    """Forced tool_choice values should be downgraded to 'auto' when thinking
+    is enabled, so the model can produce CoT text before tool calls.
+    """
+    llm = ChatLiteLLM(
+        model="anthropic/claude-sonnet-4-20250514",
+        api_key="fake",
+        model_kwargs=_THINKING_KWARGS,
+    )
+    with caplog.at_level(
+        logging.WARNING, logger="langchain_litellm.chat_models.litellm"
+    ):
+        bound = llm.bind_tools([_dummy_tool], tool_choice=tool_choice)
+    assert bound.kwargs["tool_choice"] == "auto"  # type: ignore[attr-defined]
+    assert "incompatible with thinking" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        "any",
+        "required",
+        True,
+        {"type": "function", "function": {"name": "_dummy_tool"}},
+    ],
+    ids=["any", "required", "True", "dict"],
+)
+def test_bind_tools_not_downgraded_with_thinking_on_non_claude_models(
+    tool_choice,
+) -> None:
+    """Forced tool choices should be preserved for non-Claude models."""
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="fake",
+        model_kwargs=_THINKING_KWARGS,
+    )
+    bound = llm.bind_tools([_dummy_tool], tool_choice=tool_choice)
+    expected_tool_choice = "required" if tool_choice in ("any", True) else tool_choice
+    assert bound.kwargs["tool_choice"] == expected_tool_choice  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    ["auto", "none", None, False],
+    ids=["auto", "none", "None", "False"],
+)
+def test_bind_tools_non_forced_unchanged_with_thinking(tool_choice) -> None:
+    """Non-forced tool_choice values should pass through untouched."""
+    llm = ChatLiteLLM(
+        model="anthropic/claude-sonnet-4-20250514",
+        api_key="fake",
+        model_kwargs=_THINKING_KWARGS,
+    )
+    bound = llm.bind_tools([_dummy_tool], tool_choice=tool_choice)
+    assert bound.kwargs["tool_choice"] == tool_choice  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "thinking_config",
+    [None, {}, {"type": "disabled"}],
+    ids=["None", "empty", "disabled"],
+)
+def test_bind_tools_no_downgrade_without_thinking_enabled(thinking_config) -> None:
+    """tool_choice='any' should stay 'required' when thinking is not enabled."""
+    kwargs: dict = {}
+    if thinking_config is not None:
+        kwargs["thinking"] = thinking_config
+    llm = ChatLiteLLM(
+        model="anthropic/claude-sonnet-4-20250514",
+        api_key="fake",
+        model_kwargs=kwargs,
+    )
+    bound = llm.bind_tools([_dummy_tool], tool_choice="any")
+    assert bound.kwargs["tool_choice"] == "required"  # type: ignore[attr-defined]
+
+
+def test_bind_tools_dict_validation_with_thinking() -> None:
+    """Invalid dict tool_choice should raise ValueError even with thinking."""
+    llm = ChatLiteLLM(
+        model="anthropic/claude-sonnet-4-20250514",
+        api_key="fake",
+        model_kwargs=_THINKING_KWARGS,
+    )
+    with pytest.raises(ValueError, match="nonexistent_tool"):
+        llm.bind_tools(
+            [_dummy_tool],
+            tool_choice={"type": "function", "function": {"name": "nonexistent_tool"}},
+        )
+
+
+def test_with_structured_output_function_calling_warns_and_raises_for_claude_thinking() -> (
+    None
+):
+    """Claude thinking should not silently fall back to plain-text structured output."""
+    bind_kwargs: dict[str, Any] = {}
+
+    class _FakeChatLiteLLM(ChatLiteLLM):
+        def bind_tools(self, tools, **kwargs):  # type: ignore[no-untyped-def]
+            bind_kwargs.update(kwargs)
+            return RunnableLambda(lambda _: AIMessage(content="plain text"))
+
+    llm = _FakeChatLiteLLM(
+        model="anthropic/claude-sonnet-4-20250514",
+        api_key="fake",
+        model_kwargs=_THINKING_KWARGS,
+    )
+
+    with pytest.warns(UserWarning, match="Structured output via function calling"):
+        structured = llm.with_structured_output(
+            _StructuredResponse, method="function_calling"
+        )
+
+    assert "tool_choice" not in bind_kwargs
+    with pytest.raises(OutputParserException, match="no tool call is returned"):
+        structured.invoke("Return structured output.")
+
+
+def test_with_structured_output_include_raw_preserves_raw_for_claude_thinking() -> None:
+    """`include_raw` should surface the parsing error without dropping the raw message."""
+
+    class _FakeChatLiteLLM(ChatLiteLLM):
+        def bind_tools(self, tools, **kwargs):  # type: ignore[no-untyped-def]
+            return RunnableLambda(lambda _: AIMessage(content="plain text"))
+
+    llm = _FakeChatLiteLLM(
+        model="anthropic/claude-sonnet-4-20250514",
+        api_key="fake",
+        model_kwargs=_THINKING_KWARGS,
+    )
+
+    with pytest.warns(UserWarning, match="Structured output via function calling"):
+        structured = llm.with_structured_output(
+            _StructuredResponse,
+            method="function_calling",
+            include_raw=True,
+        )
+
+    result = structured.invoke("Return structured output.")
+
+    assert isinstance(result["raw"], AIMessage)
+    assert result["raw"].content == "plain text"
+    assert result["parsed"] is None
+    assert isinstance(result["parsing_error"], OutputParserException)
