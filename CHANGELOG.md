@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.5](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.6.4...langchain-litellm==0.6.5) (2026-04-03)
+
+
+### Bug Fixes
+
+* bump pyproject.toml to 0.6.4 and harden release pipeline ([#127](https://github.com/langchain-ai/langchain-litellm/issues/127)) ([28851fc](https://github.com/langchain-ai/langchain-litellm/commit/28851fc379e09622d4cc57da894df031dbdc2781))
+
 ## [0.6.4](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.6.3...langchain-litellm==0.6.4) (2026-04-03)
 
 
