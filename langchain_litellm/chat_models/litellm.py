@@ -801,8 +801,9 @@ class ChatLiteLLM(BaseChatModel):
                 tool_choice = "required"
             # if tool_choice is False, we leave it (it behaves like None/auto depending on provider)
 
-        # Handle dict tool_choice logic
-        elif isinstance(tool_choice, dict):
+        # Handle dict tool_choice logic — validate before any downgrade so
+        # typos in tool names always raise, even when thinking is enabled.
+        if isinstance(tool_choice, dict):
             tool_names = [
                 formatted_tool["function"]["name"] for formatted_tool in formatted_tools
             ]
@@ -813,6 +814,27 @@ class ChatLiteLLM(BaseChatModel):
                     f"Tool choice {tool_choice} was specified, but the only "
                     f"provided tools were {tool_names}."
                 )
+
+        # When thinking/extended thinking is enabled, tool_choice="required"
+        # (or a forced specific tool) suppresses chain-of-thought on Claude
+        # models. Downgrade to "auto" so the model can reason before calling
+        # tools.
+        # Prior art: langchain-ai/langchain#35544, langchain-ai/langchain-aws#927.
+        thinking_config = self.model_kwargs.get("thinking")
+        if not isinstance(thinking_config, dict):
+            thinking_config = {}
+        # "any" is already mapped to "required" above, so only check "required"
+        tool_choice_is_forced = tool_choice == "required" or isinstance(
+            tool_choice, dict
+        )
+        if thinking_config.get("type") == "enabled" and tool_choice_is_forced:
+            logger.warning(
+                "tool_choice=%r is incompatible with thinking/extended "
+                "thinking. Downgrading tool_choice to 'auto' so the model can "
+                "produce chain-of-thought reasoning before calling tools.",
+                tool_choice,
+            )
+            tool_choice = "auto"
 
         return super().bind(tools=formatted_tools, tool_choice=tool_choice, **kwargs)
 

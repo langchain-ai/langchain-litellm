@@ -1,7 +1,9 @@
 """Test chat model integration."""
 
+import logging
 from typing import Type
 
+import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_tests.unit_tests import ChatModelUnitTests
 from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function
@@ -13,6 +15,12 @@ from langchain_litellm.chat_models.litellm import (
     _create_usage_metadata,
     _inject_reasoning_content_into_content,
 )
+
+
+def _dummy_tool(x: str) -> str:
+    """A dummy tool for testing."""
+    return x
+
 
 # ── delta / message conversion ────────────────────────────────────────────────
 
@@ -288,3 +296,89 @@ def test_stream_options_respected_when_set_explicitly() -> None:
     else:
         params["stream_options"] = {"include_usage": True}
     assert params["stream_options"] == custom
+
+
+# ── tool_choice mapping with thinking enabled ──────────────────────────────────
+
+_THINKING_KWARGS = {"thinking": {"type": "enabled", "budget_tokens": 5000}}
+
+
+def test_bind_tools_any_becomes_required_without_thinking() -> None:
+    """`tool_choice='any'` should map to `'required'`."""
+    llm = ChatLiteLLM(model="anthropic/claude-sonnet-4-20250514", api_key="fake")
+    bound = llm.bind_tools([_dummy_tool], tool_choice="any")
+    assert bound.kwargs["tool_choice"] == "required"  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        "any",
+        "required",
+        True,
+        {"type": "function", "function": {"name": "_dummy_tool"}},
+    ],
+    ids=["any", "required", "True", "dict"],
+)
+def test_bind_tools_downgraded_with_thinking(tool_choice, caplog) -> None:  # type: ignore[no-untyped-def]
+    """Forced tool_choice values should be downgraded to 'auto' when thinking
+    is enabled, so the model can produce CoT text before tool calls.
+    """
+    llm = ChatLiteLLM(
+        model="anthropic/claude-sonnet-4-20250514",
+        api_key="fake",
+        model_kwargs=_THINKING_KWARGS,
+    )
+    with caplog.at_level(logging.WARNING, logger="langchain_litellm.chat_models.litellm"):
+        bound = llm.bind_tools([_dummy_tool], tool_choice=tool_choice)
+    assert bound.kwargs["tool_choice"] == "auto"  # type: ignore[attr-defined]
+    assert "incompatible with thinking" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    ["auto", "none", None, False],
+    ids=["auto", "none", "None", "False"],
+)
+def test_bind_tools_non_forced_unchanged_with_thinking(tool_choice) -> None:
+    """Non-forced tool_choice values should pass through untouched."""
+    llm = ChatLiteLLM(
+        model="anthropic/claude-sonnet-4-20250514",
+        api_key="fake",
+        model_kwargs=_THINKING_KWARGS,
+    )
+    bound = llm.bind_tools([_dummy_tool], tool_choice=tool_choice)
+    assert bound.kwargs["tool_choice"] == tool_choice  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "thinking_config",
+    [None, {}, {"type": "disabled"}],
+    ids=["None", "empty", "disabled"],
+)
+def test_bind_tools_no_downgrade_without_thinking_enabled(thinking_config) -> None:
+    """tool_choice='any' should stay 'required' when thinking is not enabled."""
+    kwargs: dict = {}
+    if thinking_config is not None:
+        kwargs["thinking"] = thinking_config
+    llm = ChatLiteLLM(
+        model="anthropic/claude-sonnet-4-20250514",
+        api_key="fake",
+        model_kwargs=kwargs,
+    )
+    bound = llm.bind_tools([_dummy_tool], tool_choice="any")
+    assert bound.kwargs["tool_choice"] == "required"  # type: ignore[attr-defined]
+
+
+def test_bind_tools_dict_validation_with_thinking() -> None:
+    """Invalid dict tool_choice should raise ValueError even with thinking."""
+    llm = ChatLiteLLM(
+        model="anthropic/claude-sonnet-4-20250514",
+        api_key="fake",
+        model_kwargs=_THINKING_KWARGS,
+    )
+    with pytest.raises(ValueError, match="nonexistent_tool"):
+        llm.bind_tools(
+            [_dummy_tool],
+            tool_choice={"type": "function", "function": {"name": "nonexistent_tool"}},
+        )
