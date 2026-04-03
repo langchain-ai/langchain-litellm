@@ -3,9 +3,9 @@
 from typing import Type
 
 from langchain_tests.integration_tests import EmbeddingsIntegrationTests
+from litellm import Router
 
 from langchain_litellm.embeddings import LiteLLMEmbeddingsRouter
-from tests.utils import test_embedding_router
 
 
 class TestLiteLLMEmbeddingsRouterIntegration(EmbeddingsIntegrationTests):
@@ -16,5 +16,14 @@ class TestLiteLLMEmbeddingsRouterIntegration(EmbeddingsIntegrationTests):
     @property
     def embedding_model_params(self) -> dict:
         return {
-            "router": test_embedding_router(),
+            "router": Router(
+                model_list=[
+                    {
+                        "model_name": "openai/text-embedding-3-small",
+                        "litellm_params": {
+                            "model": "openai/text-embedding-3-small",
+                        },
+                    },
+                ]
+            ),
         }
