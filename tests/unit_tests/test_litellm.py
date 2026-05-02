@@ -1,11 +1,11 @@
 """Test chat model integration."""
 
 import logging
-from typing import Any, Type
+from typing import Any, Type, cast
 
 import pytest
 from langchain_core.exceptions import OutputParserException
-from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableLambda
 from langchain_tests.unit_tests import ChatModelUnitTests
 from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function
@@ -17,6 +17,9 @@ from langchain_litellm.chat_models.litellm import (
     _convert_dict_to_message,
     _create_usage_metadata,
     _inject_reasoning_content_into_content,
+    _messages_to_responses_input,
+    _response_to_chat_result,
+    _responses_stream_event_to_generation_chunk,
 )
 
 
@@ -464,9 +467,145 @@ def test_with_structured_output_include_raw_preserves_raw_for_claude_thinking() 
             include_raw=True,
         )
 
-    result = structured.invoke("Return structured output.")
+    result = cast(dict[str, Any], structured.invoke("Return structured output."))
 
     assert isinstance(result["raw"], AIMessage)
     assert result["raw"].content == "plain text"
     assert result["parsed"] is None
     assert isinstance(result["parsing_error"], OutputParserException)
+
+
+# ── responses api ──────────────────────────────────────────────────────────────
+
+
+def test_messages_to_responses_input_with_tool_messages() -> None:
+    messages = [
+        HumanMessage(content="weather?"),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "get_weather",
+                    "args": {"city": "Paris"},
+                    "id": "call_1",
+                }
+            ],
+        ),
+        ToolMessage(content="sunny", tool_call_id="call_1"),
+    ]
+
+    assert _messages_to_responses_input(messages) == [
+        {"type": "message", "role": "user", "content": "weather?"},
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "get_weather",
+            "arguments": '{"city": "Paris"}',
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": "sunny",
+        },
+    ]
+
+
+def test_response_to_chat_result_parses_text_tool_calls_and_usage() -> None:
+    response = {
+        "id": "resp_1",
+        "model": "gpt-4.1-mini",
+        "status": "completed",
+        "usage": {"input_tokens": 5, "output_tokens": 7, "total_tokens": 12},
+        "output": [
+            {
+                "id": "msg_1",
+                "type": "message",
+                "content": [{"type": "output_text", "text": "hello"}],
+            },
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "get_weather",
+                "arguments": '{"city": "Paris"}',
+            },
+        ],
+    }
+
+    result = _response_to_chat_result(response)
+    message = result.generations[0].message
+
+    assert isinstance(message, AIMessage)
+    assert message.tool_calls == [
+        {
+            "name": "get_weather",
+            "args": {"city": "Paris"},
+            "id": "call_1",
+            "type": "tool_call",
+        }
+    ]
+    assert message.usage_metadata == {
+        "input_tokens": 5,
+        "output_tokens": 7,
+        "total_tokens": 12,
+    }
+
+
+def test_responses_stream_event_to_generation_chunk_text_delta() -> None:
+    chunk = _responses_stream_event_to_generation_chunk(
+        {"type": "response.output_text.delta", "delta": "hel"}
+    )
+
+    assert chunk is not None
+    assert chunk.text == "hel"
+    assert chunk.message.content == "hel"
+
+
+def test_responses_stream_event_to_generation_chunk_tool_call_delta() -> None:
+    chunk = _responses_stream_event_to_generation_chunk(
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 2,
+            "delta": '{"city"',
+            "item": {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "get_weather",
+            },
+        }
+    )
+
+    assert chunk is not None
+    assert isinstance(chunk.message, AIMessageChunk)
+    tool_call_chunk = chunk.message.tool_call_chunks[0]
+    assert tool_call_chunk["id"] == "call_1"
+    assert tool_call_chunk["name"] == "get_weather"
+    assert tool_call_chunk["args"] == '{"city"'
+    assert tool_call_chunk["index"] == 2
+
+
+def test_chat_litellm_responses_request_params_use_responses_shape() -> None:
+    llm = ChatLiteLLM(
+        model="gpt-4.1-mini",
+        api_key="fake",
+        use_responses_api=True,
+        max_tokens=10,
+    )
+
+    params = llm._responses_params([HumanMessage(content="hi")])
+
+    assert params["input"] == [{"type": "message", "role": "user", "content": "hi"}]
+    assert params["max_output_tokens"] == 10
+    assert "messages" not in params
+    assert "max_tokens" not in params
+
+
+def test_chat_litellm_responses_bind_tools_uses_responses_tool_shape() -> None:
+    llm = ChatLiteLLM(model="gpt-4.1-mini", api_key="fake", use_responses_api=True)
+
+    bound = llm.bind_tools([_dummy_tool], tool_choice="any")
+
+    tool = bound.kwargs["tools"][0]  # type: ignore[attr-defined]
+    assert tool["type"] == "function"
+    assert tool["name"] == "_dummy_tool"
+    assert "function" not in tool
+    assert bound.kwargs["tool_choice"] == "required"  # type: ignore[attr-defined]

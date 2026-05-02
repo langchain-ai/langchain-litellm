@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import warnings
+from json import JSONDecodeError
 from operator import itemgetter
 from typing import (
     Any,
@@ -29,6 +30,7 @@ from langchain_core.callbacks import (
 )
 from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import LanguageModelInput
+from langchain_core.language_models.base import LangSmithParams
 from langchain_core.language_models.chat_models import (
     BaseChatModel,
     agenerate_from_stream,
@@ -54,6 +56,7 @@ from langchain_core.messages import (
 )
 from langchain_core.messages.ai import (
     InputTokenDetails,
+    InvalidToolCall,
     OutputTokenDetails,
     UsageMetadata,
 )
@@ -392,6 +395,323 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
     return message_dict
 
 
+def _message_content_to_responses_text(content: Any) -> str:
+    """Convert LangChain message content to Responses API text."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return str(content)
+
+    text_parts: List[str] = []
+    for part in content:
+        if isinstance(part, str):
+            text_parts.append(part)
+            continue
+        if isinstance(part, dict):
+            text = part.get("text") or part.get("output_text")
+            if isinstance(text, str):
+                text_parts.append(text)
+    return "".join(text_parts)
+
+
+def _message_to_responses_items(message: BaseMessage) -> List[Dict[str, Any]]:
+    """Convert a LangChain message to Responses API input items."""
+    if isinstance(message, ToolMessage):
+        return [
+            {
+                "type": "function_call_output",
+                "call_id": message.tool_call_id,
+                "output": _message_content_to_responses_text(message.content),
+            }
+        ]
+
+    if isinstance(message, AIMessage):
+        items: List[Dict[str, Any]] = []
+        content_text = _message_content_to_responses_text(message.content)
+        if content_text:
+            items.append(
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": content_text,
+                }
+            )
+        for tool_call in message.tool_calls:
+            items.append(
+                {
+                    "type": "function_call",
+                    "call_id": tool_call["id"],
+                    "name": tool_call["name"],
+                    "arguments": json.dumps(tool_call["args"]),
+                }
+            )
+        return items
+
+    role = "system" if isinstance(message, SystemMessage) else "user"
+    if not isinstance(message, (HumanMessage, SystemMessage)):
+        role = getattr(message, "type", "user")
+    return [
+        {
+            "type": "message",
+            "role": role,
+            "content": _message_content_to_responses_text(message.content),
+        }
+    ]
+
+
+def _messages_to_responses_input(
+    messages: List[BaseMessage],
+) -> List[Dict[str, Any]]:
+    """Convert LangChain messages to Responses API input."""
+    input_items: List[Dict[str, Any]] = []
+    for message in messages:
+        input_items.extend(_message_to_responses_items(message))
+    return input_items
+
+
+def _to_responses_tool(tool: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert an OpenAI Chat Completions tool schema to Responses format."""
+    function_schema = tool.get("function")
+    if tool.get("type") != "function" or not isinstance(function_schema, dict):
+        return tool
+
+    response_tool = {"type": "function", **function_schema}
+    if "strict" in tool:
+        response_tool["strict"] = tool["strict"]
+    return response_tool
+
+
+def _format_responses_tool_choice(tool_choice: Any) -> Any:
+    """Convert Chat Completions tool choice format to Responses API format."""
+    if not isinstance(tool_choice, dict):
+        return tool_choice
+    function_schema = tool_choice.get("function")
+    if tool_choice.get("type") == "function" and isinstance(function_schema, dict):
+        return {"type": "function", "name": function_schema.get("name")}
+    return tool_choice
+
+
+def _json_dump(value: Any) -> Dict[str, Any]:
+    """Safely convert LiteLLM response objects to dictionaries."""
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json", exclude_none=True, warnings=False)
+    return dict(value)
+
+
+def _stream_event_type(event: Any) -> Optional[str]:
+    """Extract a Responses API stream event type."""
+    if isinstance(event, dict):
+        event_type = event.get("type")
+    else:
+        event_type = getattr(event, "type", None)
+    return event_type if isinstance(event_type, str) else None
+
+
+def _stream_event_value(event: Any, key: str) -> Any:
+    """Extract a field from a Responses API stream event."""
+    if isinstance(event, dict):
+        return event.get(key)
+    return getattr(event, key, None)
+
+
+def _stream_output_index(event: Any) -> Optional[int]:
+    """Extract the output index from a Responses API stream event."""
+    value = _stream_event_value(event, "output_index")
+    if isinstance(value, int):
+        return value
+    return None
+
+
+def _stream_text_delta(event: Any) -> str:
+    """Extract text delta content from a Responses API stream event."""
+    event_type = _stream_event_type(event)
+    if event_type not in {
+        "response.output_text.delta",
+        "response.refusal.delta",
+    }:
+        return ""
+    delta = _stream_event_value(event, "delta")
+    return delta if isinstance(delta, str) else ""
+
+
+def _stream_function_call_chunk(event: Any) -> Optional[ToolCallChunk]:
+    """Extract a tool call chunk from a Responses API stream event."""
+    event_type = _stream_event_type(event)
+    if event_type not in {
+        "response.function_call_arguments.delta",
+        "response.output_item.done",
+    }:
+        return None
+
+    item = _stream_event_value(event, "item")
+    item_dict = _json_dump(item) if item is not None else {}
+    if (
+        event_type == "response.output_item.done"
+        and item_dict.get("type") != "function_call"
+    ):
+        return None
+
+    name = item_dict.get("name")
+    args = (
+        _stream_event_value(event, "delta")
+        if event_type == "response.function_call_arguments.delta"
+        else item_dict.get("arguments", "")
+    )
+    call_id = item_dict.get("call_id") or item_dict.get("id")
+    return ToolCallChunk(
+        name=name if isinstance(name, str) else None,
+        args=args if isinstance(args, str) else "",
+        id=call_id if isinstance(call_id, str) else None,
+        index=_stream_output_index(event),
+    )
+
+
+def _responses_stream_event_to_generation_chunk(
+    event: Any,
+) -> Optional[ChatGenerationChunk]:
+    """Convert a Responses API stream event to a LangChain generation chunk."""
+    text_delta = _stream_text_delta(event)
+    if text_delta:
+        return ChatGenerationChunk(
+            message=AIMessageChunk(content=text_delta),
+            text=text_delta,
+        )
+
+    tool_call_chunk = _stream_function_call_chunk(event)
+    if tool_call_chunk is None:
+        return None
+    return ChatGenerationChunk(
+        message=AIMessageChunk(content="", tool_call_chunks=[tool_call_chunk])
+    )
+
+
+def _response_output_text(response: Any) -> str:
+    """Extract aggregated text from a Responses API response."""
+    output_text = (
+        response.get("output_text")
+        if isinstance(response, dict)
+        else getattr(response, "output_text", None)
+    )
+    if isinstance(output_text, str):
+        return output_text
+
+    text_parts: List[str] = []
+    outputs = (
+        response.get("output", [])
+        if isinstance(response, dict)
+        else getattr(response, "output", [])
+    )
+    for output in outputs or []:
+        output_dict = _json_dump(output)
+        if output_dict.get("type") != "message":
+            continue
+        for content in output_dict.get("content", []) or []:
+            if isinstance(content, dict) and content.get("type") == "output_text":
+                text = content.get("text")
+                if isinstance(text, str):
+                    text_parts.append(text)
+    return "".join(text_parts)
+
+
+def _create_responses_usage_metadata(usage: Any) -> Optional[UsageMetadata]:
+    """Create usage metadata from a Responses API usage object."""
+    if usage is None:
+        return None
+    usage_dict = _json_dump(usage)
+    input_tokens = int(usage_dict.get("input_tokens") or 0)
+    output_tokens = int(usage_dict.get("output_tokens") or 0)
+    total_tokens = int(usage_dict.get("total_tokens") or input_tokens + output_tokens)
+    return UsageMetadata(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+    )
+
+
+def _parse_responses_tool_arguments(arguments: Any) -> Tuple[Any, Optional[str]]:
+    """Parse Responses API function call arguments."""
+    if not isinstance(arguments, str):
+        return arguments or {}, None
+    try:
+        return json.loads(arguments), None
+    except JSONDecodeError as exc:
+        return arguments, str(exc)
+
+
+def _response_to_chat_result(response: Any) -> ChatResult:
+    """Convert a LiteLLM Responses API response to a LangChain ChatResult."""
+    response_dict = _json_dump(response)
+    if response_dict.get("error"):
+        raise ValueError(response_dict["error"])
+
+    content_blocks: List[Union[str, Dict[str, Any]]] = []
+    tool_calls: List[ToolCall] = []
+    invalid_tool_calls: List[InvalidToolCall] = []
+    for output in response_dict.get("output", []) or []:
+        if not isinstance(output, dict):
+            continue
+        output_type = output.get("type")
+        if output_type == "message":
+            for content in output.get("content", []) or []:
+                if not isinstance(content, dict):
+                    continue
+                if content.get("type") == "output_text":
+                    content_blocks.append(
+                        {
+                            "type": "text",
+                            "text": content.get("text", ""),
+                            "annotations": content.get("annotations", []),
+                            "id": output.get("id"),
+                        }
+                    )
+                elif content.get("type") == "refusal":
+                    content_blocks.append(content)
+            continue
+
+        if output_type == "function_call":
+            content_blocks.append(output)
+            args, error = _parse_responses_tool_arguments(output.get("arguments"))
+            call_id = output.get("call_id") or output.get("id")
+            if error is None:
+                tool_calls.append(
+                    ToolCall(
+                        name=output.get("name", ""),
+                        args=args if isinstance(args, dict) else {},
+                        id=call_id,
+                    )
+                )
+            else:
+                invalid_tool_calls.append(
+                    InvalidToolCall(
+                        type="invalid_tool_call",
+                        name=output.get("name"),
+                        args=args if isinstance(args, str) else None,
+                        id=call_id,
+                        error=error,
+                    )
+                )
+            continue
+
+        content_blocks.append(output)
+
+    message = AIMessage(
+        content=content_blocks or _response_output_text(response),
+        id=response_dict.get("id"),
+        response_metadata={
+            "id": response_dict.get("id"),
+            "model_name": response_dict.get("model"),
+            "model_provider": response_dict.get("model_provider"),
+            "status": response_dict.get("status"),
+        },
+        usage_metadata=_create_responses_usage_metadata(response_dict.get("usage")),
+        tool_calls=tool_calls,
+        invalid_tool_calls=invalid_tool_calls,
+    )
+    return ChatResult(generations=[ChatGeneration(message=message)])
+
+
 class ChatLiteLLM(BaseChatModel):
     """Chat model that uses the LiteLLM API."""
 
@@ -408,6 +728,10 @@ class ChatLiteLLM(BaseChatModel):
     openrouter_api_key: Optional[str] = None
     api_key: Optional[str] = None
     streaming: bool = False
+    use_responses_api: bool = False
+    """Use LiteLLM's Responses API instead of Chat Completions."""
+    max_output_tokens: Optional[int] = None
+    """Maximum number of output tokens for the Responses API."""
     api_base: Optional[str] = None
     organization: Optional[str] = None
     custom_llm_provider: Optional[str] = None
@@ -520,6 +844,74 @@ class ChatLiteLLM(BaseChatModel):
 
         return await _completion_with_retry(**kwargs)
 
+    def responses_with_retry(
+        self, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any
+    ) -> Any:
+        """Use tenacity to retry the Responses API call."""
+        retry_decorator = _create_retry_decorator(self, run_manager=run_manager)
+
+        @retry_decorator
+        def _responses_with_retry(**kwargs: Any) -> Any:
+            return self.client.responses(**kwargs)
+
+        return _responses_with_retry(**kwargs)
+
+    async def aresponses_with_retry(
+        self, run_manager: Optional[AsyncCallbackManagerForLLMRun] = None, **kwargs: Any
+    ) -> Any:
+        """Use tenacity to retry the async Responses API call."""
+        retry_decorator = _create_retry_decorator(self, run_manager=run_manager)
+
+        @retry_decorator
+        async def _responses_with_retry(**kwargs: Any) -> Any:
+            return await self.client.aresponses(**kwargs)
+
+        return await _responses_with_retry(**kwargs)
+
+    def _get_invocation_params(
+        self,
+        stop: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Get invocation params for callbacks and tracing."""
+        if not self.use_responses_api:
+            return super()._get_invocation_params(stop=stop, **kwargs)
+        params = {
+            "model": self.model_name or self.model,
+            "temperature": self.temperature,
+            "max_output_tokens": self.max_output_tokens or self.max_tokens,
+            "timeout": self.request_timeout,
+            "max_retries": self.max_retries,
+            "stream": self.streaming,
+            "extra_headers": self.extra_headers,
+            **self.model_kwargs,
+            **kwargs,
+        }
+        if stop is not None:
+            params["stop"] = stop
+        return {key: value for key, value in params.items() if value is not None}
+
+    def _get_ls_params(
+        self,
+        stop: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> LangSmithParams:
+        """Get LangSmith tracing params."""
+        if not self.use_responses_api:
+            return super()._get_ls_params(stop=stop, **kwargs)
+        params = self._get_invocation_params(stop=stop, **kwargs)
+        ls_params: Dict[str, Any] = {
+            "ls_provider": "litellm-responses",
+            "ls_model_type": "chat",
+            "ls_model_name": params.get("model"),
+            "ls_temperature": params.get("temperature"),
+            "ls_max_tokens": params.get("max_output_tokens"),
+            "actual_model_request": params,
+        }
+        if stop is not None:
+            ls_params["ls_stop"] = stop
+        return cast(LangSmithParams, ls_params)
+
     @pre_init
     def validate_environment(cls, values: Dict) -> Dict:
         """Validate api key, python package exists, temperature, top_p, and top_k."""
@@ -577,6 +969,18 @@ class ChatLiteLLM(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         should_stream = stream if stream is not None else self.streaming
+        if self.use_responses_api:
+            kwargs = self._normalize_responses_kwargs(kwargs)
+            if should_stream:
+                stream_iter = self._stream(
+                    messages, stop=stop, run_manager=run_manager, **kwargs
+                )
+                return generate_from_stream(stream_iter)
+
+            params = {**self._responses_params(messages, stop), **kwargs}
+            response = self.responses_with_retry(run_manager=run_manager, **params)
+            return _response_to_chat_result(response)
+
         if should_stream:
             stream_iter = self._stream(
                 messages, stop=stop, run_manager=run_manager, **kwargs
@@ -633,6 +1037,39 @@ class ChatLiteLLM(BaseChatModel):
         message_dicts = [_convert_message_to_dict(m) for m in messages]
         return message_dicts, params
 
+    def _responses_params(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Build LiteLLM Responses API request parameters."""
+        params = self._client_params
+        params.pop("max_tokens", None)
+        params.pop("stream", None)
+        params.pop("n", None)
+        max_output_tokens = self.max_output_tokens
+        if max_output_tokens is None:
+            max_output_tokens = self.max_tokens
+        if max_output_tokens is not None:
+            params["max_output_tokens"] = max_output_tokens
+        params["input"] = _messages_to_responses_input(messages)
+        if "response_format" in params and "text" not in params:
+            params["text"] = params.pop("response_format")
+        if stop is not None:
+            if "stop" in params:
+                raise ValueError("`stop` found in both the input and default params.")
+            params["stop"] = stop
+        return {key: value for key, value in params.items() if value is not None}
+
+    def _normalize_responses_kwargs(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize Chat Completions aliases to Responses API parameter names."""
+        normalized = dict(kwargs)
+        if "max_tokens" in normalized and "max_output_tokens" not in normalized:
+            normalized["max_output_tokens"] = normalized.pop("max_tokens")
+        if "response_format" in normalized and "text" not in normalized:
+            normalized["text"] = normalized.pop("response_format")
+        return normalized
+
     def _stream(
         self,
         messages: List[BaseMessage],
@@ -640,13 +1077,29 @@ class ChatLiteLLM(BaseChatModel):
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
+        if self.use_responses_api:
+            kwargs = self._normalize_responses_kwargs(kwargs)
+            params = {
+                **self._responses_params(messages, stop),
+                **kwargs,
+                "stream": True,
+            }
+            for event in self.responses_with_retry(run_manager=run_manager, **params):
+                chunk = _responses_stream_event_to_generation_chunk(event)
+                if chunk is None:
+                    continue
+                if run_manager:
+                    run_manager.on_llm_new_token(chunk.text or "", chunk=chunk)
+                yield chunk
+            return
+
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs, "stream": True}
         if self.stream_options is not None:
             params["stream_options"] = self.stream_options
         else:
             params["stream_options"] = {"include_usage": True}
-        default_chunk_class = AIMessageChunk
+        default_chunk_class: Type[BaseMessageChunk] = AIMessageChunk
         first_chunk_yielded = False
 
         for chunk in self.completion_with_retry(
@@ -665,7 +1118,7 @@ class ChatLiteLLM(BaseChatModel):
             if len(chunk["choices"]) == 0:
                 if usage_metadata:
                     # Create an empty chunk just to carry the metadata
-                    chunk_obj = default_chunk_class(
+                    chunk_obj = AIMessageChunk(
                         content="", usage_metadata=usage_metadata
                     )
                     cg_chunk = ChatGenerationChunk(message=chunk_obj)
@@ -684,22 +1137,27 @@ class ChatLiteLLM(BaseChatModel):
             if root_metadata:
                 delta["provider_specific_fields"] = root_metadata
 
-            chunk = _convert_delta_to_message_chunk(delta, default_chunk_class)
+            message_chunk = _convert_delta_to_message_chunk(delta, default_chunk_class)
 
-            if usage_metadata and isinstance(chunk, AIMessageChunk):
-                chunk.usage_metadata = usage_metadata
+            if usage_metadata and isinstance(message_chunk, AIMessageChunk):
+                message_chunk.usage_metadata = usage_metadata
 
             # Set response_metadata on the first chunk only
-            if not first_chunk_yielded and isinstance(chunk, AIMessageChunk):
-                chunk.response_metadata = {
+            if not first_chunk_yielded and isinstance(message_chunk, AIMessageChunk):
+                message_chunk.response_metadata = {
                     "model_name": self.model_name or self.model
                 }
                 first_chunk_yielded = True
 
-            default_chunk_class = chunk.__class__
-            cg_chunk = ChatGenerationChunk(message=chunk)
+            default_chunk_class = message_chunk.__class__
+            cg_chunk = ChatGenerationChunk(message=message_chunk)
             if run_manager:
-                run_manager.on_llm_new_token(chunk.content, chunk=cg_chunk)
+                token = (
+                    message_chunk.content
+                    if isinstance(message_chunk.content, str)
+                    else ""
+                )
+                run_manager.on_llm_new_token(token, chunk=cg_chunk)
             yield cg_chunk
 
     async def _astream(
@@ -709,13 +1167,31 @@ class ChatLiteLLM(BaseChatModel):
         run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
+        if self.use_responses_api:
+            kwargs = self._normalize_responses_kwargs(kwargs)
+            params = {
+                **self._responses_params(messages, stop),
+                **kwargs,
+                "stream": True,
+            }
+            async for event in await self.aresponses_with_retry(
+                run_manager=run_manager, **params
+            ):
+                chunk = _responses_stream_event_to_generation_chunk(event)
+                if chunk is None:
+                    continue
+                if run_manager:
+                    await run_manager.on_llm_new_token(chunk.text or "", chunk=chunk)
+                yield chunk
+            return
+
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs, "stream": True}
         if self.stream_options is not None:
             params["stream_options"] = self.stream_options
         else:
             params["stream_options"] = {"include_usage": True}
-        default_chunk_class = AIMessageChunk
+        default_chunk_class: Type[BaseMessageChunk] = AIMessageChunk
         first_chunk_yielded = False
 
         async for chunk in await self.acompletion_with_retry(
@@ -733,7 +1209,7 @@ class ChatLiteLLM(BaseChatModel):
             # Handle empty choices (usage-only chunks)
             if len(chunk["choices"]) == 0:
                 if usage_metadata:
-                    chunk_obj = default_chunk_class(
+                    chunk_obj = AIMessageChunk(
                         content="", usage_metadata=usage_metadata
                     )
                     cg_chunk = ChatGenerationChunk(message=chunk_obj)
@@ -752,22 +1228,27 @@ class ChatLiteLLM(BaseChatModel):
             if root_metadata:
                 delta["provider_specific_fields"] = root_metadata
 
-            chunk = _convert_delta_to_message_chunk(delta, default_chunk_class)
+            message_chunk = _convert_delta_to_message_chunk(delta, default_chunk_class)
 
-            if usage_metadata and isinstance(chunk, AIMessageChunk):
-                chunk.usage_metadata = usage_metadata
+            if usage_metadata and isinstance(message_chunk, AIMessageChunk):
+                message_chunk.usage_metadata = usage_metadata
 
             # Set response_metadata on the first chunk only
-            if not first_chunk_yielded and isinstance(chunk, AIMessageChunk):
-                chunk.response_metadata = {
+            if not first_chunk_yielded and isinstance(message_chunk, AIMessageChunk):
+                message_chunk.response_metadata = {
                     "model_name": self.model_name or self.model
                 }
                 first_chunk_yielded = True
 
-            default_chunk_class = chunk.__class__
-            cg_chunk = ChatGenerationChunk(message=chunk)
+            default_chunk_class = message_chunk.__class__
+            cg_chunk = ChatGenerationChunk(message=message_chunk)
             if run_manager:
-                await run_manager.on_llm_new_token(chunk.content, chunk=cg_chunk)
+                token = (
+                    message_chunk.content
+                    if isinstance(message_chunk.content, str)
+                    else ""
+                )
+                await run_manager.on_llm_new_token(token, chunk=cg_chunk)
             yield cg_chunk
 
     async def _agenerate(
@@ -779,6 +1260,20 @@ class ChatLiteLLM(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         should_stream = stream if stream is not None else self.streaming
+        if self.use_responses_api:
+            kwargs = self._normalize_responses_kwargs(kwargs)
+            if should_stream:
+                stream_iter = self._astream(
+                    messages=messages, stop=stop, run_manager=run_manager, **kwargs
+                )
+                return await agenerate_from_stream(stream_iter)
+
+            params = {**self._responses_params(messages, stop), **kwargs}
+            response = await self.aresponses_with_retry(
+                run_manager=run_manager, **params
+            )
+            return _response_to_chat_result(response)
+
         if should_stream:
             stream_iter = self._astream(
                 messages=messages, stop=stop, run_manager=run_manager, **kwargs
@@ -798,6 +1293,9 @@ class ChatLiteLLM(BaseChatModel):
         tool_choice: Optional[
             Union[dict, str, Literal["auto", "none", "required", "any"], bool]
         ] = None,
+        strict: Optional[bool] = None,
+        parallel_tool_calls: Optional[bool] = None,
+        response_format: Any = None,
         **kwargs: Any,
     ) -> Runnable[LanguageModelInput, AIMessage]:
         """Bind tool-like objects to this chat model.
@@ -824,7 +1322,16 @@ class ChatLiteLLM(BaseChatModel):
                 :class:`~langchain.runnable.Runnable` constructor.
         """
 
-        formatted_tools = [convert_to_openai_tool(tool) for tool in tools]
+        formatted_tools = [
+            convert_to_openai_tool(tool, strict=strict) for tool in tools
+        ]
+        if parallel_tool_calls is not None:
+            kwargs["parallel_tool_calls"] = parallel_tool_calls
+        if response_format is not None:
+            if self.use_responses_api:
+                kwargs["text"] = response_format
+            else:
+                kwargs["response_format"] = response_format
 
         # Robustly handle tool_choice='any' or True for ALL providers.
         # Many providers (Gemini, Vertex, etc.) via LiteLLM reject "any" but accept "required".
@@ -873,6 +1380,10 @@ class ChatLiteLLM(BaseChatModel):
             )
             tool_choice = "auto"
 
+        if self.use_responses_api:
+            formatted_tools = [_to_responses_tool(tool) for tool in formatted_tools]
+            tool_choice = _format_responses_tool_choice(tool_choice)
+
         return super().bind(tools=formatted_tools, tool_choice=tool_choice, **kwargs)
 
     def with_structured_output(
@@ -898,7 +1409,7 @@ class ChatLiteLLM(BaseChatModel):
             # Determine appropriate tool_choice based on model
             # Use "required" for most models, which is more widely supported than "any"
             tool_choice_value = "required"
-            bind_kwargs = {"tool_choice": tool_choice_value}
+            bind_kwargs: Dict[str, Any] = {"tool_choice": tool_choice_value}
 
             if (
                 self._is_claude_model()
@@ -909,7 +1420,7 @@ class ChatLiteLLM(BaseChatModel):
                     "Claude models when `thinking` is enabled. Tool calls may be "
                     "omitted; this runnable will raise OutputParserException when "
                     "no tool call is returned. Consider disabling `thinking` or "
-                    "using `method=\"json_schema\"`."
+                    'using `method="json_schema"`.'
                 )
                 warnings.warn(warning_message, stacklevel=2)
                 bind_kwargs = {}
