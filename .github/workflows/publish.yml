@@ -9,18 +9,35 @@ jobs:
   pypi-publish:
     runs-on: ubuntu-latest
     environment: pypi
+    
+    # Required for PyPI Trusted Publishing (OIDC-based, tokenless auth).
+    # See: https://docs.pypi.org/trusted-publishers/
     permissions:
-      id-token: write
-      contents: read
+      id-token: write # Allows the workflow to mint an OIDC token for PyPI trusted publishing
+      contents: read # Allows actions/checkout to read the code
+      
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           ref: ${{ github.ref }}   # checks out the tag that triggered this
-      - uses: astral-sh/setup-uv@v5
+          
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - uses: actions/setup-python@v5
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
         with:
           python-version: "3.10"
-      - run: uv build
-      - run: uv publish --trusted-publishing always
+          
+      - name: Build package
+        run: uv build
+
+      - name: Verify build artifacts
+        run: ls -la dist/
+
+      - name: Publish to PyPI
+        run: uv publish --trusted-publishing always
