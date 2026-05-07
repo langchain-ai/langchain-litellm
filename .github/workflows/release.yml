@@ -58,3 +58,40 @@ jobs:
             git commit -m "chore: update uv.lock"
             git push
           fi
+  pypi-publish:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    environment: pypi
+
+    # Required for PyPI Trusted Publishing (OIDC-based, tokenless auth).
+    # See: https://docs.pypi.org/trusted-publishers/
+    permissions:
+      id-token: write  # Allows the workflow to mint an OIDC token for PyPI trusted publishing
+      contents: read   # Allows actions/checkout to read the code
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Build package
+        run: uv build
+
+      - name: Verify build artifacts
+        run: ls -la dist/
+
+      - name: Publish to PyPI
+        run: uv publish --trusted-publishing always
