@@ -1534,7 +1534,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=46.0.5,<47.0.0" },
     { name = "httpx", specifier = ">=0.28.1,<0.29.0" },
     { name = "langchain-core", specifier = ">=1.2.21,<2.0.0" },
-    { name = "litellm", specifier = ">=1.77.2,!=1.82.7,!=1.82.8,<2.0.0" },
+    { name = "litellm", specifier = "!=1.82.7,!=1.82.8,>=1.83.14,<2.0.0" },
 ]
 
 [package.metadata.requires-dev]
