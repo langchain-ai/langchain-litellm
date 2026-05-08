@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Please enter the `tag` to publish manually (e.g. `langchain-litellm==x.x.x`). Leave empty to skip publish."
+        description: "Please enter the `tag` to be published to PyPi manually (e.g. `langchain-litellm==x.x.x`) or leave empty to skip publishing to PyPi."
         required: false
 
 permissions:
