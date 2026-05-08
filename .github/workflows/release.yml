@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to publish manually (e.g. langchain-litellm==0.6.5). Leave empty to skip publish."
+        description: "Please enter the `tag` to publish manually (e.g. `langchain-litellm==x.x.x`). Leave empty to skip publish."
         required: false
 
 permissions:
