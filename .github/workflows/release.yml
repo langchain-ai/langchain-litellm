@@ -4,10 +4,12 @@ on:
   push:
     branches:
       - main
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Please enter the `tag` to be published to PyPi manually (e.g. `langchain-litellm==x.x.x`) or leave empty to skip publishing to PyPi."
+        description: "Last-resort escape hatch only. Please enter the `tag` to be published to PyPi manually (e.g. `langchain-litellm==x.x.x`) or leave empty to skip publishing to PyPi. Use this only if the release:published trigger failed."
         required: false
 
 permissions:
@@ -16,7 +18,7 @@ permissions:
 
 jobs:
   release-please:
-    # Only runs on push; manual dispatch skips this job
+    # Only runs on push to main; release and workflow_dispatch events skip this job
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
@@ -65,12 +67,16 @@ jobs:
 
   pypi-publish:
     needs: [release-please]
-    # Runs when release-please creates a release, or when manually dispatched with a tag.
-    # always() is required so this job is not skipped when release-please is skipped (manual dispatch).
+    # Runs in three cases:
+    # 1. release-please creates a release (push to main flow)
+    # 2. A GitHub Release is published manually in the UI (release: published flow)
+    # 3. Last-resort escape hatch via workflow_dispatch with a tag input
+    # always() is required so this job is not skipped when release-please is skipped (cases 2 & 3).
     if: |
       always() &&
       (
         (needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') ||
+        github.event_name == 'release' ||
         (github.event_name == 'workflow_dispatch' && inputs.tag != '')
       )
     runs-on: ubuntu-latest
@@ -82,7 +88,12 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || needs.release-please.outputs.tag_name }}
+          ref: >-
+            ${{
+              github.event_name == 'workflow_dispatch' && inputs.tag ||
+              github.event_name == 'release' && github.ref ||
+              needs.release-please.outputs.tag_name
+            }}
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
