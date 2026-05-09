@@ -1,0 +1,29 @@
+version: 2
+updates:
+  # Python dependencies via uv
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      # All routine version bumps batched into one PR per week
+      python-deps:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      # Security fixes always get their own immediate PR, never batched with routine bumps
+      python-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  # GitHub Actions — keeps workflow action versions fresh
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        applies-to: version-updates
+        patterns:
+          - "*"

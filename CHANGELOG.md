@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.5](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.6.4...langchain-litellm==0.6.5) (2026-05-07)
+
+
+### Bug Fixes
+
+* bump litellm floor to 1.83.14 to clear downstream CVE alerts ([a1370a6](https://github.com/langchain-ai/langchain-litellm/commit/a1370a6f6bd4a88eb2361aea9640883160a56674)), closes [#141](https://github.com/langchain-ai/langchain-litellm/issues/141)
+* patch 3 security alerts (critical+high severity) in litellm ([#137](https://github.com/langchain-ai/langchain-litellm/issues/137)) ([b170dcc](https://github.com/langchain-ai/langchain-litellm/commit/b170dcc6278dd741565402d7dbdcb409d1756643))
+
 ## [0.6.4](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.6.3...langchain-litellm==0.6.4) (2026-04-03)
 
 
