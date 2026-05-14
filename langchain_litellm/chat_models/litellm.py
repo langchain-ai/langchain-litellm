@@ -488,6 +488,7 @@ class ChatLiteLLM(BaseChatModel):
             "model": set_model_value,
             "timeout": self.request_timeout,
             "api_base": self.api_base,
+            "api_key": self.api_key,
         }
         # Forward any extra headers to the client and include in params
         if self.extra_headers is not None:

@@ -273,6 +273,21 @@ def test_inject_reasoning_content_does_not_duplicate_existing_thinking() -> None
     assert result == content
 
 
+# ── credential forwarding ─────────────────────────────────────────────────────
+
+
+def test_client_params_forwards_api_key() -> None:
+    """api_key must be forwarded as an explicit kwarg so providers can prefer it
+    instead of using the environment variables."""
+    llm = ChatLiteLLM(
+        model="openrouter/anthropic/claude-sonnet-4-5",
+        api_base="https://openrouter.ai/api/v1",
+        api_key="my-explicit-token",
+    )
+    params = llm._client_params
+    assert params.get("api_key") == "my-explicit-token"
+
+
 # ── stream_options ─────────────────────────────────────────────────────────────
 
 
