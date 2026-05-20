@@ -485,3 +485,21 @@ def test_with_structured_output_include_raw_preserves_raw_for_claude_thinking() 
     assert result["raw"].content == "plain text"
     assert result["parsed"] is None
     assert isinstance(result["parsing_error"], OutputParserException)
+
+def test_response_metadata_contains_model_provider() -> None:
+    """Ensure ChatLiteLLM sets the model_provider in response_metadata."""
+    llm = ChatLiteLLM(model="gpt-4", api_key="fake")
+    
+    mock_response = {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "Test response"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+
+    result = llm._create_chat_result(mock_response)
+    
+    assert result.generations[0].message.response_metadata.get("model_provider") == "litellm"
