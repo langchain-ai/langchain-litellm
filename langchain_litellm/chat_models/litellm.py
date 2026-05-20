@@ -340,7 +340,7 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
                 # Skip tool_use / tool_call blocks — these are handled via
                 # message.tool_calls and must not leak into content sent to
                 # providers that don't understand them (e.g. OpenAI).
-                elif item.get("type") in ("tool_use", "tool_call"):
+                elif item.get("type") in ("tool_use", "tool_call", "thinking", "redacted_thinking"):
                     continue
 
                 # Pass through standard text blocks or other unrecognized dict formats unchanged
@@ -374,6 +374,10 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
             ]
         elif "tool_calls" in message.additional_kwargs:
             message_dict["tool_calls"] = message.additional_kwargs["tool_calls"]
+        # Forward reasoning_content so LiteLLM can inject thinking blocks for
+        # Anthropic while leaving OpenAI-bound messages clean.
+        if "reasoning_content" in message.additional_kwargs:
+            message_dict["reasoning_content"] = message.additional_kwargs["reasoning_content"]
     elif isinstance(message, SystemMessage):
         message_dict["role"] = "system"
     elif isinstance(message, FunctionMessage):
