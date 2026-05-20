@@ -155,7 +155,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             # Set response_metadata on the first chunk only
             if not first_chunk_yielded and isinstance(chunk, AIMessageChunk):
                 chunk.response_metadata = {
-                    "model_name": self.model_name or self.model
+                    "model_name": self.model_name or self.model,
+                    "model_provider": "litellm",
                 }
                 first_chunk_yielded = True
 
@@ -214,7 +215,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             # Set response_metadata on the first chunk only
             if not first_chunk_yielded and isinstance(chunk, AIMessageChunk):
                 chunk.response_metadata = {
-                    "model_name": self.model_name or self.model
+                    "model_name": self.model_name or self.model,
+                    "model_provider": "litellm",
                 }
                 first_chunk_yielded = True
 
@@ -289,7 +291,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             message = _convert_dict_to_message(res["message"])
             if isinstance(message, AIMessage):
                 message.response_metadata = {
-                    "model_name": self.model_name or self.model
+                    "model_name": self.model_name or self.model,
+                    "model_provider": "litellm",
                 }
                 message.usage_metadata = usage_metadata
             gen = ChatGeneration(

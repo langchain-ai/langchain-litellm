@@ -486,8 +486,11 @@ def test_with_structured_output_include_raw_preserves_raw_for_claude_thinking() 
     assert result["parsed"] is None
     assert isinstance(result["parsing_error"], OutputParserException)
 
-def test_response_metadata_contains_model_provider() -> None:
-    """Ensure ChatLiteLLM sets the model_provider in response_metadata."""
+def test_aimessage_passes_langchain_summarization_middleware() -> None:
+    """
+    Test that ChatLiteLLM outputs pass LangChain's strict token counting guards.
+    Fixes Issue #152 where missing 'model_provider' caused SummarizationMiddleware to fail.
+    """
     llm = ChatLiteLLM(model="gpt-4", api_key="fake")
     
     mock_response = {
@@ -501,5 +504,23 @@ def test_response_metadata_contains_model_provider() -> None:
     }
 
     result = llm._create_chat_result(mock_response)
+    last_ai_message = result.generations[0].message
     
-    assert result.generations[0].message.response_metadata.get("model_provider") == "litellm"
+    # ── Simulate the exact logic from SummarizationMiddleware ──
+    threshold = 10
+    
+    # 1. Must be an AIMessage
+    assert isinstance(last_ai_message, AIMessage)
+    
+    # 2. Must have usage metadata
+    assert last_ai_message.usage_metadata is not None
+    
+    # 3. Must exceed the summarization threshold
+    reported_tokens = last_ai_message.usage_metadata.get("total_tokens", -1)
+    assert reported_tokens >= threshold
+    
+    # 4. CRITICAL FIX: Must have model_provider metadata that matches 'litellm'
+    message_provider = last_ai_message.response_metadata.get("model_provider")
+    assert message_provider == "litellm"
+    
+    # If this test passes, the SummarizationMiddleware returns True instead of False!
