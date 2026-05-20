@@ -528,3 +528,23 @@ def test_get_ls_params_sets_ls_provider() -> None:
     llm_with_name = ChatLiteLLM(model="gpt-4", model_name="my-deployment", api_key="fake")
     params = llm_with_name._get_ls_params()
     assert params["ls_model_name"] == "my-deployment"
+
+def test_convert_message_to_dict_strips_thinking_blocks() -> None:
+    """thinking/redacted_thinking blocks must not reach non-Anthropic providers."""
+    from langchain_litellm.chat_models.litellm import _convert_message_to_dict
+
+    msg = AIMessage(
+        content=[
+            {"type": "thinking", "thinking": "internal reasoning"},
+            {"type": "redacted_thinking", "data": "encrypted"},
+            {"type": "text", "text": "hello"},
+        ],
+        additional_kwargs={"reasoning_content": "internal reasoning"},
+    )
+    d = _convert_message_to_dict(msg)
+
+    types = [block.get("type") for block in d["content"]]
+    assert "thinking" not in types
+    assert "redacted_thinking" not in types
+    assert {"type": "text", "text": "hello"} in d["content"]
+    assert d["reasoning_content"] == "internal reasoning"
