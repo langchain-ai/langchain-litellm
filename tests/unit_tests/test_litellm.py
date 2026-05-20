@@ -485,3 +485,46 @@ def test_with_structured_output_include_raw_preserves_raw_for_claude_thinking() 
     assert result["raw"].content == "plain text"
     assert result["parsed"] is None
     assert isinstance(result["parsing_error"], OutputParserException)
+
+def test_create_chat_result_sets_model_provider() -> None:
+    """Non-streaming path must set model_provider. Fixes #152."""
+    llm = ChatLiteLLM(model="gpt-4", api_key="fake")
+    mock_response = {
+        "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+    result = llm._create_chat_result(mock_response)
+    msg = result.generations[0].message
+    assert isinstance(msg, AIMessage)
+    assert msg.response_metadata.get("model_provider") == "litellm"
+
+
+def test_stream_sets_model_provider_in_response_metadata() -> None:
+    """First streaming chunk must carry model_provider. Fixes #152."""
+    from unittest.mock import patch
+
+    llm = ChatLiteLLM(model="gpt-4", api_key="fake")
+    fake_chunks = [
+        {"choices": [{"delta": {"role": "assistant", "content": "hel"}}], "usage": None},
+        {"choices": [{"delta": {"content": "lo"}}], "usage": None},
+        {"choices": [], "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}},
+    ]
+
+    with patch.object(ChatLiteLLM, "completion_with_retry", return_value=iter(fake_chunks)):
+        chunks = list(llm._stream([]))
+
+    assert chunks[0].message.response_metadata.get("model_provider") == "litellm"
+    assert chunks[1].message.response_metadata == {}
+
+
+def test_get_ls_params_sets_ls_provider() -> None:
+    """ls_provider must match model_provider so SummarizationMiddleware's equality check passes."""
+    llm = ChatLiteLLM(model="gpt-4", api_key="fake")
+    params = llm._get_ls_params()
+    assert params["ls_provider"] == "litellm"
+    assert params["ls_model_name"] == "gpt-4"
+
+    # model_name takes precedence over model when set
+    llm_with_name = ChatLiteLLM(model="gpt-4", model_name="my-deployment", api_key="fake")
+    params = llm_with_name._get_ls_params()
+    assert params["ls_model_name"] == "my-deployment"
