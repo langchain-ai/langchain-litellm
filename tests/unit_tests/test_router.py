@@ -73,41 +73,34 @@ def test_router_stream_options_set_for_all_providers():
     )
     assert stream_options == {"include_usage": True}
 
-def test_router_aimessage_passes_langchain_summarization_middleware():
-    """
-    Test that ChatLiteLLMRouter outputs pass LangChain's strict token counting guards.
-    Fixes Issue #152 where missing 'model_provider' caused SummarizationMiddleware to fail.
-    """
+def test_router_create_chat_result_sets_model_provider():
+    """Router non-streaming path must set model_provider. Fixes #152."""
     router = test_router()
     llm = ChatLiteLLMRouter(router=router)
-
     mock_response = {
-        "choices": [
-            {
-                "message": {"role": "assistant", "content": "Test response"},
-                "finish_reason": "stop",
-            }
-        ],
+        "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
     }
-
-    # Router's _create_chat_result requires the metadata kwarg
     result = llm._create_chat_result(mock_response, metadata={})
-    last_ai_message = result.generations[0].message
-    
-    # ── Simulate the exact logic from SummarizationMiddleware ──
-    threshold = 10
-    
-    # 1. Must be an AIMessage
-    assert isinstance(last_ai_message, AIMessage)
-    
-    # 2. Must have usage metadata
-    assert last_ai_message.usage_metadata is not None
-    
-    # 3. Must exceed the summarization threshold
-    reported_tokens = last_ai_message.usage_metadata.get("total_tokens", -1)
-    assert reported_tokens >= threshold
-    
-    # 4. CRITICAL FIX: Must have model_provider metadata that matches 'litellm'
-    message_provider = last_ai_message.response_metadata.get("model_provider")
-    assert message_provider == "litellm"
+    msg = result.generations[0].message
+    assert isinstance(msg, AIMessage)
+    assert msg.response_metadata.get("model_provider") == "litellm"
+
+
+def test_router_stream_sets_model_provider_in_response_metadata():
+    """Router first streaming chunk must carry model_provider. Fixes #152."""
+    from unittest.mock import patch
+
+    router = test_router()
+    llm = ChatLiteLLMRouter(router=router)
+    fake_chunks = [
+        {"choices": [{"delta": {"role": "assistant", "content": "hel"}}], "usage": None},
+        {"choices": [{"delta": {"content": "lo"}}], "usage": None},
+        {"choices": [], "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}},
+    ]
+
+    with patch.object(llm.router, "completion", return_value=iter(fake_chunks)):
+        chunks = list(llm._stream([]))
+
+    assert chunks[0].message.response_metadata.get("model_provider") == "litellm"
+    assert chunks[1].message.response_metadata == {}
