@@ -694,7 +694,8 @@ class ChatLiteLLM(BaseChatModel):
             # Set response_metadata on the first chunk only
             if not first_chunk_yielded and isinstance(chunk, AIMessageChunk):
                 chunk.response_metadata = {
-                    "model_name": self.model_name or self.model
+                    "model_name": self.model_name or self.model,
+                    "model_provider": "litellm"
                 }
                 first_chunk_yielded = True
 
@@ -762,7 +763,8 @@ class ChatLiteLLM(BaseChatModel):
             # Set response_metadata on the first chunk only
             if not first_chunk_yielded and isinstance(chunk, AIMessageChunk):
                 chunk.response_metadata = {
-                    "model_name": self.model_name or self.model
+                    "model_name": self.model_name or self.model,
+                    "model_provider": "litellm"
                 }
                 first_chunk_yielded = True
 
