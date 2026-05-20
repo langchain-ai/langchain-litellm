@@ -1018,7 +1018,27 @@ class ChatLiteLLM(BaseChatModel):
             "n": self.n,
             "num_ctx": self.num_ctx,
         }
+    
+    def _get_ls_params(
+        self,
+        stop: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Return LangSmith tracing parameters for this model.
 
+        Overrides the base implementation to set ``ls_provider`` to ``"litellm"``
+        and ``ls_model_name`` to the resolved model string. These values are used
+        by LangSmith for run tagging and by LangChain middleware such as
+        ``SummarizationMiddleware``, which compares ``response_metadata["model_provider"]``
+        against ``ls_provider`` to decide whether reported token counts should be
+        trusted. Without this override, ``ls_provider`` would be absent and that
+        middleware check would always short-circuit.
+        """
+        params = super()._get_ls_params(stop=stop, **kwargs)
+        params["ls_provider"] = "litellm"
+        params["ls_model_name"] = self.model_name or self.model
+        return params
+    
     @property
     def _llm_type(self) -> str:
         return "litellm-chat"
