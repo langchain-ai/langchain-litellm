@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.6](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.6.5...langchain-litellm==0.6.6) (2026-05-21)
+
+
+### Bug Fixes
+
+* bug when api_key is provided but not passed and is overridden by environment variables ([#134](https://github.com/langchain-ai/langchain-litellm/issues/134)) ([1b12aeb](https://github.com/langchain-ai/langchain-litellm/commit/1b12aeb7ecbdc576f4428282f6b27c0122eb6905))
+* populate `model_provider` in `response_metadata` and `ls_provider` in `_get_ls_params` ([#152](https://github.com/langchain-ai/langchain-litellm/issues/152)) ([#158](https://github.com/langchain-ai/langchain-litellm/issues/158)) ([91004e2](https://github.com/langchain-ai/langchain-litellm/commit/91004e23b8641f41f78ed00e970cb2dd77286369))
+* remove global litellm module mutations from _client_params ([#132](https://github.com/langchain-ai/langchain-litellm/issues/132)) ([#161](https://github.com/langchain-ai/langchain-litellm/issues/161)) ([a7ca120](https://github.com/langchain-ai/langchain-litellm/commit/a7ca12035814c6a88cc606be8cb1e3d6277e7eba))
+* strip thinking/redacted_thinking blocks from messages sent to non-Anthropic providers ([#159](https://github.com/langchain-ai/langchain-litellm/issues/159)) ([ce809af](https://github.com/langchain-ai/langchain-litellm/commit/ce809af72b5390705cf0b2563107790f05e28143))
+
 ## [0.6.5](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.6.4...langchain-litellm==0.6.5) (2026-05-07)
 
 
