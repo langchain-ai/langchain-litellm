@@ -1,20 +1,25 @@
 """Test chat model integration."""
 
+# stdlib
 import logging
-from typing import Any, Type
+from typing import Any
+from unittest.mock import patch
 
+# third-party
+import litellm
 import pytest
 from langchain_core.exceptions import OutputParserException
-from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langchain_core.runnables import RunnableLambda
-from langchain_tests.unit_tests import ChatModelUnitTests
 from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function
 from pydantic import BaseModel
 
+# first-party
 from langchain_litellm.chat_models import ChatLiteLLM
 from langchain_litellm.chat_models.litellm import (
     _convert_delta_to_message_chunk,
     _convert_dict_to_message,
+    _convert_message_to_dict,
     _create_usage_metadata,
     _inject_reasoning_content_into_content,
 )
@@ -67,8 +72,6 @@ def test_convert_dict_to_tool_message() -> None:
     """Ensure tool role dicts convert to ToolMessage."""
     mock_dict = {"role": "tool", "content": "result", "tool_call_id": "123"}
     message = _convert_dict_to_message(mock_dict)
-    from langchain_core.messages import ToolMessage
-
     assert isinstance(message, ToolMessage)
     assert message.content == "result"
     assert message.tool_call_id == "123"
@@ -501,7 +504,6 @@ def test_create_chat_result_sets_model_provider() -> None:
 
 def test_stream_sets_model_provider_in_response_metadata() -> None:
     """First streaming chunk must carry model_provider. Fixes #152."""
-    from unittest.mock import patch
 
     llm = ChatLiteLLM(model="gpt-4", api_key="fake")
     fake_chunks = [
@@ -531,7 +533,6 @@ def test_get_ls_params_sets_ls_provider() -> None:
 
 def test_convert_message_to_dict_strips_thinking_blocks() -> None:
     """thinking/redacted_thinking blocks must not reach non-Anthropic providers."""
-    from langchain_litellm.chat_models.litellm import _convert_message_to_dict
 
     msg = AIMessage(
         content=[
@@ -548,3 +549,32 @@ def test_convert_message_to_dict_strips_thinking_blocks() -> None:
     assert "redacted_thinking" not in types
     assert {"type": "text", "text": "hello"} in d["content"]
     assert d["reasoning_content"] == "internal reasoning"
+
+def test_client_params_does_not_mutate_litellm_globals() -> None:
+    """_client_params must not write instance config to litellm module globals. Fixes #132."""
+    before = {
+        "api_base": litellm.api_base,
+        "api_key": litellm.api_key,
+        "organization": getattr(litellm, "organization", None),
+    }
+
+    llm = ChatLiteLLM(
+        model="azure/gpt-4o",
+        api_base="https://my-azure.openai.azure.com",
+        api_key="azure-key",
+        organization="my-org",
+        extra_headers={"X-Custom": "value"},
+    )
+    params = llm._client_params
+
+    # globals must be untouched
+    assert litellm.api_base == before["api_base"]
+    assert litellm.api_key == before["api_key"]
+    assert getattr(litellm, "organization", None) == before["organization"]
+    assert getattr(litellm, "extra_headers", None) != {"X-Custom": "value"}
+
+    # values must be present in the returned per-call params instead
+    assert params["api_base"] == "https://my-azure.openai.azure.com"
+    assert params["api_key"] == "azure-key"
+    assert params["organization"] == "my-org"
+    assert params["extra_headers"] == {"X-Custom": "value"}
