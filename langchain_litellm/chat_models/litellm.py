@@ -467,37 +467,14 @@ class ChatLiteLLM(BaseChatModel):
 
     @property
     def _client_params(self) -> Dict[str, Any]:
-        """Get the parameters used for the openai client."""
-        set_model_value = self.model
-        if self.model_name is not None:
-            set_model_value = self.model_name
-        self.client.api_base = self.api_base
-        self.client.api_key = self.api_key
-        for named_api_key in [
-            "openai_api_key",
-            "azure_api_key",
-            "anthropic_api_key",
-            "replicate_api_key",
-            "cohere_api_key",
-            "openrouter_api_key",
-        ]:
-            if api_key_value := getattr(self, named_api_key):
-                setattr(
-                    self.client,
-                    named_api_key.replace("_api_key", "_key"),
-                    api_key_value,
-                )
-        self.client.organization = self.organization
+        """Get the parameters used for the OpenAI client."""
         creds: Dict[str, Any] = {
-            "model": set_model_value,
             "timeout": self.request_timeout,
             "api_base": self.api_base,
             "api_key": self.api_key,
+            "organization": self.organization,
         }
-        # Forward any extra headers to the client and include in params
         if self.extra_headers is not None:
-            # set attribute on client for runtime usage
-            setattr(self.client, "extra_headers", self.extra_headers)
             creds["extra_headers"] = self.extra_headers
         return {**self._default_params, **creds}
 
