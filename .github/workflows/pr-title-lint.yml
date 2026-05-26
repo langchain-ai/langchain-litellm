@@ -34,7 +34,7 @@
 # title means no changelog entry unless a BEGIN_COMMIT_OVERRIDE block is
 # added to the PR description.
 
-name: "Title Lint"
+name: "PR Title Lint"
 
 permissions:
   pull-requests: read
