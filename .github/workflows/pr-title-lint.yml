@@ -1,0 +1,159 @@
+# PR title linting.
+#
+# FORMAT (Conventional Commits 1.0.0):
+#
+#   <type>[optional scope]: <description>
+#
+# Examples:
+#     feat: add async streaming support
+#     fix(streaming): resolve usage_metadata returning None
+#     ci(release): switch to human-in-the-loop PyPI publish
+#
+# Allowed Types:
+#   * feat       — a new feature (MINOR bump)
+#   * fix        — a bug fix (PATCH bump)
+#   * docs       — documentation only changes
+#   * style      — formatting, linting; no logic change
+#   * refactor   — code change that neither fixes a bug nor adds a feature
+#   * perf       — code change that improves performance
+#   * test       — adding or correcting tests
+#   * build      — changes to build system or external dependencies
+#   * ci         — CI/CD configuration changes
+#   * chore      — other changes that don't modify source or test files
+#   * revert     — reverts a previous commit
+#
+# Scope is optional. When used, it should name the subsystem being changed
+# (e.g. streaming, callbacks, release, deps).
+#
+# Rules:
+#   1. Type must be lowercase
+#   2. Breaking changes: append "!" after type/scope (e.g., feat!: drop Python 3.9)
+#
+# release-please parses the squash-merge commit (= this PR title) to generate
+# changelog entries and determine the next version bump. A non-conventional
+# title means no changelog entry unless a BEGIN_COMMIT_OVERRIDE block is
+# added to the PR description.
+
+name: "PR Title Lint"
+
+permissions:
+  pull-requests: read
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, labeled, unlabeled]
+
+jobs:
+  lint-pr-title:
+    name: "validate format"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Reject empty scope"
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if [[ "$PR_TITLE" =~ ^[a-z]+\(\)[!]?: ]]; then
+            echo "::error::PR title has empty scope parentheses: '$PR_TITLE'"
+            echo "Either remove the parentheses or add a scope (e.g., 'fix(streaming): ...')."
+            exit 1
+          fi
+
+      - name: "Validate Conventional Commits format"
+        uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+          requireScope: false
+          ignoreLabels: |
+            ignore-lint-pr-title
+
+  warn-on-bypass:
+    name: "warn on bypass label"
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    concurrency:
+      group: pr-lint-bypass-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    if: >-
+      (github.event.action == 'labeled' && github.event.label.name == 'ignore-lint-pr-title') ||
+      (github.event.action == 'unlabeled' && github.event.label.name == 'ignore-lint-pr-title') ||
+      contains(github.event.pull_request.labels.*.name, 'ignore-lint-pr-title')
+    steps:
+      - name: "post or remove bypass-warning comment"
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const prNumber = context.payload.pull_request?.number;
+            if (!prNumber) {
+              core.setFailed('No PR number in payload.');
+              return;
+            }
+            const STICKY_MARKER = '<!-- pr-title-lint-bypass -->';
+            const BYPASS_LABEL = 'ignore-lint-pr-title';
+
+            async function findStickyComment() {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: prNumber, per_page: 100,
+              });
+              return comments.find(c => c.body && c.body.startsWith(STICKY_MARKER));
+            }
+
+            let liveLabels;
+            try {
+              ({ data: liveLabels } = await github.rest.issues.listLabelsOnIssue({
+                owner, repo, issue_number: prNumber,
+              }));
+            } catch (e) {
+              throw new Error(`Failed to fetch live labels for PR #${prNumber}: ${e.message}`);
+            }
+            const labelPresent = liveLabels.some(l => l.name === BYPASS_LABEL);
+
+            if (!labelPresent) {
+              try {
+                const existing = await findStickyComment();
+                if (existing) {
+                  await github.rest.issues.deleteComment({ owner, repo, comment_id: existing.id });
+                }
+              } catch (e) {
+                core.warning(`Could not clean up sticky comment: ${e.message}`);
+              }
+              return;
+            }
+
+            const body = [
+              STICKY_MARKER,
+              '⚠️ **PR title Conventional Commits lint is being bypassed.**',
+              '',
+              `This PR carries the \`${BYPASS_LABEL}\` label, which skips Conventional Commits validation on the title.`,
+              '',
+              '**Why this matters:** release-please parses the squash-merge commit message (= PR title) to generate changelog entries and determine the version bump. A non-conventional title means **no changelog entry** for this commit unless a `BEGIN_COMMIT_OVERRIDE` block is added to the PR description.',
+              '',
+              'Remove the label to re-enable the check, or add a `BEGIN_COMMIT_OVERRIDE` block so release-please still gets a parseable message.',
+            ].join('\n');
+
+            try {
+              const existing = await findStickyComment();
+              if (existing) {
+                if (existing.body !== body) {
+                  await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+                }
+              } else {
+                await github.rest.issues.createComment({ owner, repo, issue_number: prNumber, body });
+              }
+            } catch (e) {
+              core.warning(`Could not post sticky comment: ${e.message}`);
+            }
