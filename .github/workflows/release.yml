@@ -1,5 +1,4 @@
 name: Release
-
 on:
   push:
     branches:
@@ -9,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Last-resort escape hatch only. Please enter the `tag` to be published to PyPi manually (e.g. `langchain-litellm==x.x.x`) or leave empty to skip publishing to PyPi. Use this only if the release:published trigger failed."
+        description: "Last-resort escape hatch only. Enter the tag to publish to PyPI manually (e.g. langchain-litellm-v0.x.x) or leave empty to skip. Use only if release:published trigger failed."
         required: false
 
 permissions:
@@ -25,8 +24,6 @@ jobs:
       contents: write
       pull-requests: write
     outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
       pr: ${{ steps.release.outputs.pr }}
     steps:
       - uses: googleapis/release-please-action@v5
@@ -66,19 +63,13 @@ jobs:
           fi
 
   pypi-publish:
-    needs: [release-please]
-    # Runs in three cases:
-    # 1. release-please creates a release (push to main flow)
-    # 2. A GitHub Release is published manually in the UI (release: published flow)
-    # 3. Last-resort escape hatch via workflow_dispatch with a tag input
-    # always() is required so this job is not skipped when release-please is skipped (cases 2 & 3).
+    # Runs in two cases:
+    # 1. A draft GitHub Release is reviewed and published in the UI (release: published flow)
+    # 2. Last-resort escape hatch via workflow_dispatch with a tag input
+    # No always() needed — this job is fully decoupled from release-please.
     if: |
-      always() &&
-      (
-        (needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') ||
-        github.event_name == 'release' ||
-        (github.event_name == 'workflow_dispatch' && inputs.tag != '')
-      )
+      github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' && inputs.tag != '')
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -91,8 +82,7 @@ jobs:
           ref: >-
             ${{
               github.event_name == 'workflow_dispatch' && inputs.tag ||
-              github.event_name == 'release' && github.ref ||
-              needs.release-please.outputs.tag_name
+              github.ref
             }}
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
