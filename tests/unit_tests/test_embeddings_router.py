@@ -7,7 +7,7 @@ import pytest
 from langchain_tests.unit_tests import EmbeddingsUnitTests
 
 from langchain_litellm.embeddings import LiteLLMEmbeddingsRouter
-from tests.utils import mock_embedding_response, test_embedding_router
+from tests.utils import mock_embedding_response, make_embedding_router
 
 
 class TestLiteLLMEmbeddingsRouterUnit(EmbeddingsUnitTests):
@@ -18,20 +18,20 @@ class TestLiteLLMEmbeddingsRouterUnit(EmbeddingsUnitTests):
     @property
     def embedding_model_params(self) -> dict:
         return {
-            "router": test_embedding_router(),
+            "router": make_embedding_router(),
         }
 
 
 class TestLiteLLMEmbeddingsRouterParams:
     def test_router_stored(self):
         """Test that the router instance is stored."""
-        router = test_embedding_router()
+        router = make_embedding_router()
         embeddings = LiteLLMEmbeddingsRouter(router=router)
         assert embeddings.router is router
 
     def test_router_params_exclude_none(self):
         """Test that None-valued params are excluded from router calls."""
-        router = test_embedding_router()
+        router = make_embedding_router()
         embeddings = LiteLLMEmbeddingsRouter(router=router)
         params = embeddings._get_router_params()
         assert "timeout" not in params

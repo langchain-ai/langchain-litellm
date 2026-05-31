@@ -9,7 +9,7 @@ from langchain_core.messages import AIMessage
 from langchain_tests.unit_tests import ChatModelUnitTests
 
 from langchain_litellm.chat_models import ChatLiteLLMRouter
-from tests.utils import test_router
+from tests.utils import make_router
 
 
 class TestChatLiteLLMRouterUnit(ChatModelUnitTests):
@@ -20,7 +20,7 @@ class TestChatLiteLLMRouterUnit(ChatModelUnitTests):
     @property
     def chat_model_params(self) -> dict:
         return {
-            "router": test_router(),
+            "router": make_router(),
         }
 
     @property

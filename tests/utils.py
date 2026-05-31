@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 from litellm import Router
 
 
-def test_router() -> Router:
+def make_router() -> Router:
     model_group_gpt4 = "gpt-4"
     model_group_to_test = "gpt-3.5-turbo"
     fake_model_prefix = "azure/fake-deployment-name-"
@@ -35,7 +35,7 @@ def test_router() -> Router:
     return Router(model_list)
 
 
-def test_embedding_router() -> Router:
+def make_embedding_router() -> Router:
     fake_api_key = "fakekeyvalue"
     model_list = [
         {
