@@ -34,7 +34,7 @@ class TestChatLiteLLMIntegration(ChatModelIntegrationTests):
 
     @property
     def supports_json_mode(self) -> bool:
-        return False
+        return True
 
     @property
     def supports_image_inputs(self) -> bool:
