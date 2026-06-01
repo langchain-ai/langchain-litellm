@@ -448,7 +448,7 @@ class ChatLiteLLM(BaseChatModel):
 
     @property
     def _default_params(self) -> Dict[str, Any]:
-        """Get the default parameters for calling OpenAI API."""
+        """Get the default parameters for the LiteLLM completion call."""
         set_model_value = self.model
         if self.model_name is not None:
             set_model_value = self.model_name
@@ -467,7 +467,7 @@ class ChatLiteLLM(BaseChatModel):
 
     @property
     def _client_params(self) -> Dict[str, Any]:
-        """Get the parameters used for the OpenAI client."""
+        """Get the per-call parameters passed to litellm.completion."""
         creds: Dict[str, Any] = {
             "timeout": self.request_timeout,
             "api_base": self.api_base,
@@ -791,22 +791,22 @@ class ChatLiteLLM(BaseChatModel):
 
         Args:
             tools: A list of tool definitions to bind to this chat model.
-                Can be  a dictionary, pydantic model, callable, or BaseTool. Pydantic
+                Can be a dictionary, pydantic model, callable, or BaseTool. Pydantic
                 models, callables, and BaseTools will be automatically converted to
                 their schema dictionary representation.
-            tool_choice: Which tool to require the model to call. Options are:
+            tool_choice: Controls tool-calling behavior. Options are:
                 - str of the form ``"<<tool_name>>"``: calls <<tool_name>> tool.
                 - ``"auto"``:
                     automatically selects a tool (including no tool).
                 - ``"none"``:
                     does not call a tool.
                 - ``"any"`` or ``"required"`` or ``True``:
-                    forces least one tool to be called.
+                    forces at least one tool to be called.
                 - dict of the form:
                 ``{"type": "function", "function": {"name": <<tool_name>>}}``
                 - ``False`` or ``None``: no effect
             **kwargs: Any additional parameters to pass to the
-                :class:`~langchain.runnable.Runnable` constructor.
+                :class:`~langchain_core.runnables.Runnable` constructor.
         """
 
         formatted_tools = [convert_to_openai_tool(tool) for tool in tools]
