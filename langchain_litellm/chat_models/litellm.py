@@ -94,7 +94,7 @@ def _create_retry_decorator(
         Union[AsyncCallbackManagerForLLMRun, CallbackManagerForLLMRun]
     ] = None,
 ) -> Callable[[Any], Any]:
-    """Returns a tenacity retry decorator, preconfigured to handle PaLM exceptions"""
+    """Return a tenacity retry decorator preconfigured for LiteLLM transient errors."""
     import litellm
 
     errors = [
