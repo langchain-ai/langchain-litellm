@@ -77,6 +77,7 @@ from langchain_core.tools import BaseTool
 from langchain_core.utils import get_from_dict_or_env, pre_init
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import TypeBaseModel, is_basemodel_subclass
+import litellm
 from litellm.types.utils import Delta
 from pydantic import BaseModel, Field
 from typing_extensions import is_typeddict
@@ -95,7 +96,6 @@ def _create_retry_decorator(
     ] = None,
 ) -> Callable[[Any], Any]:
     """Return a tenacity retry decorator preconfigured for LiteLLM transient errors."""
-    import litellm
 
     errors = [
         litellm.Timeout,
