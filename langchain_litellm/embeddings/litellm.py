@@ -1,4 +1,4 @@
-"""Wrapper around LiteLLM's embedding API."""
+"""LiteLLM embedding model integration for LangChain."""
 
 from __future__ import annotations
 

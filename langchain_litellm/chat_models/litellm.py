@@ -1,4 +1,4 @@
-"""Wrapper around LiteLLM's model I/O library."""
+"""LiteLLM chat model integration for LangChain."""
 
 from __future__ import annotations
 
