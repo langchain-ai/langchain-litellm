@@ -26,7 +26,7 @@ def _create_retry_decorator(max_retries: int) -> Callable[[Any], Any]:
 
 
 class LiteLLMEmbeddings(BaseModel, Embeddings):
-    """LiteLLM embedding model.
+    """Embedding model that uses the LiteLLM API.
 
     Uses `litellm.embedding()` to support 100+ providers through a unified
     interface. All provider configuration (api_key, api_base, etc.) can be
