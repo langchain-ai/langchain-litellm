@@ -29,7 +29,7 @@ model_extra_key_name = "model_extra"  # nosec # incorrectly flagged as password
 
 
 def get_llm_output(usage: Any, **params: Any) -> dict:
-    """Get llm output from usage and params."""
+    """Build the llm_output dict from router usage and completion params."""
     llm_output = {token_usage_key_name: usage}
     # copy over metadata (metadata came from router completion call)
     metadata = params["metadata"]
