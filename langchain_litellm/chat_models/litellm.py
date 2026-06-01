@@ -505,14 +505,6 @@ class ChatLiteLLM(BaseChatModel):
     @pre_init
     def validate_environment(cls, values: Dict) -> Dict:
         """Validate api key, python package exists, temperature, top_p, and top_k."""
-        try:
-            import litellm
-        except ImportError:
-            raise ChatLiteLLMException(
-                "Could not import litellm python package. "
-                "Please install it with `pip install litellm`"
-            )
-
         values["openai_api_key"] = get_from_dict_or_env(
             values, "openai_api_key", "OPENAI_API_KEY", default=""
         )
