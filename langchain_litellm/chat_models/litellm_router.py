@@ -1,4 +1,4 @@
-"""LiteLLM Router as LangChain."""
+"""LiteLLM Router chat model integration for LangChain."""
 
 from typing import Any, AsyncIterator, Iterator, List, Mapping, Optional
 
@@ -41,7 +41,7 @@ def get_llm_output(usage: Any, **params: Any) -> dict:
 
 
 class ChatLiteLLMRouter(ChatLiteLLM):
-    """LiteLLM Router as LangChain Model."""
+    """LiteLLM Router-backed chat model."""
 
     router: Any
 

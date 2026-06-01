@@ -85,7 +85,7 @@ logger = logging.getLogger(__name__)
 
 
 class ChatLiteLLMException(Exception):
-    """Error with the `LiteLLM I/O` library"""
+    """Exception raised for errors in the LiteLLM integration."""
 
 
 def _create_retry_decorator(
