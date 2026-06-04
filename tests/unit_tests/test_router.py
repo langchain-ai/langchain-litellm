@@ -1,9 +1,6 @@
 """Test router chat model integration."""
 
-from typing import Type
-
 from langchain_core.messages import AIMessage
-from langchain_tests.unit_tests import ChatModelUnitTests
 
 from langchain_litellm.chat_models import ChatLiteLLMRouter
 from tests.utils import make_router
