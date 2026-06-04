@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.7](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.6.6...langchain-litellm==0.6.7) (2026-06-04)
+
+
+### Bug Fixes
+
+* add correct commit hash for github-script v9.0.0 ([#186](https://github.com/langchain-ai/langchain-litellm/issues/186)) ([b63d435](https://github.com/langchain-ai/langchain-litellm/commit/b63d435f2f63331b0323390e72752c4d8c60118c))
+
 ## [0.6.6](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.6.5...langchain-litellm==0.6.6) (2026-05-21)
 
 
