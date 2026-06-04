@@ -5,7 +5,6 @@ From LangChain's standard test suite.
 
 from typing import Type
 
-from langchain_core.messages import AIMessage
 from langchain_tests.unit_tests import ChatModelUnitTests
 
 from langchain_litellm.chat_models import ChatLiteLLMRouter
