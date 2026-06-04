@@ -1,6 +1,6 @@
 """LiteLLM Router chat model integration for LangChain."""
 
-from typing import Any, AsyncIterator, Iterator, List, Mapping, Optional
+from typing import Any, AsyncIterator, Dict, Iterator, List, Mapping, Optional
 
 from langchain_core.callbacks.manager import (
     AsyncCallbackManagerForLLMRun,
@@ -28,7 +28,7 @@ token_usage_key_name = "token_usage"  # nosec # incorrectly flagged as password
 model_extra_key_name = "model_extra"  # nosec # incorrectly flagged as password
 
 
-def get_llm_output(usage: Any, **params: Any) -> dict:
+def get_llm_output(usage: Any, **params: Any) -> Dict[str, Any]:
     """Build the llm_output dict from router usage and completion params."""
     llm_output = {token_usage_key_name: usage}
     # copy over metadata (metadata came from router completion call)
@@ -257,8 +257,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
     # from
     # https://github.com/langchain-ai/langchain/blob/master/libs/community/langchain_community/chat_models/openai.py
     # but modified to handle LiteLLM Usage class
-    def _combine_llm_outputs(self, llm_outputs: List[Optional[dict]]) -> dict:
-        overall_token_usage: dict = {}
+    def _combine_llm_outputs(self, llm_outputs: List[Optional[Dict[str, Any]]]) -> Dict[str, Any]:
+        overall_token_usage: Dict[str, Any] = {}
         system_fingerprint = None
         for output in llm_outputs:
             if output is None:

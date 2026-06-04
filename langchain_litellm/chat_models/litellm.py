@@ -307,7 +307,7 @@ def _convert_delta_to_message_chunk(
         return default_class(content=content)  # type: ignore[call-arg]
 
 
-def _lc_tool_call_to_openai_tool_call(tool_call: ToolCall) -> dict:
+def _lc_tool_call_to_openai_tool_call(tool_call: ToolCall) -> Dict[str, Any]:
     return {
         "type": "function",
         "id": tool_call["id"],
@@ -318,7 +318,7 @@ def _lc_tool_call_to_openai_tool_call(tool_call: ToolCall) -> dict:
     }
 
 
-def _convert_message_to_dict(message: BaseMessage) -> dict:
+def _convert_message_to_dict(message: BaseMessage) -> Dict[str, Any]:
     # Capture the original content from the message
     content = message.content
 
@@ -1088,7 +1088,7 @@ def _create_usage_metadata(token_usage: Any) -> UsageMetadata:
     return usage_metadata
 
 
-def _ensure_additional_properties_false(schema_dict: dict) -> dict:
+def _ensure_additional_properties_false(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
     """Recursively ensure additionalProperties is set to false for all objects."""
     if isinstance(schema_dict, dict):
         result = schema_dict.copy()
