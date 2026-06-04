@@ -23,6 +23,7 @@ from typing import (
     cast,
 )
 
+import litellm
 from langchain_core.callbacks import (
     AsyncCallbackManagerForLLMRun,
     CallbackManagerForLLMRun,
@@ -77,7 +78,6 @@ from langchain_core.tools import BaseTool
 from langchain_core.utils import get_from_dict_or_env, pre_init
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import TypeBaseModel, is_basemodel_subclass
-import litellm
 from litellm.types.utils import Delta
 from pydantic import BaseModel, Field
 from typing_extensions import is_typeddict
@@ -340,7 +340,12 @@ def _convert_message_to_dict(message: BaseMessage) -> Dict[str, Any]:
                 # Skip tool_use / tool_call blocks — these are handled via
                 # message.tool_calls and must not leak into content sent to
                 # providers that don't understand them (e.g. OpenAI).
-                elif item.get("type") in ("tool_use", "tool_call", "thinking", "redacted_thinking"):
+                elif item.get("type") in (
+                    "tool_use",
+                    "tool_call",
+                    "thinking",
+                    "redacted_thinking",
+                ):
                     continue
 
                 # Pass through standard text blocks or other unrecognized dict formats unchanged
@@ -377,7 +382,9 @@ def _convert_message_to_dict(message: BaseMessage) -> Dict[str, Any]:
         # Forward reasoning_content so LiteLLM can inject thinking blocks for
         # Anthropic while leaving OpenAI-bound messages clean.
         if "reasoning_content" in message.additional_kwargs:
-            message_dict["reasoning_content"] = message.additional_kwargs["reasoning_content"]
+            message_dict["reasoning_content"] = message.additional_kwargs[
+                "reasoning_content"
+            ]
     elif isinstance(message, SystemMessage):
         message_dict["role"] = "system"
     elif isinstance(message, FunctionMessage):
@@ -886,7 +893,7 @@ class ChatLiteLLM(BaseChatModel):
                     "Claude models when `thinking` is enabled. Tool calls may be "
                     "omitted; this runnable will raise OutputParserException when "
                     "no tool call is returned. Consider disabling `thinking` or "
-                    "using `method=\"json_schema\"`."
+                    'using `method="json_schema"`.'
                 )
                 warnings.warn(warning_message, stacklevel=2)
                 bind_kwargs = {}
@@ -991,7 +998,7 @@ class ChatLiteLLM(BaseChatModel):
             "n": self.n,
             "num_ctx": self.num_ctx,
         }
-    
+
     def _get_ls_params(
         self,
         stop: Optional[List[str]] = None,
@@ -1011,7 +1018,7 @@ class ChatLiteLLM(BaseChatModel):
         params["ls_provider"] = "litellm"
         params["ls_model_name"] = self.model_name or self.model
         return params
-    
+
     @property
     def _llm_type(self) -> str:
         return "litellm-chat"

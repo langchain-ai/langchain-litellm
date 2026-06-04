@@ -257,7 +257,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
     # from
     # https://github.com/langchain-ai/langchain/blob/master/libs/community/langchain_community/chat_models/openai.py
     # but modified to handle LiteLLM Usage class
-    def _combine_llm_outputs(self, llm_outputs: List[Optional[Dict[str, Any]]]) -> Dict[str, Any]:
+    def _combine_llm_outputs(
+        self, llm_outputs: List[Optional[Dict[str, Any]]]
+    ) -> Dict[str, Any]:
         overall_token_usage: Dict[str, Any] = {}
         system_fingerprint = None
         for output in llm_outputs:

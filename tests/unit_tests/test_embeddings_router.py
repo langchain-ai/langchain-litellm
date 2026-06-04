@@ -7,7 +7,7 @@ import pytest
 from langchain_tests.unit_tests import EmbeddingsUnitTests
 
 from langchain_litellm.embeddings import LiteLLMEmbeddingsRouter
-from tests.utils import mock_embedding_response, make_embedding_router
+from tests.utils import make_embedding_router, mock_embedding_response
 
 
 class TestLiteLLMEmbeddingsRouterUnit(EmbeddingsUnitTests):
