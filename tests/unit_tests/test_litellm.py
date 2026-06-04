@@ -2,7 +2,7 @@
 
 # stdlib
 import logging
-from typing import Any
+from typing import Any, Dict, Optional, Union
 from unittest.mock import patch
 
 # third-party
@@ -345,7 +345,10 @@ def test_bind_tools_any_becomes_required_without_thinking() -> None:
     ],
     ids=["any", "required", "True", "dict"],
 )
-def test_bind_tools_downgraded_with_thinking(tool_choice, caplog) -> None:  # type: ignore[no-untyped-def]
+def test_bind_tools_downgraded_with_thinking(
+    tool_choice: Union[str, bool, Dict[str, Any]],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Forced tool_choice values should be downgraded to 'auto' when thinking
     is enabled, so the model can produce CoT text before tool calls.
     """
@@ -373,7 +376,7 @@ def test_bind_tools_downgraded_with_thinking(tool_choice, caplog) -> None:  # ty
     ids=["any", "required", "True", "dict"],
 )
 def test_bind_tools_not_downgraded_with_thinking_on_non_claude_models(
-    tool_choice,
+    tool_choice: Union[str, bool, Dict[str, Any]],
 ) -> None:
     """Forced tool choices should be preserved for non-Claude models."""
     llm = ChatLiteLLM(
@@ -391,7 +394,9 @@ def test_bind_tools_not_downgraded_with_thinking_on_non_claude_models(
     ["auto", "none", None, False],
     ids=["auto", "none", "None", "False"],
 )
-def test_bind_tools_non_forced_unchanged_with_thinking(tool_choice) -> None:
+def test_bind_tools_non_forced_unchanged_with_thinking(
+    tool_choice: Optional[Union[str, bool]],
+) -> None:
     """Non-forced tool_choice values should pass through untouched."""
     llm = ChatLiteLLM(
         model="anthropic/claude-sonnet-4-20250514",
@@ -407,7 +412,9 @@ def test_bind_tools_non_forced_unchanged_with_thinking(tool_choice) -> None:
     [None, {}, {"type": "disabled"}],
     ids=["None", "empty", "disabled"],
 )
-def test_bind_tools_no_downgrade_without_thinking_enabled(thinking_config) -> None:
+def test_bind_tools_no_downgrade_without_thinking_enabled(
+    thinking_config: Optional[Dict[str, Any]],
+) -> None:
     """tool_choice='any' should stay 'required' when thinking is not enabled."""
     kwargs: dict = {}
     if thinking_config is not None:
@@ -442,7 +449,7 @@ def test_with_structured_output_function_calling_warns_and_raises_for_claude_thi
     bind_kwargs: dict[str, Any] = {}
 
     class _FakeChatLiteLLM(ChatLiteLLM):
-        def bind_tools(self, tools, **kwargs):  # type: ignore[no-untyped-def]
+        def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
             bind_kwargs.update(kwargs)
             return RunnableLambda(lambda _: AIMessage(content="plain text"))
 
@@ -466,9 +473,9 @@ def test_with_structured_output_include_raw_preserves_raw_for_claude_thinking() 
     """`include_raw` should surface the parsing error without dropping the raw message."""
 
     class _FakeChatLiteLLM(ChatLiteLLM):
-        def bind_tools(self, tools, **kwargs):  # type: ignore[no-untyped-def]
+        def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
             return RunnableLambda(lambda _: AIMessage(content="plain text"))
-
+    
     llm = _FakeChatLiteLLM(
         model="anthropic/claude-sonnet-4-20250514",
         api_key="fake",

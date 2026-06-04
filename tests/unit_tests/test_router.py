@@ -9,7 +9,7 @@ from langchain_litellm.chat_models import ChatLiteLLMRouter
 from tests.utils import make_router
 
 
-def test_router_provider_specific_fields_in_chat_result():
+def test_router_provider_specific_fields_in_chat_result() -> None:
     """Test that Router preserves top-level provider_specific_fields."""
     router = make_router()
     llm = ChatLiteLLMRouter(router=router)
@@ -34,7 +34,7 @@ def test_router_provider_specific_fields_in_chat_result():
     )
 
 
-def test_router_create_chat_result_sets_usage_metadata():
+def test_router_create_chat_result_sets_usage_metadata() -> None:
     """Router _create_chat_result should set usage_metadata on AIMessage."""
     router = make_router()
     llm = ChatLiteLLMRouter(router=router)
@@ -62,7 +62,7 @@ def test_router_create_chat_result_sets_usage_metadata():
     assert msg.usage_metadata["total_tokens"] == 20
 
 
-def test_router_stream_options_set_for_all_providers():
+def test_router_stream_options_set_for_all_providers() -> None:
     """Router _stream must set stream_options for non-OpenAI providers."""
     router = make_router()
     llm = ChatLiteLLMRouter(router=router)
@@ -73,7 +73,7 @@ def test_router_stream_options_set_for_all_providers():
     )
     assert stream_options == {"include_usage": True}
 
-def test_router_create_chat_result_sets_model_provider():
+def test_router_create_chat_result_sets_model_provider() -> None:
     """Router non-streaming path must set model_provider. Fixes #152."""
     router = make_router()
     llm = ChatLiteLLMRouter(router=router)
@@ -87,7 +87,7 @@ def test_router_create_chat_result_sets_model_provider():
     assert msg.response_metadata.get("model_provider") == "litellm"
 
 
-def test_router_stream_sets_model_provider_in_response_metadata():
+def test_router_stream_sets_model_provider_in_response_metadata() -> None:
     """Router first streaming chunk must carry model_provider. Fixes #152."""
     from unittest.mock import patch
 
