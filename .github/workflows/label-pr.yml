@@ -18,7 +18,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Apply CC type and breaking labels
-        uses: actions/github-script@bd9e8d567c4ca374eb63e9febefd10835cefb377 # v9.0.0
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
