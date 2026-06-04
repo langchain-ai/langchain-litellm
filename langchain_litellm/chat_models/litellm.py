@@ -35,6 +35,7 @@ from langchain_core.language_models.chat_models import (
     agenerate_from_stream,
     generate_from_stream,
 )
+from langchain_core.language_models.base import LangSmithParams
 from langchain_core.language_models.llms import create_base_retry_decorator
 from langchain_core.messages import (
     AIMessage,
@@ -1003,7 +1004,7 @@ class ChatLiteLLM(BaseChatModel):
         self,
         stop: Optional[List[str]] = None,
         **kwargs: Any,
-    ) -> Dict[str, Any]:
+    ) -> LangSmithParams:
         """Return LangSmith tracing parameters for this model.
 
         Overrides the base implementation to set ``ls_provider`` to ``"litellm"``

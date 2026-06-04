@@ -27,6 +27,7 @@ def test_router_provider_specific_fields_in_chat_result() -> None:
 
     result = llm._create_chat_result(mock_response, metadata={})
 
+    assert result.llm_output is not None
     assert "provider_specific_fields" in result.llm_output
     assert (
         result.llm_output["provider_specific_fields"]["citations"][0]["source"]

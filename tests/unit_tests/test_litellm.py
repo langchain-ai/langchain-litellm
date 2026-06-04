@@ -449,7 +449,7 @@ def test_with_structured_output_function_calling_warns_and_raises_for_claude_thi
     bind_kwargs: dict[str, Any] = {}
 
     class _FakeChatLiteLLM(ChatLiteLLM):
-        def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
+        def bind_tools(self, tools: Any, **kwargs: Any) -> Any: # type: ignore[override]
             bind_kwargs.update(kwargs)
             return RunnableLambda(lambda _: AIMessage(content="plain text"))
 
@@ -473,7 +473,7 @@ def test_with_structured_output_include_raw_preserves_raw_for_claude_thinking() 
     """`include_raw` should surface the parsing error without dropping the raw message."""
 
     class _FakeChatLiteLLM(ChatLiteLLM):
-        def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
+        def bind_tools(self, tools: Any, **kwargs: Any) -> Any: # type: ignore[override]
             return RunnableLambda(lambda _: AIMessage(content="plain text"))
 
     llm = _FakeChatLiteLLM(
@@ -491,6 +491,7 @@ def test_with_structured_output_include_raw_preserves_raw_for_claude_thinking() 
 
     result = structured.invoke("Return structured output.")
 
+    assert isinstance(result, dict)
     assert isinstance(result["raw"], AIMessage)
     assert result["raw"].content == "plain text"
     assert result["parsed"] is None
