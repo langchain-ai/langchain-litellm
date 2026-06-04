@@ -2,7 +2,7 @@
 
 # stdlib
 import logging
-from typing import Any
+from typing import Any, Dict, Optional, Union
 from unittest.mock import patch
 
 # third-party
@@ -345,7 +345,10 @@ def test_bind_tools_any_becomes_required_without_thinking() -> None:
     ],
     ids=["any", "required", "True", "dict"],
 )
-def test_bind_tools_downgraded_with_thinking(tool_choice, caplog) -> None:  # type: ignore[no-untyped-def]
+def test_bind_tools_downgraded_with_thinking(
+    tool_choice: Union[str, bool, Dict[str, Any]],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Forced tool_choice values should be downgraded to 'auto' when thinking
     is enabled, so the model can produce CoT text before tool calls.
     """
@@ -373,7 +376,7 @@ def test_bind_tools_downgraded_with_thinking(tool_choice, caplog) -> None:  # ty
     ids=["any", "required", "True", "dict"],
 )
 def test_bind_tools_not_downgraded_with_thinking_on_non_claude_models(
-    tool_choice,
+    tool_choice: Union[str, bool, Dict[str, Any]],
 ) -> None:
     """Forced tool choices should be preserved for non-Claude models."""
     llm = ChatLiteLLM(
@@ -391,7 +394,9 @@ def test_bind_tools_not_downgraded_with_thinking_on_non_claude_models(
     ["auto", "none", None, False],
     ids=["auto", "none", "None", "False"],
 )
-def test_bind_tools_non_forced_unchanged_with_thinking(tool_choice) -> None:
+def test_bind_tools_non_forced_unchanged_with_thinking(
+    tool_choice: Optional[Union[str, bool]],
+) -> None:
     """Non-forced tool_choice values should pass through untouched."""
     llm = ChatLiteLLM(
         model="anthropic/claude-sonnet-4-20250514",
@@ -407,7 +412,9 @@ def test_bind_tools_non_forced_unchanged_with_thinking(tool_choice) -> None:
     [None, {}, {"type": "disabled"}],
     ids=["None", "empty", "disabled"],
 )
-def test_bind_tools_no_downgrade_without_thinking_enabled(thinking_config) -> None:
+def test_bind_tools_no_downgrade_without_thinking_enabled(
+    thinking_config: Optional[Dict[str, Any]],
+) -> None:
     """tool_choice='any' should stay 'required' when thinking is not enabled."""
     kwargs: dict = {}
     if thinking_config is not None:
@@ -442,7 +449,7 @@ def test_with_structured_output_function_calling_warns_and_raises_for_claude_thi
     bind_kwargs: dict[str, Any] = {}
 
     class _FakeChatLiteLLM(ChatLiteLLM):
-        def bind_tools(self, tools, **kwargs):  # type: ignore[no-untyped-def]
+        def bind_tools(self, tools: Any, **kwargs: Any) -> Any:  # type: ignore[override]
             bind_kwargs.update(kwargs)
             return RunnableLambda(lambda _: AIMessage(content="plain text"))
 
@@ -466,7 +473,7 @@ def test_with_structured_output_include_raw_preserves_raw_for_claude_thinking() 
     """`include_raw` should surface the parsing error without dropping the raw message."""
 
     class _FakeChatLiteLLM(ChatLiteLLM):
-        def bind_tools(self, tools, **kwargs):  # type: ignore[no-untyped-def]
+        def bind_tools(self, tools: Any, **kwargs: Any) -> Any:  # type: ignore[override]
             return RunnableLambda(lambda _: AIMessage(content="plain text"))
 
     llm = _FakeChatLiteLLM(
@@ -484,16 +491,20 @@ def test_with_structured_output_include_raw_preserves_raw_for_claude_thinking() 
 
     result = structured.invoke("Return structured output.")
 
+    assert isinstance(result, dict)
     assert isinstance(result["raw"], AIMessage)
     assert result["raw"].content == "plain text"
     assert result["parsed"] is None
     assert isinstance(result["parsing_error"], OutputParserException)
 
+
 def test_create_chat_result_sets_model_provider() -> None:
     """Non-streaming path must set model_provider. Fixes #152."""
     llm = ChatLiteLLM(model="gpt-4", api_key="fake")
     mock_response = {
-        "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        "choices": [
+            {"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}
+        ],
         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
     }
     result = llm._create_chat_result(mock_response)
@@ -507,12 +518,20 @@ def test_stream_sets_model_provider_in_response_metadata() -> None:
 
     llm = ChatLiteLLM(model="gpt-4", api_key="fake")
     fake_chunks = [
-        {"choices": [{"delta": {"role": "assistant", "content": "hel"}}], "usage": None},
+        {
+            "choices": [{"delta": {"role": "assistant", "content": "hel"}}],
+            "usage": None,
+        },
         {"choices": [{"delta": {"content": "lo"}}], "usage": None},
-        {"choices": [], "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}},
+        {
+            "choices": [],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        },
     ]
 
-    with patch.object(ChatLiteLLM, "completion_with_retry", return_value=iter(fake_chunks)):
+    with patch.object(
+        ChatLiteLLM, "completion_with_retry", return_value=iter(fake_chunks)
+    ):
         chunks = list(llm._stream([]))
 
     assert chunks[0].message.response_metadata.get("model_provider") == "litellm"
@@ -527,9 +546,12 @@ def test_get_ls_params_sets_ls_provider() -> None:
     assert params["ls_model_name"] == "gpt-4"
 
     # model_name takes precedence over model when set
-    llm_with_name = ChatLiteLLM(model="gpt-4", model_name="my-deployment", api_key="fake")
+    llm_with_name = ChatLiteLLM(
+        model="gpt-4", model_name="my-deployment", api_key="fake"
+    )
     params = llm_with_name._get_ls_params()
     assert params["ls_model_name"] == "my-deployment"
+
 
 def test_convert_message_to_dict_strips_thinking_blocks() -> None:
     """thinking/redacted_thinking blocks must not reach non-Anthropic providers."""
@@ -549,6 +571,7 @@ def test_convert_message_to_dict_strips_thinking_blocks() -> None:
     assert "redacted_thinking" not in types
     assert {"type": "text", "text": "hello"} in d["content"]
     assert d["reasoning_content"] == "internal reasoning"
+
 
 def test_client_params_does_not_mutate_litellm_globals() -> None:
     """_client_params must not write instance config to litellm module globals. Fixes #132."""

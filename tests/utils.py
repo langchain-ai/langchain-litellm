@@ -1,3 +1,4 @@
+from typing import List
 from unittest.mock import MagicMock
 
 from litellm import Router
@@ -56,7 +57,7 @@ def make_embedding_router() -> Router:
     return Router(model_list)
 
 
-def mock_embedding_response(texts):  # type: ignore[no-untyped-def]
+def mock_embedding_response(texts: List[str]) -> MagicMock:
     """Create a mock litellm embedding response."""
     mock_response = MagicMock()
     mock_response.data = [

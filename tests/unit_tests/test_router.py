@@ -9,7 +9,7 @@ from langchain_litellm.chat_models import ChatLiteLLMRouter
 from tests.utils import make_router
 
 
-def test_router_provider_specific_fields_in_chat_result():
+def test_router_provider_specific_fields_in_chat_result() -> None:
     """Test that Router preserves top-level provider_specific_fields."""
     router = make_router()
     llm = ChatLiteLLMRouter(router=router)
@@ -27,6 +27,7 @@ def test_router_provider_specific_fields_in_chat_result():
 
     result = llm._create_chat_result(mock_response, metadata={})
 
+    assert result.llm_output is not None
     assert "provider_specific_fields" in result.llm_output
     assert (
         result.llm_output["provider_specific_fields"]["citations"][0]["source"]
@@ -34,7 +35,7 @@ def test_router_provider_specific_fields_in_chat_result():
     )
 
 
-def test_router_create_chat_result_sets_usage_metadata():
+def test_router_create_chat_result_sets_usage_metadata() -> None:
     """Router _create_chat_result should set usage_metadata on AIMessage."""
     router = make_router()
     llm = ChatLiteLLMRouter(router=router)
@@ -62,7 +63,7 @@ def test_router_create_chat_result_sets_usage_metadata():
     assert msg.usage_metadata["total_tokens"] == 20
 
 
-def test_router_stream_options_set_for_all_providers():
+def test_router_stream_options_set_for_all_providers() -> None:
     """Router _stream must set stream_options for non-OpenAI providers."""
     router = make_router()
     llm = ChatLiteLLMRouter(router=router)
@@ -73,12 +74,15 @@ def test_router_stream_options_set_for_all_providers():
     )
     assert stream_options == {"include_usage": True}
 
-def test_router_create_chat_result_sets_model_provider():
+
+def test_router_create_chat_result_sets_model_provider() -> None:
     """Router non-streaming path must set model_provider. Fixes #152."""
     router = make_router()
     llm = ChatLiteLLMRouter(router=router)
     mock_response = {
-        "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        "choices": [
+            {"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}
+        ],
         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
     }
     result = llm._create_chat_result(mock_response, metadata={})
@@ -87,16 +91,22 @@ def test_router_create_chat_result_sets_model_provider():
     assert msg.response_metadata.get("model_provider") == "litellm"
 
 
-def test_router_stream_sets_model_provider_in_response_metadata():
+def test_router_stream_sets_model_provider_in_response_metadata() -> None:
     """Router first streaming chunk must carry model_provider. Fixes #152."""
     from unittest.mock import patch
 
     router = make_router()
     llm = ChatLiteLLMRouter(router=router)
     fake_chunks = [
-        {"choices": [{"delta": {"role": "assistant", "content": "hel"}}], "usage": None},
+        {
+            "choices": [{"delta": {"role": "assistant", "content": "hel"}}],
+            "usage": None,
+        },
         {"choices": [{"delta": {"content": "lo"}}], "usage": None},
-        {"choices": [], "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}},
+        {
+            "choices": [],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        },
     ]
 
     with patch.object(llm.router, "completion", return_value=iter(fake_chunks)):
