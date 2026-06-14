@@ -9,7 +9,8 @@
       "bump-patch-for-minor-pre-major": false,
       "draft": true,
       "extra-files": [
-        "pyproject.toml"
+        "pyproject.toml",
+        "langchain_litellm/_version.py"
       ]
     }
   },

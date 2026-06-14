@@ -2,6 +2,7 @@
 
 from langchain_core.messages import AIMessage
 
+from langchain_litellm._version import __version__
 from langchain_litellm.chat_models import ChatLiteLLMRouter
 from tests.utils import make_router
 
@@ -70,6 +71,14 @@ def test_router_stream_options_set_for_all_providers() -> None:
         else {"include_usage": True}
     )
     assert stream_options == {"include_usage": True}
+
+
+def test_router_metadata_versions() -> None:
+    """Test that router metadata reports the correct version info."""
+    router = make_router()
+    llm = ChatLiteLLMRouter(router=router)
+    assert llm.metadata is not None
+    assert llm.metadata["lc_versions"]["langchain-litellm"] == __version__
 
 
 def test_router_create_chat_result_sets_model_provider() -> None:
