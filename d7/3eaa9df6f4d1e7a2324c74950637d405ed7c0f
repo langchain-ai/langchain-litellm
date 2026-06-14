@@ -1,0 +1,31 @@
+langchain_litellm/_version.py
+  s_df12963138736d::t_314fcaf208aee0 3
+langchain_litellm/chat_models/litellm.py
+  s_42fafc2729aaf0::t_fdd707010c11a6 83-86,515-519
+pyproject.toml
+  s_42fafc2729aaf0::t_fdd707010c11a6 32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "d73eaa9df6f4d1e7a2324c74950637d405ed7c0f",
+  "prompts": {},
+  "sessions": {
+    "s_42fafc2729aaf0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e74bcab6-c059-4437-ad65-36eddd259284",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Mason Daugherty <github@mdrxy.com>"
+    },
+    "s_df12963138736d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d445c589-e2a4-4d78-a48e-b454d85b2af2",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Mason Daugherty <github@mdrxy.com>"
+    }
+  }
+}
