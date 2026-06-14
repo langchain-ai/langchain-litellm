@@ -80,8 +80,10 @@ from langchain_core.utils import get_from_dict_or_env, pre_init
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import TypeBaseModel, is_basemodel_subclass
 from litellm.types.utils import Delta
-from pydantic import BaseModel, Field
-from typing_extensions import is_typeddict
+from pydantic import BaseModel, Field, model_validator
+from typing_extensions import Self, is_typeddict
+
+from langchain_litellm._version import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -509,6 +511,12 @@ class ChatLiteLLM(BaseChatModel):
             return await self.client.acompletion(**kwargs)
 
         return await _completion_with_retry(**kwargs)
+
+    @model_validator(mode="after")
+    def _set_litellm_version(self) -> Self:
+        """Set package version in metadata."""
+        self._add_version("langchain-litellm", __version__)
+        return self
 
     @pre_init
     def validate_environment(cls, values: Dict) -> Dict:

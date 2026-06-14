@@ -1,15 +1,7 @@
-from importlib import metadata
-
-from .chat_models import ChatLiteLLM, ChatLiteLLMRouter
-from .document_loaders import LiteLLMOCRLoader
-from .embeddings import LiteLLMEmbeddings, LiteLLMEmbeddingsRouter
-
-try:
-    __version__ = metadata.version(__package__)
-except metadata.PackageNotFoundError:
-    # Case where package metadata is not available.
-    __version__ = ""
-del metadata  # optional, avoids polluting the results of dir(__package__)
+from langchain_litellm._version import __version__
+from langchain_litellm.chat_models import ChatLiteLLM, ChatLiteLLMRouter
+from langchain_litellm.document_loaders import LiteLLMOCRLoader
+from langchain_litellm.embeddings import LiteLLMEmbeddings, LiteLLMEmbeddingsRouter
 
 __all__ = [
     "ChatLiteLLM",

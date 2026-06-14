@@ -29,7 +29,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "langchain-core>=1.2.21,<2.0.0",
+    "langchain-core>=1.4.7,<2.0.0",
     "litellm>=1.83.14,<2.0.0,!=1.82.7,!=1.82.8",
     "httpx>=0.28.1,<0.29.0",
     "cryptography>=46.0.5,<49.0.0",

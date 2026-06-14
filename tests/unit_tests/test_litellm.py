@@ -15,6 +15,7 @@ from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function
 from pydantic import BaseModel
 
 # first-party
+from langchain_litellm._version import __version__
 from langchain_litellm.chat_models import ChatLiteLLM
 from langchain_litellm.chat_models.litellm import (
     _convert_delta_to_message_chunk,
@@ -551,6 +552,37 @@ def test_get_ls_params_sets_ls_provider() -> None:
     )
     params = llm_with_name._get_ls_params()
     assert params["ls_model_name"] == "my-deployment"
+
+
+def test_metadata_versions() -> None:
+    """Test that metadata reports the correct version info."""
+    llm = ChatLiteLLM(model="gpt-4", api_key="fake")
+    assert llm.metadata is not None
+    assert llm.metadata["lc_versions"]["langchain-litellm"] == __version__
+
+
+def test_metadata_versions_preserves_user_versions() -> None:
+    """Test that user-provided version metadata is preserved."""
+    llm = ChatLiteLLM(
+        model="gpt-4",
+        api_key="fake",
+        metadata={"lc_versions": {"my-app": "2.0"}},
+    )
+    assert llm.metadata is not None
+    assert llm.metadata["lc_versions"]["my-app"] == "2.0"
+    assert llm.metadata["lc_versions"]["langchain-litellm"] == __version__
+
+
+def test_metadata_versions_replaces_non_dict_versions() -> None:
+    """Test that invalid version metadata is replaced with a warning."""
+    with pytest.warns(UserWarning, match="expected a dict"):
+        llm = ChatLiteLLM(
+            model="gpt-4",
+            api_key="fake",
+            metadata={"lc_versions": "garbage"},
+        )
+    assert llm.metadata is not None
+    assert llm.metadata["lc_versions"]["langchain-litellm"] == __version__
 
 
 def test_convert_message_to_dict_strips_thinking_blocks() -> None:
