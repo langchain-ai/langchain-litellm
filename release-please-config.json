@@ -7,7 +7,6 @@
       "component": "langchain-litellm",
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": false,
-      "draft": true,
       "extra-files": [
         "pyproject.toml",
         "langchain_litellm/_version.py"
