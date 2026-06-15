@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.6.6...langchain-litellm==0.7.0) (2026-06-15)
+
+
+### Features
+
+* **langchain-litellm:** record package version in model metadata ([#192](https://github.com/langchain-ai/langchain-litellm/issues/192)) ([1c0dcf3](https://github.com/langchain-ai/langchain-litellm/commit/1c0dcf3c0a451b43be39129106b7a8c272d89064))
+
 ## [0.6.6](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.6.5...langchain-litellm==0.6.6) (2026-05-21)
 
 
