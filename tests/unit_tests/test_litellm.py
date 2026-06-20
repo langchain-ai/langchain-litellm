@@ -633,3 +633,63 @@ def test_client_params_does_not_mutate_litellm_globals() -> None:
     assert params["api_key"] == "azure-key"
     assert params["organization"] == "my-org"
     assert params["extra_headers"] == {"X-Custom": "value"}
+
+
+# ── base_url / api_base alias ──────────────────────────────────────────────────
+
+
+def test_base_url_alias_sets_api_base() -> None:
+    """`base_url=` must populate `api_base`, matching the rest of the ecosystem.
+
+    Regression for #189: previously `base_url` was silently dropped by Pydantic's
+    `extra="ignore"`, so the endpoint override was never applied.
+    """
+    # `base_url` is a runtime alias normalized in `validate_environment`, not a
+    # declared field, hence the `call-arg` ignore.
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="fake",
+        base_url="https://proxy.example/v1",  # type: ignore[call-arg]
+    )
+    assert llm.api_base == "https://proxy.example/v1"
+
+
+def test_api_base_still_supported() -> None:
+    """`api_base=` must keep working for existing callers (non-breaking)."""
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini", api_key="fake", api_base="https://legacy.example/v1"
+    )
+    assert llm.api_base == "https://legacy.example/v1"
+
+
+def test_base_url_forwarded_to_client_params_once() -> None:
+    """The configured endpoint must reach litellm.completion exactly once.
+
+    Guards against the base URL being duplicated (e.g. ``/v1/v1``) on the way to
+    the underlying call.
+    """
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="fake",
+        base_url="https://proxy.example/v1",  # type: ignore[call-arg]
+    )
+    params = llm._client_params
+    assert params["api_base"] == "https://proxy.example/v1"
+    assert params["api_base"].count("/v1") == 1
+
+
+def test_init_chat_model_forwards_base_url() -> None:
+    """The generic factory path must forward `base_url` to LiteLLM.
+
+    `init_chat_model(model_provider="litellm", base_url=...)` is where most users
+    hit #189, since its docstring lists `base_url` as the common endpoint kwarg.
+    """
+    from langchain.chat_models import init_chat_model
+
+    llm = init_chat_model(
+        "gpt-4o-mini",
+        model_provider="litellm",
+        api_key="fake",
+        base_url="https://proxy.example/v1",
+    )
+    assert llm.api_base == "https://proxy.example/v1"  # type: ignore[attr-defined]
