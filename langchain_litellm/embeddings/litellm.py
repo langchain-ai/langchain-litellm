@@ -6,7 +6,7 @@ import logging
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 from langchain_core.embeddings import Embeddings
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,19 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
     """API key for the provider."""
 
     api_base: Optional[str] = None
-    """Base URL for the API endpoint."""
+    """Base URL for the API endpoint.
+
+    Also accepts ``base_url`` as an alias for consistency with the rest of
+    the LangChain ecosystem (e.g. ``ChatOpenAI``, ``ChatAnthropic``).
+    When both are supplied, the explicit ``api_base`` wins.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_base_url(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "base_url" in data and "api_base" not in data:
+            data["api_base"] = data.pop("base_url")
+        return data
 
     api_version: Optional[str] = None
     """API version (e.g. for Azure)."""
