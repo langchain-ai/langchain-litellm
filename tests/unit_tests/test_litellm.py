@@ -8,6 +8,7 @@ from unittest.mock import patch
 # third-party
 import litellm
 import pytest
+from langchain.chat_models import init_chat_model
 from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langchain_core.runnables import RunnableLambda
@@ -717,9 +718,6 @@ def test_init_chat_model_forwards_base_url() -> None:
     provider resolves, so this test stays a signal about *this* package's code
     and not about the external provider registry.
     """
-    pytest.importorskip("langchain.chat_models")
-    from langchain.chat_models import init_chat_model
-
     try:
         llm = init_chat_model(
             "gpt-4o-mini",
