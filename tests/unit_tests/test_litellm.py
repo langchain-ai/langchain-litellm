@@ -662,34 +662,73 @@ def test_api_base_still_supported() -> None:
     assert llm.api_base == "https://legacy.example/v1"
 
 
-def test_base_url_forwarded_to_client_params_once() -> None:
-    """The configured endpoint must reach litellm.completion exactly once.
+def test_api_base_takes_precedence_over_base_url() -> None:
+    """When both are supplied, the explicit `api_base` wins.
 
-    Guards against the base URL being duplicated (e.g. ``/v1/v1``) on the way to
-    the underlying call.
+    Covers the precedence branch in `validate_environment` (#189): `base_url` is
+    only applied when `api_base` is unset, so the canonical field always wins.
+    """
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="fake",
+        api_base="https://explicit.example/v1",
+        base_url="https://alias.example/v1",  # type: ignore[call-arg]
+    )
+    assert llm.api_base == "https://explicit.example/v1"
+
+
+def test_base_url_reaches_completion_call_once() -> None:
+    """The configured endpoint must reach the underlying completion call once.
+
+    Regression for #189: `base_url` is normalized to `api_base` and must be
+    forwarded to `litellm.completion` as `api_base` on a single call, with the
+    value unchanged (no duplication such as ``/v1/v1``).
     """
     llm = ChatLiteLLM(
         model="gpt-4o-mini",
         api_key="fake",
         base_url="https://proxy.example/v1",  # type: ignore[call-arg]
     )
-    params = llm._client_params
-    assert params["api_base"] == "https://proxy.example/v1"
-    assert params["api_base"].count("/v1") == 1
+    mock_response = {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    with patch.object(
+        ChatLiteLLM, "completion_with_retry", return_value=mock_response
+    ) as mock_completion:
+        llm.invoke("hi")
+
+    mock_completion.assert_called_once()
+    assert mock_completion.call_args.kwargs["api_base"] == "https://proxy.example/v1"
 
 
 def test_init_chat_model_forwards_base_url() -> None:
     """The generic factory path must forward `base_url` to LiteLLM.
 
-    `init_chat_model(model_provider="litellm", base_url=...)` is where most users
-    hit #189, since its docstring lists `base_url` as the common endpoint kwarg.
+    `init_chat_model(model_provider="litellm", base_url=...)` is the exact path
+    from #189, since its docstring lists `base_url` as the common endpoint kwarg.
+
+    Skips (rather than fails) if a future `langchain` changes how the "litellm"
+    provider resolves, so this test stays a signal about *this* package's code
+    and not about the external provider registry.
     """
+    pytest.importorskip("langchain.chat_models")
     from langchain.chat_models import init_chat_model
 
-    llm = init_chat_model(
-        "gpt-4o-mini",
-        model_provider="litellm",
-        api_key="fake",
-        base_url="https://proxy.example/v1",
-    )
-    assert llm.api_base == "https://proxy.example/v1"  # type: ignore[attr-defined]
+    try:
+        llm = init_chat_model(
+            "gpt-4o-mini",
+            model_provider="litellm",
+            api_key="fake",
+            base_url="https://proxy.example/v1",
+        )
+    except (ImportError, ValueError) as exc:
+        pytest.skip(f"init_chat_model could not resolve the litellm provider: {exc}")
+
+    assert isinstance(llm, ChatLiteLLM)
+    assert llm.api_base == "https://proxy.example/v1"
