@@ -48,6 +48,31 @@ class TestLiteLLMEmbeddingsParams:
         assert params["dimensions"] == 256
         assert params["timeout"] == 30.0
 
+    def test_base_url_alias_sets_api_base(self):
+        """Test that base_url is normalized to api_base."""
+        embeddings = LiteLLMEmbeddings(
+            model="openai/text-embedding-3-small",
+            api_key="fake-key",
+            base_url="https://proxy.example/v1",
+        )
+
+        params = embeddings._get_litellm_params()
+        assert embeddings.api_base == "https://proxy.example/v1"
+        assert params["api_base"] == "https://proxy.example/v1"
+
+    def test_api_base_takes_precedence_over_base_url(self):
+        """Test that explicit api_base takes precedence over base_url."""
+        embeddings = LiteLLMEmbeddings(
+            model="openai/text-embedding-3-small",
+            api_key="fake-key",
+            api_base="https://api-base.example/v1",
+            base_url="https://base-url.example/v1",
+        )
+
+        params = embeddings._get_litellm_params()
+        assert embeddings.api_base == "https://api-base.example/v1"
+        assert params["api_base"] == "https://api-base.example/v1"
+
     def test_none_params_excluded(self):
         """Test that None-valued params are excluded from the litellm call."""
         embeddings = LiteLLMEmbeddings(

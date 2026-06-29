@@ -29,6 +29,15 @@ class TestLiteLLMEmbeddingsRouterParams:
         embeddings = LiteLLMEmbeddingsRouter(router=router)
         assert embeddings.router is router
 
+    def test_base_url_alias_sets_api_base(self):
+        """Test that base_url is normalized on the router subclass."""
+        router = make_embedding_router()
+        embeddings = LiteLLMEmbeddingsRouter(
+            router=router,
+            base_url="https://proxy.example/v1",
+        )
+        assert embeddings.api_base == "https://proxy.example/v1"
+
     def test_router_params_exclude_none(self):
         """Test that None-valued params are excluded from router calls."""
         router = make_embedding_router()
