@@ -25,6 +25,34 @@ class TestLiteLLMEmbeddingsUnit(EmbeddingsUnitTests):
 
 
 class TestLiteLLMEmbeddingsParams:
+    def test_base_url_alias_sets_api_base(self) -> None:
+        """`base_url=` must populate `api_base` (regression for #202)."""
+        e = LiteLLMEmbeddings(
+            model="openai/text-embedding-3-small",
+            api_key="fake",
+            base_url="https://proxy.example/v1",  # type: ignore[call-arg]
+        )
+        assert e.api_base == "https://proxy.example/v1"
+
+    def test_api_base_still_supported(self) -> None:
+        """`api_base=` must keep working for existing callers (non-breaking)."""
+        e = LiteLLMEmbeddings(
+            model="openai/text-embedding-3-small",
+            api_key="fake",
+            api_base="https://legacy.example/v1",
+        )
+        assert e.api_base == "https://legacy.example/v1"
+
+    def test_api_base_takes_precedence_over_base_url(self) -> None:
+        """When both are supplied, the explicit `api_base` wins."""
+        e = LiteLLMEmbeddings(
+            model="openai/text-embedding-3-small",
+            api_key="fake",
+            api_base="https://explicit.example/v1",
+            base_url="https://alias.example/v1",  # type: ignore[call-arg]
+        )
+        assert e.api_base == "https://explicit.example/v1"
+
     def test_default_params(self):
         """Test default parameter values."""
         embeddings = LiteLLMEmbeddings(api_key="fake")

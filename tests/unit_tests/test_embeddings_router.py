@@ -23,6 +23,16 @@ class TestLiteLLMEmbeddingsRouterUnit(EmbeddingsUnitTests):
 
 
 class TestLiteLLMEmbeddingsRouterParams:
+    def test_router_inherits_base_url_alias(self) -> None:
+        """LiteLLMEmbeddingsRouter should inherit the alias with no extra code."""
+        router = make_embedding_router()
+        e = LiteLLMEmbeddingsRouter(
+            router=router,
+            model="text-embedding-3-small",
+            base_url="https://proxy.example/v1",  # type: ignore[call-arg]
+        )
+        assert e.api_base == "https://proxy.example/v1"
+
     def test_router_stored(self):
         """Test that the router instance is stored."""
         router = make_embedding_router()

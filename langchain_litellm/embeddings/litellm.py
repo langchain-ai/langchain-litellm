@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+"""Added a new import """
 import logging
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 from langchain_core.embeddings import Embeddings
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,21 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
             )
     """
 
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_base_url_alias(cls, values: Any) -> Any:
+        """Accept `base_url` as an alias for `api_base`.
+
+        Without this, `base_url` is silently dropped by Pydantic's
+        `extra="ignore"` (this class has no `validate_environment`).
+        The explicit `api_base` wins if both are supplied.
+        """
+        if isinstance(values, dict):
+            base_url = values.pop("base_url", None)
+            if base_url is not None and values.get("api_base") is None:
+                values["api_base"] = base_url
+        return values
+
     model: str = "openai/text-embedding-3-small"
     """Model name in litellm format (e.g. 'openai/text-embedding-3-small',
     'cohere/embed-english-v3.0', 'bedrock/amazon.titan-embed-text-v1')."""
@@ -65,7 +81,11 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
     """API key for the provider."""
 
     api_base: Optional[str] = None
-    """Base URL for the API endpoint."""
+    """Base URL for the API endpoint.
+
+    Also accepts ``base_url`` as an alias (normalized in a validator) for
+    consistency with the rest of the LangChain ecosystem. When both are
+    supplied, the explicit ``api_base`` wins."""
 
     api_version: Optional[str] = None
     """API version (e.g. for Azure)."""
