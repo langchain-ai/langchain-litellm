@@ -277,6 +277,36 @@ def test_inject_reasoning_content_does_not_duplicate_existing_thinking() -> None
     assert result == content
 
 
+def test_streamed_reasoning_deltas_merge_into_single_thinking_block() -> None:
+    """Aggregating streamed chunks must yield ONE thinking block, not one per delta.
+
+    Thinking blocks injected into streamed chunks carry an ``index`` so
+    langchain-core's ``merge_lists`` merges them across chunks; without it,
+    every reasoning delta survives as a separate content block in the final
+    AIMessage (one block per token).
+    """
+    deltas = [
+        {"role": "assistant", "content": "", "reasoning_content": "step "},
+        {"role": "assistant", "content": "", "reasoning_content": "by step"},
+        {"role": "assistant", "content": "the "},
+        {"role": "assistant", "content": "answer"},
+    ]
+    chunks = [_convert_delta_to_message_chunk(d, AIMessageChunk) for d in deltas]
+
+    merged = chunks[0]
+    for chunk in chunks[1:]:
+        merged = merged + chunk
+
+    thinking_blocks = [
+        block
+        for block in merged.content
+        if isinstance(block, dict) and block.get("type") == "thinking"
+    ]
+    assert len(thinking_blocks) == 1
+    assert thinking_blocks[0]["thinking"] == "step by step"
+    assert merged.additional_kwargs["reasoning_content"] == "step by step"
+
+
 # ── credential forwarding ─────────────────────────────────────────────────────
 
 
