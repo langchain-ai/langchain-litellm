@@ -377,7 +377,8 @@ def _collapse_text_only_content(content: List[Any]) -> Union[List[Any], str]:
     endpoints reject the request and lenient ones silently drop the text, so the
     model never sees its own earlier replies. Text-only content collapses back
     to a plain string; when structural blocks remain, the list is kept in order
-    with bare strings wrapped as text blocks.
+    with bare strings wrapped as text blocks. Empty text items are dropped from
+    the list form: providers such as Anthropic reject empty text content blocks.
     """
     has_structural_blocks = any(
         not (
@@ -390,10 +391,21 @@ def _collapse_text_only_content(content: List[Any]) -> Union[List[Any], str]:
         return [
             {"type": "text", "text": item} if isinstance(item, str) else item
             for item in content
+            if not _is_empty_text_item(item)
         ]
     return "".join(
         item if isinstance(item, str) else str(item.get("text") or "")
         for item in content
+    )
+
+
+def _is_empty_text_item(item: Any) -> bool:
+    if isinstance(item, str):
+        return not item
+    return (
+        isinstance(item, dict)
+        and item.get("type") == "text"
+        and not (item.get("text") or "")
     )
 
 

@@ -681,9 +681,17 @@ def test_convert_message_to_dict_collapses_bare_string_content() -> None:
 def test_convert_message_to_dict_wraps_bare_strings_alongside_structured_blocks() -> (
     None
 ):
+    """Order is preserved and bare strings become text blocks; empty text items
+    are dropped (providers such as Anthropic reject empty text content blocks)."""
     image = {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}
     message = AIMessage(
-        content=[{"type": "thinking", "thinking": "cot"}, "caption", image]
+        content=[
+            {"type": "thinking", "thinking": "cot"},
+            "caption",
+            "",
+            {"type": "text", "text": ""},
+            image,
+        ]
     )
 
     result = _convert_message_to_dict(message)
