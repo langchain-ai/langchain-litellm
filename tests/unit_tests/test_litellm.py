@@ -586,7 +586,11 @@ def test_metadata_versions_replaces_non_dict_versions() -> None:
 
 
 def test_convert_message_to_dict_strips_thinking_blocks() -> None:
-    """thinking/redacted_thinking blocks must not reach non-Anthropic providers."""
+    """thinking/redacted_thinking blocks must not reach non-Anthropic providers.
+
+    Once the metadata blocks are filtered, text-only content collapses back to a
+    plain string (a list-shaped ["hello"] is not valid Chat Completions content).
+    """
 
     msg = AIMessage(
         content=[
@@ -598,10 +602,7 @@ def test_convert_message_to_dict_strips_thinking_blocks() -> None:
     )
     d = _convert_message_to_dict(msg)
 
-    types = [block.get("type") for block in d["content"]]
-    assert "thinking" not in types
-    assert "redacted_thinking" not in types
-    assert {"type": "text", "text": "hello"} in d["content"]
+    assert d["content"] == "hello"
     assert d["reasoning_content"] == "internal reasoning"
 
 
@@ -633,3 +634,150 @@ def test_client_params_does_not_mutate_litellm_globals() -> None:
     assert params["api_key"] == "azure-key"
     assert params["organization"] == "my-org"
     assert params["extra_headers"] == {"X-Custom": "value"}
+
+
+def test_convert_message_to_dict_strips_normalized_reasoning_blocks() -> None:
+    """Canonical `reasoning` blocks (and non_standard wrappers) are metadata.
+
+    They must not reach providers as content: DeepSeek fails the request with
+    "unknown variant `reasoning`, expected `text`".
+    """
+    message = AIMessage(
+        content=[
+            {"type": "reasoning", "reasoning": "chain of thought"},
+            {
+                "type": "non_standard",
+                "value": {"type": "thinking", "thinking": "chain of thought"},
+            },
+        ],
+        additional_kwargs={"reasoning_content": "chain of thought"},
+        tool_calls=[
+            {"name": "read_file", "args": {"path": "README.md"}, "id": "call_1"}
+        ],
+    )
+
+    result = _convert_message_to_dict(message)
+
+    assert result["content"] == ""
+    assert result["reasoning_content"] == "chain of thought"
+    assert result["tool_calls"][0]["id"] == "call_1"
+
+
+def test_convert_message_to_dict_collapses_bare_string_content() -> None:
+    """Streamed chunk merging leaves assistant text as a bare list item.
+
+    After filtering the injected thinking block, ["answer"] is invalid Chat
+    Completions content; it must collapse back to a plain string.
+    """
+    message = AIMessage(
+        content=[{"type": "thinking", "thinking": "cot"}, "final answer"]
+    )
+
+    result = _convert_message_to_dict(message)
+
+    assert result["content"] == "final answer"
+
+
+def test_convert_message_to_dict_wraps_bare_strings_alongside_structured_blocks() -> (
+    None
+):
+    image = {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}
+    message = AIMessage(
+        content=[{"type": "thinking", "thinking": "cot"}, "caption", image]
+    )
+
+    result = _convert_message_to_dict(message)
+
+    assert result["content"] == [{"type": "text", "text": "caption"}, image]
+
+
+def test_convert_dict_to_message_captures_thinking_blocks() -> None:
+    blocks = [{"type": "thinking", "thinking": "why", "signature": "sig-1"}]
+
+    message = _convert_dict_to_message(
+        {
+            "role": "assistant",
+            "content": "done",
+            "reasoning_content": "why",
+            "thinking_blocks": blocks,
+        }
+    )
+
+    assert message.additional_kwargs["thinking_blocks"] == blocks
+
+
+def test_convert_delta_to_message_chunk_captures_thinking_blocks() -> None:
+    chunk = _convert_delta_to_message_chunk(
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": "why",
+            "thinking_blocks": [{"type": "thinking", "thinking": "why"}],
+        },
+        AIMessageChunk,
+    )
+
+    assert chunk.additional_kwargs["thinking_blocks"] == [
+        {"type": "thinking", "thinking": "why"}
+    ]
+
+
+def test_convert_message_to_dict_round_trips_signed_thinking_blocks() -> None:
+    """Signed blocks subsume streamed unsigned partials; redacted blocks pass through."""
+    message = AIMessage(
+        content="",
+        additional_kwargs={
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "partial one"},
+                {"type": "thinking", "thinking": "partial two"},
+                {
+                    "type": "thinking",
+                    "thinking": "partial onepartial two",
+                    "signature": "sig-full",
+                },
+                {"type": "redacted_thinking", "data": "opaque"},
+            ]
+        },
+    )
+
+    result = _convert_message_to_dict(message)
+
+    assert result["thinking_blocks"] == [
+        {
+            "type": "thinking",
+            "thinking": "partial onepartial two",
+            "signature": "sig-full",
+        },
+        {"type": "redacted_thinking", "data": "opaque"},
+    ]
+
+
+def test_convert_message_to_dict_merges_unsigned_partials_without_signature() -> None:
+    message = AIMessage(
+        content="",
+        additional_kwargs={
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "first "},
+                {"type": "thinking", "thinking": "second"},
+            ]
+        },
+    )
+
+    result = _convert_message_to_dict(message)
+
+    assert result["thinking_blocks"] == [
+        {"type": "thinking", "thinking": "first second"}
+    ]
+
+
+def test_convert_message_to_dict_omits_thinking_blocks_when_absent() -> None:
+    message = AIMessage(
+        content=[{"type": "text", "text": "hello"}],
+        tool_calls=[{"name": "read_file", "args": {}, "id": "call_2"}],
+    )
+
+    result = _convert_message_to_dict(message)
+
+    assert result["content"] == "hello"
+    assert "thinking_blocks" not in result
+    assert "reasoning_content" not in result

@@ -141,7 +141,7 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
     elif role == "assistant":
         content = _dict.get("content", "") or ""
 
-        additional_kwargs = {}
+        additional_kwargs: Dict[str, Any] = {}
         tool_calls = []
 
         if _dict.get("function_call"):
@@ -203,6 +203,19 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
                 content, _dict["reasoning_content"]
             )
 
+        # Preserve LiteLLM's typed thinking_blocks (Anthropic/Bedrock signed
+        # thinking, Gemini thought state) so they can be replayed on the next
+        # request; without them providers silently disable extended thinking on
+        # tool-loop continuations (or hard-fail on Bedrock).
+        if _dict.get("thinking_blocks"):
+            thinking_blocks = [
+                dict(block)
+                for block in _dict["thinking_blocks"]
+                if isinstance(block, dict)
+            ]
+            if thinking_blocks:
+                additional_kwargs["thinking_blocks"] = thinking_blocks
+
         # Check standard field first, then fallback to Vertex specific field
         provider_specific_fields = _dict.get("provider_specific_fields")
         if not provider_specific_fields:
@@ -254,11 +267,20 @@ def _convert_delta_to_message_chunk(
                 delta, "vertex_ai_grounding_metadata", None
             )
 
-    additional_kwargs = {}
+    additional_kwargs: Dict[str, Any] = {}
     if function_call:
         additional_kwargs["function_call"] = dict(function_call)
     if reasoning_content:
         additional_kwargs["reasoning_content"] = reasoning_content
+
+    if isinstance(delta, dict):
+        thinking_blocks = delta.get("thinking_blocks")
+    else:
+        thinking_blocks = getattr(delta, "thinking_blocks", None)
+    if thinking_blocks:
+        partials = [dict(block) for block in thinking_blocks if isinstance(block, dict)]
+        if partials:
+            additional_kwargs["thinking_blocks"] = partials
 
     if reasoning_content and (role == "assistant" or default_class == AIMessageChunk):
         content = _inject_reasoning_content_into_content(content, reasoning_content)
@@ -321,6 +343,99 @@ def _lc_tool_call_to_openai_tool_call(tool_call: ToolCall) -> Dict[str, Any]:
     }
 
 
+_REASONING_METADATA_BLOCK_TYPES = ("thinking", "redacted_thinking", "reasoning")
+
+
+def _is_reasoning_metadata_block(item: Dict[str, Any]) -> bool:
+    """Reasoning metadata must not travel as assistant content.
+
+    Providers reject or misread these blocks as content (DeepSeek fails the whole
+    request with ``unknown variant `reasoning`, expected `text```); the state is
+    carried by the top-level ``reasoning_content`` / ``thinking_blocks`` fields
+    instead. Covers the raw ``thinking`` shape emitted on the response path, the
+    ``reasoning`` shape produced by langchain-core content normalization
+    (``AIMessage.content_blocks``), and ``non_standard`` wrappers around either.
+    """
+    block_type = item.get("type")
+    if block_type in _REASONING_METADATA_BLOCK_TYPES:
+        return True
+    if block_type == "non_standard":
+        value = item.get("value")
+        return (
+            isinstance(value, dict)
+            and value.get("type") in _REASONING_METADATA_BLOCK_TYPES
+        )
+    return False
+
+
+def _collapse_text_only_content(content: List[Any]) -> Union[List[Any], str]:
+    """Re-normalize assistant content once metadata blocks are filtered out.
+
+    Streamed chunk merging can leave assistant text as a bare string item inside
+    the content list (``[{"type": "thinking", ...}, "answer"]``). After
+    filtering, ``["answer"]`` is not valid Chat Completions content: strict
+    endpoints reject the request and lenient ones silently drop the text, so the
+    model never sees its own earlier replies. Text-only content collapses back
+    to a plain string; when structural blocks remain, the list is kept in order
+    with bare strings wrapped as text blocks.
+    """
+    has_structural_blocks = any(
+        not (
+            isinstance(item, str)
+            or (isinstance(item, dict) and item.get("type") == "text")
+        )
+        for item in content
+    )
+    if has_structural_blocks:
+        return [
+            {"type": "text", "text": item} if isinstance(item, str) else item
+            for item in content
+        ]
+    return "".join(
+        item if isinstance(item, str) else str(item.get("text") or "")
+        for item in content
+    )
+
+
+def _consolidated_thinking_blocks(blocks: List[Any]) -> List[Dict[str, Any]]:
+    """Collapse streamed thinking-block partials into complete provider blocks.
+
+    LiteLLM's streaming handlers emit an unsigned partial ``thinking`` block per
+    reasoning delta and repeat the full accumulated text on the block that
+    carries the signature, so signed blocks subsume the partials.
+    ``redacted_thinking`` blocks arrive complete. Unsigned text is only kept
+    when no signed block exists at all; providers that verify signatures drop
+    unsigned blocks downstream.
+    """
+    complete: List[Dict[str, Any]] = []
+    unsigned_parts: List[str] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        block_type = block.get("type")
+        if block_type == "redacted_thinking":
+            complete.append(
+                {"type": "redacted_thinking", "data": block.get("data") or ""}
+            )
+        elif block_type == "thinking":
+            signature = block.get("signature")
+            if isinstance(signature, str) and signature:
+                complete.append(
+                    {
+                        "type": "thinking",
+                        "thinking": block.get("thinking") or "",
+                        "signature": signature,
+                    }
+                )
+            elif isinstance(block.get("thinking"), str) and block["thinking"]:
+                unsigned_parts.append(block["thinking"])
+    if complete:
+        return complete
+    if unsigned_parts:
+        return [{"type": "thinking", "thinking": "".join(unsigned_parts)}]
+    return []
+
+
 def _convert_message_to_dict(message: BaseMessage) -> Dict[str, Any]:
     # Capture the original content from the message
     content = message.content
@@ -340,15 +455,14 @@ def _convert_message_to_dict(message: BaseMessage) -> Dict[str, Any]:
                 elif is_data_content_block(item):
                     new_content.append(convert_to_openai_data_block(item))
 
-                # Skip tool_use / tool_call blocks — these are handled via
-                # message.tool_calls and must not leak into content sent to
-                # providers that don't understand them (e.g. OpenAI).
-                elif item.get("type") in (
-                    "tool_use",
-                    "tool_call",
-                    "thinking",
-                    "redacted_thinking",
-                ):
+                # Skip tool_use / tool_call blocks (handled via message.tool_calls)
+                # and reasoning metadata blocks — the latter is carried by the
+                # top-level reasoning_content / thinking_blocks fields and must
+                # not leak into content sent to providers that reject it.
+                elif item.get("type") in ("tool_use", "tool_call"):
+                    continue
+
+                elif _is_reasoning_metadata_block(item):
                     continue
 
                 # Pass through standard text blocks or other unrecognized dict formats unchanged
@@ -373,6 +487,13 @@ def _convert_message_to_dict(message: BaseMessage) -> Dict[str, Any]:
         message_dict["role"] = "user"
     elif isinstance(message, AIMessage):
         message_dict["role"] = "assistant"
+        # Re-normalize assistant content after filtering: text-only lists (which
+        # may contain bare strings from streamed chunk merging) collapse back to
+        # a plain string; ["answer"] alone is invalid Chat Completions content.
+        if isinstance(message_dict["content"], list):
+            message_dict["content"] = _collapse_text_only_content(
+                message_dict["content"]
+            )
         # specific handling for function and tool calls in AI messages
         if "function_call" in message.additional_kwargs:
             message_dict["function_call"] = message.additional_kwargs["function_call"]
@@ -388,6 +509,15 @@ def _convert_message_to_dict(message: BaseMessage) -> Dict[str, Any]:
             message_dict["reasoning_content"] = message.additional_kwargs[
                 "reasoning_content"
             ]
+        # Replay LiteLLM's typed thinking_blocks (signed/opaque reasoning state)
+        # top-level. Providers that never emit the field never receive it;
+        # without it LiteLLM silently disables extended thinking on
+        # Anthropic/Bedrock tool-loop continuation turns.
+        raw_thinking_blocks = message.additional_kwargs.get("thinking_blocks")
+        if isinstance(raw_thinking_blocks, list):
+            consolidated_blocks = _consolidated_thinking_blocks(raw_thinking_blocks)
+            if consolidated_blocks:
+                message_dict["thinking_blocks"] = consolidated_blocks
     elif isinstance(message, SystemMessage):
         message_dict["role"] = "system"
     elif isinstance(message, FunctionMessage):
