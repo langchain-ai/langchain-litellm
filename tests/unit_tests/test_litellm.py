@@ -633,3 +633,13 @@ def test_client_params_does_not_mutate_litellm_globals() -> None:
     assert params["api_key"] == "azure-key"
     assert params["organization"] == "my-org"
     assert params["extra_headers"] == {"X-Custom": "value"}
+
+
+def test_chat_litellm_base_url_alias() -> None:
+    """Test that base_url is accepted as an alias for api_base."""
+    llm = ChatLiteLLM(
+        model="gpt-4",
+        api_key="fake",
+        base_url="https://custom.endpoint.com",
+    )
+    assert llm.api_base == "https://custom.endpoint.com"

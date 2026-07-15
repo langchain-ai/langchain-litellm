@@ -6,7 +6,7 @@ import logging
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 from langchain_core.embeddings import Embeddings
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,10 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
             )
     """
 
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+
     model: str = "openai/text-embedding-3-small"
     """Model name in litellm format (e.g. 'openai/text-embedding-3-small',
     'cohere/embed-english-v3.0', 'bedrock/amazon.titan-embed-text-v1')."""
@@ -64,7 +68,7 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
     api_key: Optional[str] = None
     """API key for the provider."""
 
-    api_base: Optional[str] = None
+    api_base: Optional[str] = Field(default=None, alias="base_url")
     """Base URL for the API endpoint."""
 
     api_version: Optional[str] = None

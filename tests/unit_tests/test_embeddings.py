@@ -87,6 +87,14 @@ class TestLiteLLMEmbeddingsParams:
         embeddings = LiteLLMEmbeddings(api_key="fake", encoding_format="float")
         assert embeddings.encoding_format == "float"
 
+    def test_embeddings_base_url_alias(self):
+        """Test that base_url is accepted as an alias for api_base."""
+        embeddings = LiteLLMEmbeddings(
+            api_key="fake",
+            base_url="https://custom.endpoint.com",
+        )
+        assert embeddings.api_base == "https://custom.endpoint.com"
+
     @patch("litellm.embedding")
     def test_embed_documents(self, mock_embedding):
         """Test embed_documents calls litellm.embedding correctly."""

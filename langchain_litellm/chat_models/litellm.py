@@ -80,7 +80,7 @@ from langchain_core.utils import get_from_dict_or_env, pre_init
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import TypeBaseModel, is_basemodel_subclass
 from litellm.types.utils import Delta
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing_extensions import Self, is_typeddict
 
 from langchain_litellm._version import __version__
@@ -409,6 +409,10 @@ def _convert_message_to_dict(message: BaseMessage) -> Dict[str, Any]:
 class ChatLiteLLM(BaseChatModel):
     """Chat model that uses the LiteLLM API."""
 
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+
     client: Any = None  #: :meta private:
     model: str = "gpt-3.5-turbo"
     model_name: Optional[str] = None
@@ -422,7 +426,7 @@ class ChatLiteLLM(BaseChatModel):
     openrouter_api_key: Optional[str] = None
     api_key: Optional[str] = None
     streaming: bool = False
-    api_base: Optional[str] = None
+    api_base: Optional[str] = Field(default=None, alias="base_url")
     organization: Optional[str] = None
     custom_llm_provider: Optional[str] = None
     base_model: Optional[str] = None
