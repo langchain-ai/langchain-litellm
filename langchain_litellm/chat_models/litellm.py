@@ -134,6 +134,54 @@ def _inject_reasoning_content_into_content(
     return [thinking_block, content]
 
 
+def _consolidate_streamed_reasoning_blocks(content: Any) -> Any:
+    """Merge the per-delta ``thinking`` blocks a streamed reasoning response accumulates.
+
+    Streaming injects one ``{"type": "thinking", ...}`` block per reasoning delta (see
+    ``_inject_reasoning_content_into_content``), and chunk merging keeps every one as a separate
+    list item — so a fully reasoned answer arrives as hundreds of single-token thinking blocks even
+    though the text is identical to the single block the non-streaming path produces. That fragments
+    ``.content`` and inflates every consumer that persists or re-counts the assembled message
+    (checkpointers, token counting, tracing). Collapse each consecutive run of unsigned ``thinking``
+    blocks into one; ``redacted_thinking``, signed thinking, and every non-reasoning item are left in
+    place, so ``content_blocks`` and the request round-trip are byte-for-byte unchanged.
+    """
+
+    if not isinstance(content, list):
+        return content
+    consolidated: List[Any] = []
+    pending: List[str] = []
+
+    def flush_pending() -> None:
+        if pending:
+            consolidated.append({"type": "thinking", "thinking": "".join(pending)})
+            pending.clear()
+
+    for block in content:
+        if (
+            isinstance(block, dict)
+            and block.get("type") == "thinking"
+            and not block.get("signature")
+        ):
+            text = block.get("thinking")
+            pending.append(text if isinstance(text, str) else "")
+            continue
+        flush_pending()
+        consolidated.append(block)
+    flush_pending()
+    return consolidated
+
+
+def _consolidate_result_reasoning(result: ChatResult) -> ChatResult:
+    """Coalesce fragmented streamed reasoning on every assembled generation message."""
+
+    for generation in result.generations:
+        message = getattr(generation, "message", None)
+        if isinstance(message, AIMessage) and isinstance(message.content, list):
+            message.content = _consolidate_streamed_reasoning_blocks(message.content)
+    return result
+
+
 def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
     role = _dict["role"]
     if role == "user":
@@ -713,7 +761,7 @@ class ChatLiteLLM(BaseChatModel):
             stream_iter = self._stream(
                 messages, stop=stop, run_manager=run_manager, **kwargs
             )
-            return generate_from_stream(stream_iter)
+            return _consolidate_result_reasoning(generate_from_stream(stream_iter))
 
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs}
@@ -918,7 +966,9 @@ class ChatLiteLLM(BaseChatModel):
             stream_iter = self._astream(
                 messages=messages, stop=stop, run_manager=run_manager, **kwargs
             )
-            return await agenerate_from_stream(stream_iter)
+            return _consolidate_result_reasoning(
+                await agenerate_from_stream(stream_iter)
+            )
 
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs}

@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from langchain_litellm._version import __version__
 from langchain_litellm.chat_models import ChatLiteLLM
 from langchain_litellm.chat_models.litellm import (
+    _consolidate_streamed_reasoning_blocks,
     _convert_delta_to_message_chunk,
     _convert_dict_to_message,
     _convert_message_to_dict,
@@ -275,6 +276,88 @@ def test_inject_reasoning_content_does_not_duplicate_existing_thinking() -> None
     result = _inject_reasoning_content_into_content(content, "hidden chain")
 
     assert result == content
+
+
+def test_consolidate_streamed_reasoning_blocks_merges_per_delta_thinking() -> None:
+    """Per-delta thinking blocks accumulated by chunk merging collapse into one block."""
+
+    content = [
+        "",
+        {"type": "thinking", "thinking": "an"},
+        {"type": "thinking", "thinking": "aly"},
+        {"type": "thinking", "thinking": "ze"},
+        {"type": "text", "text": "the answer"},
+    ]
+
+    result = _consolidate_streamed_reasoning_blocks(content)
+
+    assert result == [
+        "",
+        {"type": "thinking", "thinking": "analyze"},
+        {"type": "text", "text": "the answer"},
+    ]
+
+
+def test_consolidate_streamed_reasoning_blocks_preserves_signed_and_redacted() -> None:
+    """Signed thinking and redacted blocks are opaque carriers and must survive verbatim."""
+
+    content = [
+        {"type": "thinking", "thinking": "a"},
+        {"type": "thinking", "thinking": "b"},
+        {"type": "thinking", "thinking": "full", "signature": "sig-1"},
+        {"type": "redacted_thinking", "data": "opaque"},
+        {"type": "text", "text": "answer"},
+    ]
+
+    result = _consolidate_streamed_reasoning_blocks(content)
+
+    assert result == [
+        {"type": "thinking", "thinking": "ab"},
+        {"type": "thinking", "thinking": "full", "signature": "sig-1"},
+        {"type": "redacted_thinking", "data": "opaque"},
+        {"type": "text", "text": "answer"},
+    ]
+
+
+def test_consolidate_streamed_reasoning_blocks_is_noop_for_string() -> None:
+    assert _consolidate_streamed_reasoning_blocks("plain answer") == "plain answer"
+
+
+def test_streamed_reasoning_assembles_into_single_thinking_block() -> None:
+    """End-to-end: a per-token reasoning stream must assemble into ONE thinking block, not N.
+
+    Without consolidation each reasoning delta injects its own ``{"type": "thinking"}`` block and
+    chunk merging keeps them all, so a fully reasoned answer balloons into hundreds of single-token
+    blocks that every downstream consumer then persists and re-counts."""
+
+    llm = ChatLiteLLM(model="gpt-4", api_key="fake", streaming=True)
+    fake_chunks = [
+        {
+            "choices": [{"delta": {"role": "assistant", "reasoning_content": "an"}}],
+            "usage": None,
+        },
+        {"choices": [{"delta": {"reasoning_content": "aly"}}], "usage": None},
+        {"choices": [{"delta": {"reasoning_content": "ze"}}], "usage": None},
+        {"choices": [{"delta": {"content": "the answer"}}], "usage": None},
+        {
+            "choices": [],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 4, "total_tokens": 9},
+        },
+    ]
+
+    with patch.object(
+        ChatLiteLLM, "completion_with_retry", return_value=iter(fake_chunks)
+    ):
+        result = llm._generate([])
+
+    message = result.generations[0].message
+    thinking_blocks = [
+        block
+        for block in message.content
+        if isinstance(block, dict) and block.get("type") == "thinking"
+    ]
+    assert thinking_blocks == [{"type": "thinking", "thinking": "analyze"}]
+    assert message.additional_kwargs["reasoning_content"] == "analyze"
 
 
 # ── credential forwarding ─────────────────────────────────────────────────────
