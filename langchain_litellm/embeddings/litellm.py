@@ -6,7 +6,7 @@ import logging
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 from langchain_core.embeddings import Embeddings
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +105,18 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
     """Input type to send when embedding queries (e.g. 'search_query'
     for Cohere, 'RETRIEVAL_QUERY' for Vertex AI). When set,
     ``embed_query`` passes this as ``input_type``."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_base_url_alias(cls, values: Any) -> Any:
+        """Accept base_url as a runtime alias for api_base."""
+        if not isinstance(values, dict):
+            return values
+
+        base_url = values.pop("base_url", None)
+        if base_url is not None and values.get("api_base") is None:
+            values["api_base"] = base_url
+        return values
 
     def _get_litellm_params(
         self, *, input_type: Optional[str] = None
