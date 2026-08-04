@@ -120,3 +120,31 @@ def test_router_stream_sets_model_provider_in_response_metadata() -> None:
 
     assert chunks[0].message.response_metadata.get("model_provider") == "litellm"
     assert chunks[1].message.response_metadata == {}
+def test_router_base_url_alias_reaches_completion() -> None:
+    """Test that base_url flows through inheritance and survives router param stripping."""
+    from langchain_litellm import ChatLiteLLMRouter
+    from litellm import Router
+
+    # Setup a basic underlying litellm router
+    litellm_router = Router(
+        model_list=[{
+            "model_name": "gpt-3.5-turbo", 
+            "litellm_params": {"model": "gpt-3.5-turbo"}
+        }]
+    )
+    
+    # Initialize the LangChain router wrapper with a base_url override
+    chat_router = ChatLiteLLMRouter(
+        router=litellm_router, 
+        base_url="https://proxy.example/v1"
+    )
+    
+    # Assert 1: The inherited validator normalized base_url into api_base
+    assert chat_router.api_base == "https://proxy.example/v1"
+    
+    # Assert 2: The override survives _prepare_params_for_router stripping logic
+    params = {"api_base": chat_router.api_base, "model": "gpt-3.5-turbo"}
+    chat_router._prepare_params_for_router(params)
+    
+    assert "api_base" in params
+    assert params["api_base"] == "https://proxy.example/v1"

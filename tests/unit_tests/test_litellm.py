@@ -8,6 +8,7 @@ from unittest.mock import patch
 # third-party
 import litellm
 import pytest
+from langchain.chat_models import init_chat_model
 from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langchain_core.runnables import RunnableLambda
@@ -633,3 +634,99 @@ def test_client_params_does_not_mutate_litellm_globals() -> None:
     assert params["api_key"] == "azure-key"
     assert params["organization"] == "my-org"
     assert params["extra_headers"] == {"X-Custom": "value"}
+
+
+# ── base_url / api_base alias ──────────────────────────────────────────────────
+
+
+def test_base_url_alias_sets_api_base() -> None:
+    """`base_url=` must populate `api_base`, matching the rest of the ecosystem.
+
+    Regression for #189: previously `base_url` was silently dropped by Pydantic's
+    `extra="ignore"`, so the endpoint override was never applied.
+    """
+    # `base_url` is a runtime alias normalized in `validate_environment`, not a
+    # declared field, hence the `call-arg` ignore.
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="fake",
+        base_url="https://proxy.example/v1",  # type: ignore[call-arg]
+    )
+    assert llm.api_base == "https://proxy.example/v1"
+
+
+def test_api_base_still_supported() -> None:
+    """`api_base=` must keep working for existing callers (non-breaking)."""
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini", api_key="fake", api_base="https://legacy.example/v1"
+    )
+    assert llm.api_base == "https://legacy.example/v1"
+
+
+def test_api_base_takes_precedence_over_base_url() -> None:
+    """When both are supplied, the explicit `api_base` wins.
+
+    Covers the precedence branch in `validate_environment` (#189): `base_url` is
+    only applied when `api_base` is unset, so the canonical field always wins.
+    """
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="fake",
+        api_base="https://explicit.example/v1",
+        base_url="https://alias.example/v1",  # type: ignore[call-arg]
+    )
+    assert llm.api_base == "https://explicit.example/v1"
+
+
+def test_base_url_reaches_completion_call_once() -> None:
+    """The configured endpoint must reach the underlying completion call once.
+
+    Regression for #189: `base_url` is normalized to `api_base` and must be
+    forwarded to `litellm.completion` as `api_base` on a single call, with the
+    value unchanged (no duplication such as ``/v1/v1``).
+    """
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="fake",
+        base_url="https://proxy.example/v1",  # type: ignore[call-arg]
+    )
+    mock_response = {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    with patch.object(
+        ChatLiteLLM, "completion_with_retry", return_value=mock_response
+    ) as mock_completion:
+        llm.invoke("hi")
+
+    mock_completion.assert_called_once()
+    assert mock_completion.call_args.kwargs["api_base"] == "https://proxy.example/v1"
+
+
+def test_init_chat_model_forwards_base_url() -> None:
+    """The generic factory path must forward `base_url` to LiteLLM.
+
+    `init_chat_model(model_provider="litellm", base_url=...)` is the exact path
+    from #189, since its docstring lists `base_url` as the common endpoint kwarg.
+
+    Skips (rather than fails) if a future `langchain` changes how the "litellm"
+    provider resolves, so this test stays a signal about *this* package's code
+    and not about the external provider registry.
+    """
+    try:
+        llm = init_chat_model(
+            "gpt-4o-mini",
+            model_provider="litellm",
+            api_key="fake",
+            base_url="https://proxy.example/v1",
+        )
+    except (ImportError, ValueError) as exc:
+        pytest.skip(f"init_chat_model could not resolve the litellm provider: {exc}")
+
+    assert isinstance(llm, ChatLiteLLM)
+    assert llm.api_base == "https://proxy.example/v1"
