@@ -1,0 +1,56 @@
+name: "CodeQL"
+
+# Advanced setup. Uses the standard `pull_request` trigger (NOT
+# pull_request_target) so it runs safely in the fork-PR context with a
+# read-only token and still reports results on PRs from forks — which
+# GitHub's default (Basic) setup does not, leaving fork PRs stuck on
+# "Code scanning is waiting for results from CodeQL".
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "35 12 * * 2"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: "Analyze (${{ matrix.language }})"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # build-mode: none — both languages are scanned from source with no
+        # build step, so no untrusted fork code is ever executed.
+        include:
+          - language: actions
+            build-mode: none
+          - language: python
+            build-mode: none
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@e0647621c2984b5ed2f768cb892365bf2a616ad1 # v4.37.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@e0647621c2984b5ed2f768cb892365bf2a616ad1 # v4.37.2
+        with:
+          category: "/language:${{ matrix.language }}"
