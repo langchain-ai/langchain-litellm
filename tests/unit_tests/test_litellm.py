@@ -633,3 +633,21 @@ def test_client_params_does_not_mutate_litellm_globals() -> None:
     assert params["api_key"] == "azure-key"
     assert params["organization"] == "my-org"
     assert params["extra_headers"] == {"X-Custom": "value"}
+
+
+def test_top_p_and_top_k_in_default_params() -> None:
+    """Test that top_p and top_k are included in _default_params and _client_params."""
+    llm = ChatLiteLLM(
+        model="gpt-4",
+        api_key="fake",
+        top_p=0.8,
+        top_k=40,
+    )
+    params = llm._default_params
+    assert params["top_p"] == 0.8
+    assert params["top_k"] == 40
+
+    client_params = llm._client_params
+    assert client_params["top_p"] == 0.8
+    assert client_params["top_k"] == 40
+
