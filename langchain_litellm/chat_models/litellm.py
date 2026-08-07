@@ -144,7 +144,7 @@ def _consolidate_streamed_reasoning_blocks(content: Any) -> Any:
     ``.content`` and inflates every consumer that persists or re-counts the assembled message
     (checkpointers, token counting, tracing). Collapse each consecutive run of unsigned ``thinking``
     blocks into one; ``redacted_thinking``, signed thinking, and every non-reasoning item are left in
-    place, so ``content_blocks`` and the request round-trip are byte-for-byte unchanged.
+    place, so the provider request payload (after filtering metadata blocks) remains unchanged.
     """
 
     if not isinstance(content, list):
