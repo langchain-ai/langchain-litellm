@@ -356,7 +356,12 @@ def _convert_message_to_dict(message: BaseMessage) -> Dict[str, Any]:
                     new_content.append(item)
             else:
                 # Append non-dict items (like strings) directly
-                new_content.append(item)
+                new_content.append(
+                    {
+                        "type": "text",
+                        "text": item,
+                    }
+                )
 
         # Update content with the processed list.
         # If filtering removed all blocks, collapse to empty string so the

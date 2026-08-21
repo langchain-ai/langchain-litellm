@@ -605,6 +605,21 @@ def test_convert_message_to_dict_strips_thinking_blocks() -> None:
     assert d["reasoning_content"] == "internal reasoning"
 
 
+def test_convert_message_to_dict_wraps_bare_string_content() -> None:
+    msg = AIMessage(
+        content=[
+            {"type": "thinking", "thinking": "internal reasoning"},
+            "hello",
+        ]
+    )
+
+    d = _convert_message_to_dict(msg)
+
+    assert d["content"] == [
+        {"type": "text", "text": "hello"},
+    ]
+
+
 def test_client_params_does_not_mutate_litellm_globals() -> None:
     """_client_params must not write instance config to litellm module globals. Fixes #132."""
     before = {
