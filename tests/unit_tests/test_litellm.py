@@ -633,3 +633,23 @@ def test_client_params_does_not_mutate_litellm_globals() -> None:
     assert params["api_key"] == "azure-key"
     assert params["organization"] == "my-org"
     assert params["extra_headers"] == {"X-Custom": "value"}
+
+
+# ── base_url alias (issue #189) ────────────────────────────────────────────────
+
+
+def test_base_url_is_accepted_as_api_base_alias() -> None:
+    """`base_url` should populate `api_base` instead of being silently dropped."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", base_url="http://localhost:4000")
+    assert llm.api_base == "http://localhost:4000"
+    assert llm._client_params["api_base"] == "http://localhost:4000"
+
+
+def test_api_base_takes_precedence_over_base_url() -> None:
+    """If both are given, the explicit `api_base` wins."""
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_base="http://explicit",
+        base_url="http://alias",
+    )
+    assert llm.api_base == "http://explicit"

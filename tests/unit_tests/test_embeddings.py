@@ -216,3 +216,25 @@ class TestLiteLLMEmbeddingsParams:
 
         call_kwargs = mock_embedding.call_args[1]
         assert "input_type" not in call_kwargs
+
+
+# ── base_url alias (issue #202) ────────────────────────────────────────────────
+
+
+def test_base_url_is_accepted_as_api_base_alias() -> None:
+    """`base_url` should populate `api_base` instead of being silently dropped."""
+    embeddings = LiteLLMEmbeddings(
+        model="openai/text-embedding-3-small",
+        base_url="http://localhost:4000",
+    )
+    assert embeddings.api_base == "http://localhost:4000"
+
+
+def test_api_base_takes_precedence_over_base_url() -> None:
+    """If both are given, the explicit `api_base` wins."""
+    embeddings = LiteLLMEmbeddings(
+        model="openai/text-embedding-3-small",
+        api_base="http://explicit",
+        base_url="http://alias",
+    )
+    assert embeddings.api_base == "http://explicit"

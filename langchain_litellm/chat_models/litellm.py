@@ -449,6 +449,20 @@ class ChatLiteLLM(BaseChatModel):
 
     max_retries: int = 1
 
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_base_url_alias(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        """Allow `base_url` as an alias for `api_base` (OpenAI-style kwarg).
+
+        Without this, passing `base_url=...` is silently ignored since the
+        model only recognizes `api_base`. See issue #189.
+        """
+        if isinstance(values, dict) and values.get("api_base") is None:
+            base_url = values.pop("base_url", None)
+            if base_url is not None:
+                values["api_base"] = base_url
+        return values
+
     def _thinking_config(self) -> Dict[str, Any]:
         thinking_config = self.model_kwargs.get("thinking")
         return thinking_config if isinstance(thinking_config, dict) else {}
