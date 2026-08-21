@@ -469,6 +469,8 @@ class ChatLiteLLM(BaseChatModel):
             "stream": self.streaming,
             "n": self.n,
             "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
             "custom_llm_provider": self.custom_llm_provider,
             "num_ctx": self.num_ctx,
             "base_model": self.base_model,
