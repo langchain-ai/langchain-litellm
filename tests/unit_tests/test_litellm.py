@@ -635,7 +635,6 @@ def test_client_params_does_not_mutate_litellm_globals() -> None:
     assert params["extra_headers"] == {"X-Custom": "value"}
 
 
-<<<<<<< Updated upstream
 # ── top_p / top_k reach the request (issue #226) ───────────────────────────────
 
 
@@ -653,7 +652,8 @@ def test_top_p_and_top_k_default_to_none() -> None:
     llm = ChatLiteLLM(model="gpt-4o-mini")
     assert llm._default_params["top_p"] is None
     assert llm._default_params["top_k"] is None
-=======
+
+
 # ── finish_reason missing from streaming response_metadata (issue #215) ────────
 
 
@@ -715,4 +715,3 @@ async def test_astream_sets_finish_reason_in_response_metadata() -> None:
 
     assert chunks[0].message.response_metadata.get("finish_reason") is None
     assert chunks[1].message.response_metadata.get("finish_reason") == "stop"
->>>>>>> Stashed changes
