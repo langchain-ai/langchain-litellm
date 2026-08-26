@@ -32,6 +32,23 @@ class TestLiteLLMEmbeddingsParams:
         assert embeddings.max_retries == 1
         assert embeddings.api_base is None
 
+    def test_base_url_maps_to_api_base(self):
+        """Test that base_url is mapped to api_base."""
+        embeddings = LiteLLMEmbeddings(
+            api_key="fake",
+            base_url="https://custom.endpoint.com",
+        )
+        assert embeddings.api_base == "https://custom.endpoint.com"
+
+    def test_api_base_takes_precedence_over_base_url(self):
+        """Test that explicit api_base takes precedence over base_url."""
+        embeddings = LiteLLMEmbeddings(
+            api_key="fake",
+            base_url="https://base-url.example.com",
+            api_base="https://api-base.example.com",
+        )
+        assert embeddings.api_base == "https://api-base.example.com"
+
     def test_custom_params(self):
         """Test custom parameter passthrough."""
         embeddings = LiteLLMEmbeddings(
