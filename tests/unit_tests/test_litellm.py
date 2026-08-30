@@ -22,7 +22,6 @@ from langchain_litellm.chat_models.litellm import (
     _convert_dict_to_message,
     _convert_message_to_dict,
     _create_usage_metadata,
-    _inject_reasoning_content_into_content,
 )
 
 
@@ -237,44 +236,57 @@ def test_create_usage_metadata_handles_none_values() -> None:
     assert meta["total_tokens"] == 0
 
 
-# ── reasoning content injection ────────────────────────────────────────────────
+# ── reasoning content stays out of message content ─────────────────────────────
 
 
-def test_inject_reasoning_content_into_string_content() -> None:
-    result = _inject_reasoning_content_into_content("answer", "hidden chain")
+def test_reasoning_content_does_not_alter_content_for_dict() -> None:
+    """`.content` must stay a plain str; reasoning_content lives in additional_kwargs."""
+    mock_dict = {
+        "role": "assistant",
+        "content": "answer",
+        "reasoning_content": "hidden chain",
+    }
 
-    assert result == [
-        {"type": "thinking", "thinking": "hidden chain"},
-        {"type": "text", "text": "answer"},
-    ]
+    message = _convert_dict_to_message(mock_dict)
 
-
-def test_inject_reasoning_content_into_empty_content() -> None:
-    result = _inject_reasoning_content_into_content("", "hidden chain")
-
-    assert result == [{"type": "thinking", "thinking": "hidden chain"}]
-
-
-def test_inject_reasoning_content_prepends_for_list_without_thinking() -> None:
-    content = [{"type": "text", "text": "answer"}]
-
-    result = _inject_reasoning_content_into_content(content, "hidden chain")
-
-    assert result == [
-        {"type": "thinking", "thinking": "hidden chain"},
-        {"type": "text", "text": "answer"},
-    ]
+    assert message.content == "answer"
+    assert message.additional_kwargs["reasoning_content"] == "hidden chain"
 
 
-def test_inject_reasoning_content_does_not_duplicate_existing_thinking() -> None:
-    content = [
-        {"type": "thinking", "thinking": "already there"},
-        {"type": "text", "text": "answer"},
-    ]
+def test_reasoning_content_does_not_alter_empty_content_for_dict() -> None:
+    mock_dict = {
+        "role": "assistant",
+        "content": "",
+        "reasoning_content": "hidden chain",
+    }
 
-    result = _inject_reasoning_content_into_content(content, "hidden chain")
+    message = _convert_dict_to_message(mock_dict)
 
-    assert result == content
+    assert message.content == ""
+    assert message.additional_kwargs["reasoning_content"] == "hidden chain"
+
+
+def test_reasoning_content_does_not_alter_content_for_delta() -> None:
+    mock_delta = {
+        "role": "assistant",
+        "content": "answer",
+        "reasoning_content": "hidden chain",
+    }
+
+    chunk = _convert_delta_to_message_chunk(mock_delta, AIMessageChunk)
+
+    assert chunk.content == "answer"
+    assert chunk.additional_kwargs["reasoning_content"] == "hidden chain"
+
+
+def test_reasoning_content_surfaces_as_standard_content_block() -> None:
+    """Consumers reading the standard `content_blocks` API (e.g. LangGraph) still
+    see reasoning content even though it is no longer duplicated into `.content`."""
+    message = AIMessage(
+        content="answer", additional_kwargs={"reasoning_content": "hidden chain"}
+    )
+
+    assert {"type": "reasoning", "reasoning": "hidden chain"} in message.content_blocks
 
 
 # ── credential forwarding ─────────────────────────────────────────────────────
