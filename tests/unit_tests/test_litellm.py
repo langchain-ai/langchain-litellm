@@ -633,3 +633,22 @@ def test_client_params_does_not_mutate_litellm_globals() -> None:
     assert params["api_key"] == "azure-key"
     assert params["organization"] == "my-org"
     assert params["extra_headers"] == {"X-Custom": "value"}
+
+
+# ── top_p / top_k reach the request (issue #226) ───────────────────────────────
+
+
+def test_top_p_and_top_k_are_sent_to_litellm() -> None:
+    """`top_p`/`top_k` must reach the outgoing request, not just validation/repr."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", top_p=0.9, top_k=40)
+    assert llm._default_params["top_p"] == 0.9
+    assert llm._default_params["top_k"] == 40
+    assert llm._client_params["top_p"] == 0.9
+    assert llm._client_params["top_k"] == 40
+
+
+def test_top_p_and_top_k_default_to_none() -> None:
+    """When unset, top_p/top_k should be present but None (litellm drops them)."""
+    llm = ChatLiteLLM(model="gpt-4o-mini")
+    assert llm._default_params["top_p"] is None
+    assert llm._default_params["top_k"] is None
