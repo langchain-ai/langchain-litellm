@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.7.0...langchain-litellm==0.7.1) (2026-08-31)
+
+
+### Bug Fixes
+
+* **litellm:** bump langchain-core ([#245](https://github.com/langchain-ai/langchain-litellm/issues/245)) ([060fe0c](https://github.com/langchain-ai/langchain-litellm/commit/060fe0c623b3d8ad53bd2b0c43877621065f201c))
+
 ## [0.7.0](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.6.6...langchain-litellm==0.7.0) (2026-06-15)
 
 
