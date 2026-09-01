@@ -554,6 +554,27 @@ def test_get_ls_params_sets_ls_provider() -> None:
     assert params["ls_model_name"] == "my-deployment"
 
 
+def test_get_ls_params_honors_per_call_model_override() -> None:
+    """A per-call `model` kwarg must be reflected in traces.
+
+    `_generate` merges per-call kwargs over the default params, so a `model`
+    passed via `bind` or `invoke` is the model actually requested. Reporting
+    the constructor default instead misattributes the run.
+    """
+    llm = ChatLiteLLM(model="gpt-4", api_key="fake")
+    assert llm._get_ls_params(model="gpt-4o-mini")["ls_model_name"] == "gpt-4o-mini"
+
+    # The override also wins over an explicitly configured model_name.
+    llm_with_name = ChatLiteLLM(
+        model="gpt-4", model_name="my-deployment", api_key="fake"
+    )
+    params = llm_with_name._get_ls_params(model="gpt-4o-mini")
+    assert params["ls_model_name"] == "gpt-4o-mini"
+
+    # Without an override the configured model_name is still used.
+    assert llm_with_name._get_ls_params()["ls_model_name"] == "my-deployment"
+
+
 def test_metadata_versions() -> None:
     """Test that metadata reports the correct version info."""
     llm = ChatLiteLLM(model="gpt-4", api_key="fake")

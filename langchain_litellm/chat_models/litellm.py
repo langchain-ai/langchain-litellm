@@ -1022,10 +1022,14 @@ class ChatLiteLLM(BaseChatModel):
         against ``ls_provider`` to decide whether reported token counts should be
         trusted. Without this override, ``ls_provider`` would be absent and that
         middleware check would always short-circuit.
+
+        ``ls_model_name`` resolves ``kwargs["model"]`` first because ``_generate``
+        merges per-call kwargs over the default params, so a ``model`` passed to
+        ``bind`` or ``invoke`` is the model actually requested.
         """
         params = super()._get_ls_params(stop=stop, **kwargs)
         params["ls_provider"] = "litellm"
-        params["ls_model_name"] = self.model_name or self.model
+        params["ls_model_name"] = kwargs.get("model") or self.model_name or self.model
         return params
 
     @property
