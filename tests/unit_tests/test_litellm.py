@@ -78,6 +78,63 @@ def test_convert_dict_to_tool_message() -> None:
     assert message.tool_call_id == "123"
 
 
+@pytest.fixture
+def _no_provider_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep key resolution independent of the developer's own environment."""
+    for var in (
+        "OPENAI_API_KEY",
+        "AZURE_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "REPLICATE_API_KEY",
+        "OPENROUTER_API_KEY",
+        "COHERE_API_KEY",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_provider_specific_api_key_is_forwarded(_no_provider_env: None) -> None:
+    """A key passed as `openai_api_key` must reach litellm.
+
+    Only the generic `api_key` was forwarded, so a provider-specific key was
+    accepted, stored, and then dropped before the request.
+    """
+    llm = ChatLiteLLM(model="gpt-4o", openai_api_key="sk-openai")
+    assert llm._client_params["api_key"] == "sk-openai"
+
+
+def test_explicit_api_key_takes_precedence(_no_provider_env: None) -> None:
+    """`api_key` still wins when both are supplied."""
+    llm = ChatLiteLLM(model="gpt-4o", api_key="sk-explicit", openai_api_key="sk-openai")
+    assert llm._client_params["api_key"] == "sk-explicit"
+
+
+def test_provider_specific_api_key_not_used_for_other_provider(
+    _no_provider_env: None,
+) -> None:
+    """A key is only forwarded to the provider it belongs to."""
+    llm = ChatLiteLLM(
+        model="openrouter/meta-llama/llama-3-8b-instruct",
+        openai_api_key="sk-openai",
+    )
+    assert llm._client_params["api_key"] is None
+
+
+def test_custom_llm_provider_selects_the_api_key(_no_provider_env: None) -> None:
+    """An explicit `custom_llm_provider` decides which field is used."""
+    llm = ChatLiteLLM(
+        model="my-proxy-deployment",
+        custom_llm_provider="anthropic",
+        anthropic_api_key="sk-anthropic",
+    )
+    assert llm._client_params["api_key"] == "sk-anthropic"
+
+
+def test_unattributable_model_leaves_api_key_unset(_no_provider_env: None) -> None:
+    """Models litellm cannot attribute fall back to the previous behaviour."""
+    llm = ChatLiteLLM(model="totally-made-up-model", openai_api_key="sk-openai")
+    assert llm._client_params["api_key"] is None
+
+
 def test_provider_specific_fields_in_delta() -> None:
     """Test that provider_specific_fields are preserved when converting deltas."""
     mock_delta = {
