@@ -1,13 +1,18 @@
+import importlib.util
 import sys
 import traceback
-from importlib.machinery import SourceFileLoader
+from pathlib import Path
 
 if __name__ == "__main__":
     files = sys.argv[1:]
     has_failure = False
     for file in files:
+        module_name = ".".join(Path(file).with_suffix("").parts)
         try:
-            SourceFileLoader("x", file).load_module()
+            spec = importlib.util.spec_from_file_location(module_name, file)
+            if spec is None or spec.loader is None:
+                raise ImportError(f"could not determine a loader for {file}")
+            spec.loader.exec_module(importlib.util.module_from_spec(spec))
         except Exception:
             has_failure = True
             print(file)  # noqa: T201
