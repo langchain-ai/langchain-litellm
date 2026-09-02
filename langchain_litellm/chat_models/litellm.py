@@ -87,6 +87,19 @@ from langchain_litellm._version import __version__
 
 logger = logging.getLogger(__name__)
 
+# Maps a litellm provider identifier to the ChatLiteLLM field holding that
+# provider's key. `get_llm_provider` reports Cohere chat models as
+# "cohere_chat", so both spellings resolve to the same field.
+_PROVIDER_API_KEY_FIELDS = {
+    "anthropic": "anthropic_api_key",
+    "azure": "azure_api_key",
+    "cohere": "cohere_api_key",
+    "cohere_chat": "cohere_api_key",
+    "openai": "openai_api_key",
+    "openrouter": "openrouter_api_key",
+    "replicate": "replicate_api_key",
+}
+
 
 class ChatLiteLLMException(Exception):
     """Exception raised for errors in the LiteLLM integration."""
@@ -475,13 +488,42 @@ class ChatLiteLLM(BaseChatModel):
             **self.model_kwargs,
         }
 
+    def _resolve_api_key(self) -> Optional[str]:
+        """Resolve the key to send to litellm.
+
+        ``api_key`` wins when set. Otherwise fall back to the provider-specific
+        field matching the model's provider, so a key supplied as, say,
+        ``openai_api_key`` is actually used rather than silently ignored.
+
+        Returns ``None`` when nothing is configured, leaving litellm to resolve
+        credentials from the environment exactly as before.
+        """
+        if self.api_key:
+            return self.api_key
+
+        provider = self.custom_llm_provider
+        if not provider:
+            model = self.model_name if self.model_name is not None else self.model
+            try:
+                _, provider, _, _ = litellm.get_llm_provider(model=model)
+            except Exception:
+                # litellm raises for model strings it cannot attribute. Defer to
+                # its own credential resolution rather than guessing a provider.
+                return None
+
+        field = _PROVIDER_API_KEY_FIELDS.get(provider or "")
+        if field is None:
+            return None
+        # validate_environment defaults these fields to "" rather than None.
+        return getattr(self, field, None) or None
+
     @property
     def _client_params(self) -> Dict[str, Any]:
         """Get the per-call parameters passed to litellm.completion."""
         creds: Dict[str, Any] = {
             "timeout": self.request_timeout,
             "api_base": self.api_base,
-            "api_key": self.api_key,
+            "api_key": self._resolve_api_key(),
             "organization": self.organization,
         }
         if self.extra_headers is not None:
