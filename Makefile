@@ -1,4 +1,6 @@
-.PHONY: all format lint test tests integration_tests docker_tests help extended_tests
+.PHONY: all help format format_diff lint lint_diff lint_package lint_tests \
+	test tests test_watch integration_test integration_tests \
+	spell_check spell_fix check_imports
 
 # Default target executed when no arguments are given to make.
 all: help
@@ -27,7 +29,7 @@ integration_test integration_tests:
 PYTHON_FILES=.
 MYPY_CACHE=.mypy_cache
 lint format: PYTHON_FILES=.
-lint_diff format_diff: PYTHON_FILES=$(shell git diff --relative=libs/partners/litellm --name-only --diff-filter=d master | grep -E '\.py$$|\.ipynb$$')
+lint_diff format_diff: PYTHON_FILES=$(shell git diff --name-only --diff-filter=d main | grep -E '\.py$$|\.ipynb$$')
 lint_package: PYTHON_FILES=langchain_litellm
 lint_tests: PYTHON_FILES=tests
 lint_tests: MYPY_CACHE=.mypy_cache_test
