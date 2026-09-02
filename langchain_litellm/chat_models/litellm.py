@@ -469,6 +469,8 @@ class ChatLiteLLM(BaseChatModel):
             "stream": self.streaming,
             "n": self.n,
             "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
             "custom_llm_provider": self.custom_llm_provider,
             "num_ctx": self.num_ctx,
             "base_model": self.base_model,
@@ -666,6 +668,7 @@ class ChatLiteLLM(BaseChatModel):
                 continue
 
             delta = chunk["choices"][0]["delta"]
+            finish_reason = chunk["choices"][0].get("finish_reason")
 
             # Inject Root Metadata into Delta
             root_metadata = chunk.get("provider_specific_fields")
@@ -687,6 +690,9 @@ class ChatLiteLLM(BaseChatModel):
                     "model_provider": "litellm",
                 }
                 first_chunk_yielded = True
+
+            if finish_reason is not None and isinstance(chunk, AIMessageChunk):
+                chunk.response_metadata["finish_reason"] = finish_reason
 
             default_chunk_class = chunk.__class__
             cg_chunk = ChatGenerationChunk(message=chunk)
@@ -735,6 +741,7 @@ class ChatLiteLLM(BaseChatModel):
                 continue
 
             delta = chunk["choices"][0]["delta"]
+            finish_reason = chunk["choices"][0].get("finish_reason")
 
             # Inject Root Metadata into Delta
             root_metadata = chunk.get("provider_specific_fields")
@@ -756,6 +763,9 @@ class ChatLiteLLM(BaseChatModel):
                     "model_provider": "litellm",
                 }
                 first_chunk_yielded = True
+
+            if finish_reason is not None and isinstance(chunk, AIMessageChunk):
+                chunk.response_metadata["finish_reason"] = finish_reason
 
             default_chunk_class = chunk.__class__
             cg_chunk = ChatGenerationChunk(message=chunk)
