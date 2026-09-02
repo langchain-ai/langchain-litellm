@@ -48,6 +48,7 @@ from langchain_core.messages import (
     FunctionMessageChunk,
     HumanMessage,
     HumanMessageChunk,
+    InvalidToolCall,
     SystemMessage,
     SystemMessageChunk,
     ToolCall,
@@ -59,6 +60,7 @@ from langchain_core.messages.ai import (
     OutputTokenDetails,
     UsageMetadata,
 )
+from langchain_core.messages.tool import invalid_tool_call
 from langchain_core.messages.utils import (
     convert_to_openai_data_block,
     is_data_content_block,
@@ -143,6 +145,7 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
 
         additional_kwargs = {}
         tool_calls = []
+        invalid_tool_calls: List[InvalidToolCall] = []
 
         if _dict.get("function_call"):
             additional_kwargs["function_call"] = dict(_dict["function_call"])
@@ -182,7 +185,20 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
                             try:
                                 func_args = json.loads(func_args)
                             except json.JSONDecodeError:
-                                pass  # Keep as string or empty if strictly required
+                                # Arguments that don't parse cannot be recovered,
+                                # so report the call as invalid rather than
+                                # dispatching the tool with no arguments. Matches
+                                # langchain_core's default_tool_parser, which keeps
+                                # the raw string for inspection.
+                                invalid_tool_calls.append(
+                                    invalid_tool_call(
+                                        name=func_name,
+                                        args=func_args,
+                                        id=tc_id,
+                                        error=None,
+                                    )
+                                )
+                                continue
 
                         # Ensure args is a dict (e.g., already parsed Dict from Vertex)
                         if not isinstance(func_args, dict):
@@ -212,7 +228,10 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
             additional_kwargs["provider_specific_fields"] = provider_specific_fields
 
         return AIMessage(
-            content=content, additional_kwargs=additional_kwargs, tool_calls=tool_calls
+            content=content,
+            additional_kwargs=additional_kwargs,
+            tool_calls=tool_calls,
+            invalid_tool_calls=invalid_tool_calls,
         )
 
     elif role == "system":

@@ -78,6 +78,72 @@ def test_convert_dict_to_tool_message() -> None:
     assert message.tool_call_id == "123"
 
 
+def test_malformed_tool_call_arguments_are_reported_as_invalid() -> None:
+    """Unparsable arguments must not become a tool call with empty args.
+
+    A truncated `arguments` string cannot be recovered. Returning it as a valid
+    tool call with `args={}` makes an agent invoke the tool with no input and
+    leaves it no way to detect the failure, so the call belongs in
+    `invalid_tool_calls` with the raw string kept for inspection.
+    """
+    raw_arguments = '{"city": "Par'
+    message = _convert_dict_to_message(
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": raw_arguments},
+                }
+            ],
+        }
+    )
+
+    assert isinstance(message, AIMessage)
+    assert message.tool_calls == []
+    assert len(message.invalid_tool_calls) == 1
+
+    invalid = message.invalid_tool_calls[0]
+    assert invalid["name"] == "get_weather"
+    assert invalid["args"] == raw_arguments
+    assert invalid["id"] == "call_1"
+
+
+def test_tool_calls_partition_valid_and_invalid_arguments() -> None:
+    """Valid calls in the same response are unaffected by an invalid sibling."""
+    message = _convert_dict_to_message(
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "ok",
+                    "type": "function",
+                    "function": {"name": "with_args", "arguments": '{"x": 1}'},
+                },
+                {
+                    "id": "bad",
+                    "type": "function",
+                    "function": {"name": "broken", "arguments": "{oops"},
+                },
+                {
+                    "id": "empty",
+                    "type": "function",
+                    "function": {"name": "no_args", "arguments": "{}"},
+                },
+            ],
+        }
+    )
+
+    assert isinstance(message, AIMessage)
+    assert [tc["name"] for tc in message.tool_calls] == ["with_args", "no_args"]
+    assert message.tool_calls[0]["args"] == {"x": 1}
+    assert message.tool_calls[1]["args"] == {}
+    assert [tc["name"] for tc in message.invalid_tool_calls] == ["broken"]
+
+
 def test_provider_specific_fields_in_delta() -> None:
     """Test that provider_specific_fields are preserved when converting deltas."""
     mock_delta = {
