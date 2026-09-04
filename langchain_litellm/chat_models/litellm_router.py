@@ -21,6 +21,7 @@ from langchain_litellm.chat_models.litellm import (
     ChatLiteLLM,
     _convert_delta_to_message_chunk,
     _convert_dict_to_message,
+    _create_retry_decorator,
     _create_usage_metadata,
 )
 
@@ -81,6 +82,44 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                 return
         raise ValueError(f"Model {model_name} not found in model_list.")
 
+    def completion_with_retry(
+        self, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any
+    ) -> Any:
+        """Use tenacity to retry the router completion call.
+
+        Note: `max_retries` here is independent of any retry/fallback
+        configuration (e.g. `num_retries`, `fallbacks`) set on the
+        underlying `litellm.Router` instance. If both are configured,
+        retries will stack.
+        """
+        retry_decorator = _create_retry_decorator(self, run_manager=run_manager)
+
+        @retry_decorator
+        def _completion_with_retry(**kwargs: Any) -> Any:
+            return self.router.completion(**kwargs)
+
+        return _completion_with_retry(**kwargs)
+
+    async def acompletion_with_retry(
+        self,
+        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Use tenacity to retry the async router completion call.
+
+        Note: `max_retries` here is independent of any retry/fallback
+        configuration (e.g. `num_retries`, `fallbacks`) set on the
+        underlying `litellm.Router` instance. If both are configured,
+        retries will stack.
+        """
+        retry_decorator = _create_retry_decorator(self, run_manager=run_manager)
+
+        @retry_decorator
+        async def _completion_with_retry(**kwargs: Any) -> Any:
+            return await self.router.acompletion(**kwargs)
+
+        return await _completion_with_retry(**kwargs)
+
     def _generate(
         self,
         messages: List[BaseMessage],
@@ -101,9 +140,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         params = {k: v for k, v in params.items() if v is not None}
         self._prepare_params_for_router(params)
 
-        response = self.router.completion(
-            messages=message_dicts,
-            **params,
+        response = self.completion_with_retry(
+            messages=message_dicts, run_manager=run_manager, **params
         )
         return self._create_chat_result(response, **params)
 
@@ -126,7 +164,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         self._prepare_params_for_router(params)
         first_chunk_yielded = False
 
-        for chunk in self.router.completion(messages=message_dicts, **params):
+        for chunk in self.completion_with_retry(
+            messages=message_dicts, run_manager=run_manager, **params):
             usage_metadata = None
             if "usage" in chunk and chunk["usage"]:
                 usage_metadata = _create_usage_metadata(chunk["usage"])
@@ -185,8 +224,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         self._prepare_params_for_router(params)
         first_chunk_yielded = False
 
-        async for chunk in await self.router.acompletion(
-            messages=message_dicts, **params
+        async for chunk in await self.acompletion_with_retry(
+            messages=message_dicts, run_manager=run_manager, **params
         ):
             # Parse usage metadata first
             usage_metadata = None
@@ -248,9 +287,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         params = {k: v for k, v in params.items() if v is not None}
         self._prepare_params_for_router(params)
 
-        response = await self.router.acompletion(
-            messages=message_dicts,
-            **params,
+        response = await self.acompletion_with_retry(
+            messages=message_dicts, run_manager=run_manager, **params
         )
         return self._create_chat_result(response, **params)
 
