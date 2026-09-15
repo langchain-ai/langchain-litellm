@@ -173,6 +173,7 @@ omit = ["tests/*"]
 
 [tool.codespell]
 skip = "*.lock"
+ignore-words-list = "hel"  # "hel" + "lo" is a streaming chunk split across two deltas in the tests
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
