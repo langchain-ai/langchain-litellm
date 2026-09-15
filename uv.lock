@@ -1610,7 +1610,6 @@ name = "langchain-litellm"
 version = "0.7.1"
 source = { editable = "." }
 dependencies = [
-    { name = "cryptography" },
     { name = "httpx" },
     { name = "langchain-core" },
     { name = "litellm" },
@@ -1665,7 +1664,6 @@ typing = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cryptography", specifier = ">=46.0.5,<51.0.0" },
     { name = "httpx", specifier = ">=0.28.1,<0.29.0" },
     { name = "langchain-core", specifier = ">=1.6.1,<2.0.0" },
     { name = "litellm", specifier = "!=1.82.7,!=1.82.8,>=1.83.14,<2.0.0" },
