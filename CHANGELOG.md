@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.2](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.7.1...langchain-litellm==0.7.2) (2026-09-16)
+
+
+### Bug Fixes
+
+* **deps:** drop the unused cryptography dependency ([#267](https://github.com/langchain-ai/langchain-litellm/issues/267)) ([8aa4fc6](https://github.com/langchain-ai/langchain-litellm/commit/8aa4fc6664a1f790082093a2cc8b2d3dc05bd2dd))
+
 ## [0.7.1](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.7.0...langchain-litellm==0.7.1) (2026-08-31)
 
 
