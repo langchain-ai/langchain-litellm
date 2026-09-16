@@ -3,7 +3,7 @@
 # stdlib
 import logging
 from typing import Any, Dict, Optional, Union
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 # third-party
 import litellm
@@ -633,3 +633,85 @@ def test_client_params_does_not_mutate_litellm_globals() -> None:
     assert params["api_key"] == "azure-key"
     assert params["organization"] == "my-org"
     assert params["extra_headers"] == {"X-Custom": "value"}
+
+
+# ── top_p / top_k reach the request (issue #226) ───────────────────────────────
+
+
+def test_top_p_and_top_k_are_sent_to_litellm() -> None:
+    """`top_p`/`top_k` must reach the outgoing request, not just validation/repr."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", top_p=0.9, top_k=40)
+    assert llm._default_params["top_p"] == 0.9
+    assert llm._default_params["top_k"] == 40
+    assert llm._client_params["top_p"] == 0.9
+    assert llm._client_params["top_k"] == 40
+
+
+def test_top_p_and_top_k_default_to_none() -> None:
+    """When unset, top_p/top_k should be present but None (litellm drops them)."""
+    llm = ChatLiteLLM(model="gpt-4o-mini")
+    assert llm._default_params["top_p"] is None
+    assert llm._default_params["top_k"] is None
+
+
+# ── finish_reason missing from streaming response_metadata (issue #215) ────────
+
+
+def test_stream_sets_finish_reason_in_response_metadata() -> None:
+    """The chunk carrying finish_reason must surface it in response_metadata."""
+    llm = ChatLiteLLM(model="gpt-4", api_key="fake")
+    fake_chunks = [
+        {
+            "choices": [{"delta": {"role": "assistant", "content": "hel"}}],
+            "usage": None,
+        },
+        {
+            "choices": [{"delta": {"content": "lo"}, "finish_reason": "stop"}],
+            "usage": None,
+        },
+        {
+            "choices": [],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        },
+    ]
+
+    with patch.object(
+        ChatLiteLLM, "completion_with_retry", return_value=iter(fake_chunks)
+    ):
+        chunks = list(llm._stream([]))
+
+    assert chunks[0].message.response_metadata.get("finish_reason") is None
+    assert chunks[1].message.response_metadata.get("finish_reason") == "stop"
+
+
+async def test_astream_sets_finish_reason_in_response_metadata() -> None:
+    """Async streaming must also surface finish_reason in response_metadata."""
+    llm = ChatLiteLLM(model="gpt-4", api_key="fake")
+    fake_chunks = [
+        {
+            "choices": [{"delta": {"role": "assistant", "content": "hel"}}],
+            "usage": None,
+        },
+        {
+            "choices": [{"delta": {"content": "lo"}, "finish_reason": "stop"}],
+            "usage": None,
+        },
+        {
+            "choices": [],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        },
+    ]
+
+    async def _fake_async_stream():
+        for c in fake_chunks:
+            yield c
+
+    with patch.object(
+        ChatLiteLLM,
+        "acompletion_with_retry",
+        new=AsyncMock(return_value=_fake_async_stream()),
+    ):
+        chunks = [chunk async for chunk in llm._astream([])]
+
+    assert chunks[0].message.response_metadata.get("finish_reason") is None
+    assert chunks[1].message.response_metadata.get("finish_reason") == "stop"
