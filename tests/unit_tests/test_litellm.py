@@ -650,4 +650,3 @@ def test_top_p_and_top_k_in_default_params() -> None:
     client_params = llm._client_params
     assert client_params["top_p"] == 0.8
     assert client_params["top_k"] == 40
-
