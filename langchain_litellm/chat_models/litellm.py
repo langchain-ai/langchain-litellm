@@ -394,6 +394,13 @@ class ChatLiteLLM(BaseChatModel):
     api_key: Optional[str] = None
     streaming: bool = False
     api_base: Optional[str] = None
+    """Endpoint override for the upstream provider.
+
+    Also accepts ``base_url`` as an alias (normalized in ``validate_environment``)
+    for consistency with the rest of the LangChain ecosystem (e.g. ``ChatOpenAI``,
+    ``ChatAnthropic``) and with ``init_chat_model(..., base_url=...)``. A non-None
+    ``api_base`` wins; ``base_url`` fills in when ``api_base`` is unset or None,
+    so a config built from ``os.getenv`` still reaches the endpoint."""
     organization: Optional[str] = None
     custom_llm_provider: Optional[str] = None
     base_model: Optional[str] = None
@@ -440,6 +447,8 @@ class ChatLiteLLM(BaseChatModel):
             "stream": self.streaming,
             "n": self.n,
             "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
             "custom_llm_provider": self.custom_llm_provider,
             "num_ctx": self.num_ctx,
             "base_model": self.base_model,
@@ -492,6 +501,14 @@ class ChatLiteLLM(BaseChatModel):
     @pre_init
     def validate_environment(cls, values: Dict) -> Dict:
         """Validate api key, python package exists, temperature, top_p, and top_k."""
+        # Accept `base_url` as an alias for `api_base` for cross-provider
+        # consistency (e.g. `init_chat_model(..., base_url=...)`). Without this,
+        # `base_url` is silently dropped by Pydantic's `extra="ignore"`. The
+        # explicit `api_base` takes precedence when both are provided.
+        base_url = values.pop("base_url", None)
+        if base_url is not None and values.get("api_base") is None:
+            values["api_base"] = base_url
+
         values["openai_api_key"] = get_from_dict_or_env(
             values, "openai_api_key", "OPENAI_API_KEY", default=""
         )

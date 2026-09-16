@@ -48,6 +48,36 @@ class TestLiteLLMEmbeddingsParams:
         assert params["dimensions"] == 256
         assert params["timeout"] == 30.0
 
+    def test_base_url_alias_sets_api_base(self):
+        """Test that base_url is accepted as an alias for api_base."""
+        embeddings = LiteLLMEmbeddings(
+            model="openai/text-embedding-3-small",
+            api_key="fake-key",
+            base_url="https://proxy.example/v1",  # type: ignore[call-arg]
+        )
+        assert embeddings.api_base == "https://proxy.example/v1"
+
+    def test_api_base_takes_precedence_over_base_url(self):
+        """Test that api_base wins when both endpoint names are supplied."""
+        embeddings = LiteLLMEmbeddings(
+            model="openai/text-embedding-3-small",
+            api_key="fake-key",
+            api_base="https://explicit.example/v1",
+            base_url="https://alias.example/v1",  # type: ignore[call-arg]
+        )
+        assert embeddings.api_base == "https://explicit.example/v1"
+
+    def test_base_url_forwarded_to_litellm_params_once(self):
+        """Test that the alias reaches litellm.embedding as api_base."""
+        embeddings = LiteLLMEmbeddings(
+            model="openai/text-embedding-3-small",
+            api_key="fake-key",
+            base_url="https://proxy.example/v1",  # type: ignore[call-arg]
+        )
+        params = embeddings._get_litellm_params()
+        assert params["api_base"] == "https://proxy.example/v1"
+        assert params["api_base"].count("/v1") == 1
+
     def test_none_params_excluded(self):
         """Test that None-valued params are excluded from the litellm call."""
         embeddings = LiteLLMEmbeddings(

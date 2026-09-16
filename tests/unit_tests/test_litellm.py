@@ -8,6 +8,7 @@ from unittest.mock import patch
 # third-party
 import litellm
 import pytest
+from langchain.chat_models import init_chat_model
 from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langchain_core.runnables import RunnableLambda
@@ -645,3 +646,131 @@ def test_client_params_does_not_mutate_litellm_globals() -> None:
     assert params["api_key"] == "azure-key"
     assert params["organization"] == "my-org"
     assert params["extra_headers"] == {"X-Custom": "value"}
+
+
+def test_top_p_and_top_k_in_default_params() -> None:
+    """Test that top_p and top_k are included in _default_params and _client_params."""
+    llm = ChatLiteLLM(
+        model="gpt-4",
+        api_key="fake",
+        top_p=0.8,
+        top_k=40,
+    )
+    params = llm._default_params
+    assert params["top_p"] == 0.8
+    assert params["top_k"] == 40
+
+    client_params = llm._client_params
+    assert client_params["top_p"] == 0.8
+    assert client_params["top_k"] == 40
+
+
+def test_top_p_and_top_k_default_to_none() -> None:
+    """When unset, top_p/top_k should be present but None (litellm drops them)."""
+    llm = ChatLiteLLM(model="gpt-4o-mini")
+    assert llm._default_params["top_p"] is None
+    assert llm._default_params["top_k"] is None
+
+
+# ── base_url / api_base alias ──────────────────────────────────────────────────
+
+
+def test_base_url_alias_sets_api_base() -> None:
+    """`base_url=` must populate `api_base`, matching the rest of the ecosystem.
+
+    Regression for #189: previously `base_url` was silently dropped by Pydantic's
+    `extra="ignore"`, so the endpoint override was never applied.
+    """
+    # `base_url` is a runtime alias normalized in `validate_environment`, not a
+    # declared field, hence the `call-arg` ignore.
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="fake",
+        base_url="https://proxy.example/v1",  # type: ignore[call-arg]
+    )
+    assert llm.api_base == "https://proxy.example/v1"
+
+
+def test_api_base_still_supported() -> None:
+    """`api_base=` must keep working for existing callers (non-breaking)."""
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini", api_key="fake", api_base="https://legacy.example/v1"
+    )
+    assert llm.api_base == "https://legacy.example/v1"
+
+
+def test_api_base_takes_precedence_over_base_url() -> None:
+    """When both are supplied, the explicit `api_base` wins.
+
+    Covers the precedence branch in `validate_environment` (#189): `base_url` is
+    only applied when `api_base` is unset, so the canonical field always wins.
+    """
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="fake",
+        api_base="https://explicit.example/v1",
+        base_url="https://alias.example/v1",  # type: ignore[call-arg]
+    )
+    assert llm.api_base == "https://explicit.example/v1"
+
+
+def test_base_url_reaches_completion_call_once() -> None:
+    """The configured endpoint must reach the underlying completion call once.
+
+    Regression for #189: `base_url` is normalized to `api_base` and must be
+    forwarded to `litellm.completion` as `api_base` on a single call, with the
+    value unchanged (no duplication such as ``/v1/v1``).
+    """
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="fake",
+        base_url="https://proxy.example/v1",  # type: ignore[call-arg]
+    )
+    mock_response = {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    # Patch at the litellm boundary, not at `completion_with_retry`, which is the
+    # method that calls it -- otherwise the retry path is never exercised and the
+    # endpoint is never seen at the point it is actually sent.
+    with patch.object(
+        llm.client, "completion", return_value=mock_response
+    ) as mock_completion:
+        llm.invoke("hi")
+
+    mock_completion.assert_called_once()
+    assert mock_completion.call_args.kwargs["api_base"] == "https://proxy.example/v1"
+
+
+def test_init_chat_model_forwards_base_url() -> None:
+    """The generic factory path must forward `base_url` to LiteLLM.
+
+    `init_chat_model(model_provider="litellm", base_url=...)` is the exact path
+    from #189, since its docstring lists `base_url` as the common endpoint kwarg.
+
+    Skips (rather than fails) if a future `langchain` changes how the "litellm"
+    provider resolves, so this test stays a signal about *this* package's code
+    and not about the external provider registry.
+    """
+    # Resolve the provider first, without the kwarg under test. A failure here is
+    # about the external registry, so it skips; anything raised once base_url is
+    # added is this package's and must fail.
+    try:
+        init_chat_model("gpt-4o-mini", model_provider="litellm", api_key="fake")
+    except (ImportError, ValueError) as exc:
+        pytest.skip(f"init_chat_model could not resolve the litellm provider: {exc}")
+
+    llm = init_chat_model(
+        "gpt-4o-mini",
+        model_provider="litellm",
+        api_key="fake",
+        base_url="https://proxy.example/v1",
+    )
+
+    assert isinstance(llm, ChatLiteLLM)
+    assert llm.api_base == "https://proxy.example/v1"
