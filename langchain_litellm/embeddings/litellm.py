@@ -6,7 +6,7 @@ import logging
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 from langchain_core.embeddings import Embeddings
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,11 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
     """API key for the provider."""
 
     api_base: Optional[str] = None
-    """Base URL for the API endpoint."""
+    """Base URL for the API endpoint.
+
+    Also accepts ``base_url`` as an alias. A non-None ``api_base`` wins;
+    ``base_url`` fills in when ``api_base`` is unset or None, so a config built
+    from ``os.getenv`` still reaches the endpoint."""
 
     api_version: Optional[str] = None
     """API version (e.g. for Azure)."""
@@ -105,6 +109,25 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
     """Input type to send when embedding queries (e.g. 'search_query'
     for Cohere, 'RETRIEVAL_QUERY' for Vertex AI). When set,
     ``embed_query`` passes this as ``input_type``."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_base_url_alias(cls, values: Any) -> Any:
+        """Accept base_url as a runtime alias for api_base.
+
+        Keyed on the VALUE, not key presence: ``api_base=None`` is the field's
+        own default, so treating it as "supplied" would silently drop base_url
+        for every config assembled from ``os.getenv``.
+        """
+        if not isinstance(values, dict):
+            return values
+
+        # Copy before popping: the caller still owns the dict they passed.
+        values = dict(values)
+        base_url = values.pop("base_url", None)
+        if base_url is not None and values.get("api_base") is None:
+            values["api_base"] = base_url
+        return values
 
     def _get_litellm_params(
         self, *, input_type: Optional[str] = None
