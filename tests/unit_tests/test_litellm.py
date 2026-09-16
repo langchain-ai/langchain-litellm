@@ -723,8 +723,11 @@ def test_base_url_reaches_completion_call_once() -> None:
         ],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     }
+    # Patch at the litellm boundary, not at `completion_with_retry`, which is the
+    # method that calls it -- otherwise the retry path is never exercised and the
+    # endpoint is never seen at the point it is actually sent.
     with patch.object(
-        ChatLiteLLM, "completion_with_retry", return_value=mock_response
+        llm.client, "completion", return_value=mock_response
     ) as mock_completion:
         llm.invoke("hi")
 
