@@ -427,8 +427,9 @@ class ChatLiteLLM(BaseChatModel):
 
     Also accepts ``base_url`` as an alias (normalized in ``validate_environment``)
     for consistency with the rest of the LangChain ecosystem (e.g. ``ChatOpenAI``,
-    ``ChatAnthropic``) and with ``init_chat_model(..., base_url=...)``. When both
-    are supplied, the explicit ``api_base`` wins."""
+    ``ChatAnthropic``) and with ``init_chat_model(..., base_url=...)``. A non-None
+    ``api_base`` wins; ``base_url`` fills in when ``api_base`` is unset or None,
+    so a config built from ``os.getenv`` still reaches the endpoint."""
     organization: Optional[str] = None
     custom_llm_provider: Optional[str] = None
     base_model: Optional[str] = None

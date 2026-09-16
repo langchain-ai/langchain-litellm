@@ -742,15 +742,20 @@ def test_init_chat_model_forwards_base_url() -> None:
     provider resolves, so this test stays a signal about *this* package's code
     and not about the external provider registry.
     """
+    # Resolve the provider first, without the kwarg under test. A failure here is
+    # about the external registry, so it skips; anything raised once base_url is
+    # added is this package's and must fail.
     try:
-        llm = init_chat_model(
-            "gpt-4o-mini",
-            model_provider="litellm",
-            api_key="fake",
-            base_url="https://proxy.example/v1",
-        )
+        init_chat_model("gpt-4o-mini", model_provider="litellm", api_key="fake")
     except (ImportError, ValueError) as exc:
         pytest.skip(f"init_chat_model could not resolve the litellm provider: {exc}")
+
+    llm = init_chat_model(
+        "gpt-4o-mini",
+        model_provider="litellm",
+        api_key="fake",
+        base_url="https://proxy.example/v1",
+    )
 
     assert isinstance(llm, ChatLiteLLM)
     assert llm.api_base == "https://proxy.example/v1"
