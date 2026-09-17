@@ -370,7 +370,11 @@ def _convert_message_to_dict(message: BaseMessage) -> Dict[str, Any]:
             message_dict["tool_calls"] = [
                 _lc_tool_call_to_openai_tool_call(tc) for tc in message.tool_calls
             ]
-        elif "tool_calls" in message.additional_kwargs:
+        # A call that failed to parse was never dispatched, so it must not go back:
+        # the provider fails the same parse on the same raw arguments.
+        elif (
+            "tool_calls" in message.additional_kwargs and not message.invalid_tool_calls
+        ):
             message_dict["tool_calls"] = message.additional_kwargs["tool_calls"]
         # Forward reasoning_content so LiteLLM can inject thinking blocks for
         # Anthropic while leaving OpenAI-bound messages clean.
