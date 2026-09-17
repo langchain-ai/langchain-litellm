@@ -731,11 +731,30 @@ def test_top_p_and_top_k_in_default_params() -> None:
     assert client_params["top_k"] == 40
 
 
-def test_top_p_and_top_k_default_to_none() -> None:
-    """When unset, top_p/top_k should be present but None (litellm drops them)."""
-    llm = ChatLiteLLM(model="gpt-4o-mini")
-    assert llm._default_params["top_p"] is None
-    assert llm._default_params["top_k"] is None
+def test_unset_top_p_and_top_k_are_absent_from_the_request() -> None:
+    """litellm rejects `top_k` for watsonx on key presence, not on its value.
+
+    Sending it as None fails every watsonx call before the request is built, from
+    callers that never touched the parameter.
+    """
+    llm = ChatLiteLLM(model="watsonx/ibm/granite-13b")
+    assert "top_p" not in llm._default_params
+    assert "top_k" not in llm._default_params
+
+
+def test_watsonx_accepts_what_this_model_sends_for_top_k() -> None:
+    """The rejection lives in litellm, so pin it there rather than trusting a key."""
+    llm = ChatLiteLLM(model="watsonx/ibm/granite-13b")
+
+    with pytest.raises(ValueError, match="top_k"):
+        litellm.utils.get_optional_params(
+            model="ibm/granite-13b", custom_llm_provider="watsonx", top_k=None
+        )
+    litellm.utils.get_optional_params(
+        model="ibm/granite-13b",
+        custom_llm_provider="watsonx",
+        **{k: v for k, v in llm._default_params.items() if k in ("top_p", "top_k")},
+    )
 
 
 # ── base_url / api_base alias ──────────────────────────────────────────────────
