@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import mimetypes
+import os
 import time
 from pathlib import Path
-import os
 from typing import Any, Dict, Iterator, List, Literal, Optional
 
 import httpx
