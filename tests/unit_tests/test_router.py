@@ -17,6 +17,88 @@ def _rate_limit_error() -> litellm.RateLimitError:
     )
 
 
+_ROUTER_OK = {
+    "choices": [
+        {"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+    ],
+}
+
+
+def _router_usage() -> dict:
+    from litellm.utils import Usage
+
+    return {
+        **_ROUTER_OK,
+        "usage": Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    }
+
+
+def test_router_forwards_explicitly_configured_connector_params() -> None:
+    """A connector-level endpoint is the caller's choice and must reach litellm.
+
+    #200/#203 added the `base_url` alias for exactly this, so dropping it would make
+    a router built with `base_url=...` silently ignore it. Only an INFERRED
+    credential is withheld, which `_resolve_api_key` handles.
+    """
+    llm = ChatLiteLLMRouter(
+        router=make_router(),
+        base_url="https://proxy.internal/v1",  # type: ignore[call-arg]
+        organization="org-ACME",
+        extra_headers={"X-Team": "platform"},
+    )
+
+    with patch.object(
+        llm.router, "completion", return_value=_router_usage()
+    ) as mock_completion:
+        llm.invoke("hi")
+
+    kwargs = mock_completion.call_args.kwargs
+    assert kwargs["api_base"] == "https://proxy.internal/v1"
+    assert kwargs["organization"] == "org-ACME"
+    assert kwargs["extra_headers"] == {"X-Team": "platform"}
+
+
+def test_router_forwards_a_per_call_api_base() -> None:
+    """A caller who wants one destination for this call still gets it."""
+    llm = ChatLiteLLMRouter(router=make_router(), api_base="https://connector/v1")
+
+    with patch.object(
+        llm.router, "completion", return_value=_router_usage()
+    ) as mock_completion:
+        llm.invoke("hi", api_base="https://for-this-call/v1")
+
+    assert mock_completion.call_args.kwargs["api_base"] == "https://for-this-call/v1"
+
+
+def test_router_does_not_forward_an_ambient_provider_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A router deployment's own credential must not be overridden.
+
+    `validate_environment` fills `openai_api_key` from the environment even when
+    the caller passes nothing, and `ChatLiteLLMRouter` inherits `_client_params`.
+    Forwarding that value would reach litellm as a clientside credential and take
+    precedence over the key configured on the deployment itself.
+    """
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-ambient-openai")
+    llm = ChatLiteLLMRouter(router=make_router())
+
+    from litellm.utils import Usage
+
+    mock_response = {
+        "choices": [
+            {"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+        ],
+        "usage": Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    }
+    with patch.object(
+        llm.router, "completion", return_value=mock_response
+    ) as mock_completion:
+        llm.invoke("hi")
+
+    assert mock_completion.call_args.kwargs.get("api_key") is None
+
+
 def test_router_provider_specific_fields_in_chat_result() -> None:
     """Test that Router preserves top-level provider_specific_fields."""
     router = make_router()
@@ -156,12 +238,15 @@ def test_router_base_url_alias_reaches_completion() -> None:
     # Assert 1: The inherited validator normalized base_url into api_base
     assert chat_router.api_base == "https://proxy.example/v1"
 
-    # Assert 2: The override survives _prepare_params_for_router stripping logic
-    params = {"api_base": chat_router.api_base, "model": "gpt-3.5-turbo"}
-    chat_router._prepare_params_for_router(params)
+    # Assert 2: it survives all the way to the outbound call, not just to
+    # _prepare_params_for_router. Asserting on that helper alone left this green
+    # while an override upstream was discarding the value.
+    with patch.object(
+        chat_router.router, "completion", return_value=_router_usage()
+    ) as mock_completion:
+        chat_router.invoke("hi")
 
-    assert "api_base" in params
-    assert params["api_base"] == "https://proxy.example/v1"
+    assert mock_completion.call_args.kwargs["api_base"] == "https://proxy.example/v1"
 
 
 def test_router_generate_honours_max_retries() -> None:
