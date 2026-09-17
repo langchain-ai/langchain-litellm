@@ -111,6 +111,54 @@ def test_malformed_tool_call_arguments_are_reported_as_invalid() -> None:
     assert invalid["id"] == "call_1"
 
 
+def test_unparsable_tool_calls_are_not_echoed_back() -> None:
+    """A call that never parsed was never dispatched, so nothing can answer it.
+
+    Sending the raw arguments back makes the provider fail the same parse, which
+    breaks the recovery turn that reporting the call as invalid exists to enable.
+    """
+    message = _convert_dict_to_message(
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "bad",
+                    "type": "function",
+                    "function": {"name": "broken", "arguments": '{"city": "Par'},
+                }
+            ],
+        }
+    )
+
+    assert "tool_calls" not in _convert_message_to_dict(message)
+
+
+def test_valid_tool_calls_survive_an_invalid_sibling_in_the_request() -> None:
+    """Dropping the unparsable call must not drop the ones that did parse."""
+    message = _convert_dict_to_message(
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "ok",
+                    "type": "function",
+                    "function": {"name": "with_args", "arguments": '{"x": 1}'},
+                },
+                {
+                    "id": "bad",
+                    "type": "function",
+                    "function": {"name": "broken", "arguments": "{oops"},
+                },
+            ],
+        }
+    )
+
+    sent = _convert_message_to_dict(message)["tool_calls"]
+    assert [tc["function"]["name"] for tc in sent] == ["with_args"]
+
+
 def test_tool_calls_partition_valid_and_invalid_arguments() -> None:
     """Valid calls in the same response are unaffected by an invalid sibling."""
     message = _convert_dict_to_message(
