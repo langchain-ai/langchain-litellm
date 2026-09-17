@@ -267,3 +267,62 @@ def test_router_generate_no_retry_on_success() -> None:
 
     assert mock_completion.call_count == 1
     assert result.content == "hello"
+
+
+def _usage_response() -> dict:
+    from litellm.utils import Usage
+
+    return {
+        "choices": [
+            {"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+        ],
+        "usage": Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    }
+
+
+def test_router_set_default_model_changes_the_model_sent() -> None:
+    """`_default_params` prefers `model_name`, so setting only `model` had no effect."""
+    llm = ChatLiteLLMRouter(router=make_router())
+
+    with patch.object(
+        llm.router, "completion", return_value=_usage_response()
+    ) as first:
+        llm.invoke("hi")
+    llm.set_default_model("gpt-3.5-turbo")
+    with patch.object(
+        llm.router, "completion", return_value=_usage_response()
+    ) as second:
+        llm.invoke("hi")
+
+    assert first.call_args.kwargs["model"] == "gpt-4"
+    assert second.call_args.kwargs["model"] == "gpt-3.5-turbo"
+
+
+def test_router_is_claude_model_reads_the_deployment() -> None:
+    """The Router alias need not contain the provider's model name at all."""
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-alias",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-5-sonnet-20241022",
+                    "api_key": "sk-x",
+                },
+            }
+        ]
+    )
+    llm = ChatLiteLLMRouter(router=router)
+    assert llm._is_claude_model() is True
+
+    assert ChatLiteLLMRouter(router=make_router())._is_claude_model() is False
+
+
+def test_router_combine_llm_outputs_accepts_a_plain_dict_usage() -> None:
+    """`_create_chat_result` passes `response["usage"]` through unchanged."""
+    llm = ChatLiteLLMRouter(router=make_router())
+    combined = llm._combine_llm_outputs(
+        [{"token_usage": {"total_tokens": 3}, "model": "gpt-4"}]
+    )
+    assert combined["token_usage"]["total_tokens"] == 3

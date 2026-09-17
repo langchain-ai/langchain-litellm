@@ -404,13 +404,13 @@ class ChatLiteLLM(BaseChatModel):
     model_name: Optional[str] = None
     stream_options: Optional[Dict[str, Any]] = None
     """Model name to use."""
-    openai_api_key: Optional[str] = None
-    azure_api_key: Optional[str] = None
-    anthropic_api_key: Optional[str] = None
-    replicate_api_key: Optional[str] = None
-    cohere_api_key: Optional[str] = None
-    openrouter_api_key: Optional[str] = None
-    api_key: Optional[str] = None
+    openai_api_key: Optional[str] = Field(default=None, repr=False)
+    azure_api_key: Optional[str] = Field(default=None, repr=False)
+    anthropic_api_key: Optional[str] = Field(default=None, repr=False)
+    replicate_api_key: Optional[str] = Field(default=None, repr=False)
+    cohere_api_key: Optional[str] = Field(default=None, repr=False)
+    openrouter_api_key: Optional[str] = Field(default=None, repr=False)
+    api_key: Optional[str] = Field(default=None, repr=False)
     streaming: bool = False
     api_base: Optional[str] = None
     """Endpoint override for the upstream provider.
@@ -471,7 +471,12 @@ class ChatLiteLLM(BaseChatModel):
             "custom_llm_provider": self.custom_llm_provider,
             "num_ctx": self.num_ctx,
             "base_model": self.base_model,
-            **self.model_kwargs,
+            # Copy nested containers: a caller mutating the returned params must
+            # not reach back into this instance's model_kwargs.
+            **{
+                key: value.copy() if isinstance(value, (dict, list)) else value
+                for key, value in self.model_kwargs.items()
+            },
         }
 
     @property
@@ -516,6 +521,19 @@ class ChatLiteLLM(BaseChatModel):
         """Set package version in metadata."""
         self._add_version("langchain-litellm", __version__)
         return self
+
+    def __init__(self, **kwargs: Any) -> None:
+        """Record which fields the caller actually supplied.
+
+        ``@pre_init`` hands pydantic a dict already populated with every default, so
+        pydantic marks all of them as explicitly set. langchain-core reads
+        ``model_fields_set`` to tell a deliberate ``streaming=False`` — a hard opt-out
+        that overrides even ``stream=True`` — from a default nobody chose, so without
+        this ``.stream()`` and ``.astream()`` never stream.
+        """
+        supplied = set(kwargs) & set(type(self).model_fields)
+        super().__init__(**kwargs)
+        object.__setattr__(self, "__pydantic_fields_set__", supplied)
 
     @pre_init
     def validate_environment(cls, values: Dict) -> Dict:
@@ -582,6 +600,9 @@ class ChatLiteLLM(BaseChatModel):
 
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs}
+        # This branch parses a mapping, so it must not inherit stream=True from a
+        # streaming=True instance that the caller overrode with stream=False.
+        params["stream"] = False
         response = self.completion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
         )
@@ -640,10 +661,12 @@ class ChatLiteLLM(BaseChatModel):
     ) -> Iterator[ChatGenerationChunk]:
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs, "stream": True}
-        if self.stream_options is not None:
-            params["stream_options"] = self.stream_options
-        else:
-            params["stream_options"] = {"include_usage": True}
+        if "stream_options" not in kwargs:
+            params["stream_options"] = (
+                self.stream_options
+                if self.stream_options is not None
+                else {"include_usage": True}
+            )
         default_chunk_class = AIMessageChunk
         first_chunk_yielded = False
 
@@ -710,10 +733,12 @@ class ChatLiteLLM(BaseChatModel):
     ) -> AsyncIterator[ChatGenerationChunk]:
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs, "stream": True}
-        if self.stream_options is not None:
-            params["stream_options"] = self.stream_options
-        else:
-            params["stream_options"] = {"include_usage": True}
+        if "stream_options" not in kwargs:
+            params["stream_options"] = (
+                self.stream_options
+                if self.stream_options is not None
+                else {"include_usage": True}
+            )
         default_chunk_class = AIMessageChunk
         first_chunk_yielded = False
 
@@ -787,6 +812,9 @@ class ChatLiteLLM(BaseChatModel):
 
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs}
+        # This branch parses a mapping, so it must not inherit stream=True from a
+        # streaming=True instance that the caller overrode with stream=False.
+        params["stream"] = False
         response = await self.acompletion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
         )
@@ -1032,7 +1060,9 @@ class ChatLiteLLM(BaseChatModel):
         """
         params = super()._get_ls_params(stop=stop, **kwargs)
         params["ls_provider"] = "litellm"
-        params["ls_model_name"] = self.model_name or self.model
+        # A per-call override is what actually reaches litellm, so it is what the
+        # trace should name.
+        params["ls_model_name"] = kwargs.get("model") or self.model_name or self.model
         return params
 
     @property

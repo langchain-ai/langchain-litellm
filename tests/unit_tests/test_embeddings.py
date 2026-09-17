@@ -246,3 +246,22 @@ class TestLiteLLMEmbeddingsParams:
 
         call_kwargs = mock_embedding.call_args[1]
         assert "input_type" not in call_kwargs
+
+
+def test_unknown_constructor_kwargs_are_rejected() -> None:
+    """A credential the caller believes is set must never vanish silently.
+
+    `LiteLLMEmbeddings` has no provider-scoped `*_api_key` fields, so a name like
+    `openai_api_key` was accepted by pydantic and then dropped. Provider-specific
+    values belong in `model_kwargs`.
+    """
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        LiteLLMEmbeddings(
+            model="text-embedding-3-small",
+            openai_api_key="sk-openai",  # type: ignore[call-arg]
+        )
+
+    # A declared field is of course still accepted.
+    assert LiteLLMEmbeddings(model="text-embedding-3-small", api_key="sk-x").api_key

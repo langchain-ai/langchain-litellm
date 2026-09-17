@@ -840,3 +840,89 @@ def test_init_chat_model_forwards_base_url() -> None:
 
     assert isinstance(llm, ChatLiteLLM)
     assert llm.api_base == "https://proxy.example/v1"
+
+
+_STREAM_MOCK_OK = {
+    "choices": [
+        {"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+    ],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+def test_stream_actually_streams_without_opting_in() -> None:
+    """`.stream()` must reach `_stream` for a caller who never mentioned streaming.
+
+    `@pre_init` hands pydantic a fully-populated dict, so every field read as
+    explicitly set. langchain-core treats an explicitly-set `streaming=False` as a
+    hard opt-out that overrides even the `stream=True` its own `.stream()` passes,
+    so `.stream()` silently fell back to `invoke()`.
+    """
+    llm = ChatLiteLLM(model="gpt-4o", api_key="k")
+    assert "streaming" not in llm.model_fields_set
+    assert llm._should_stream(async_api=False, stream=True) is True
+
+
+def test_explicit_streaming_false_still_opts_out() -> None:
+    """A caller who deliberately says `streaming=False` keeps the hard opt-out."""
+    llm = ChatLiteLLM(model="gpt-4o", api_key="k", streaming=False)
+    assert "streaming" in llm.model_fields_set
+    assert llm._should_stream(async_api=False, stream=True) is False
+
+
+def test_fields_set_reflects_only_what_the_caller_passed() -> None:
+    """`model_fields_set` is what langchain-core reads to tell intent from default."""
+    llm = ChatLiteLLM(model="gpt-4o", api_key="k")
+    assert llm.model_fields_set == {"model", "api_key"}
+
+
+def test_stream_false_is_not_overridden_by_a_streaming_instance() -> None:
+    """The non-streaming branch parses a mapping, so it must send stream=False."""
+    llm = ChatLiteLLM(model="gpt-4o", api_key="k", streaming=True)
+
+    with patch.object(
+        llm.client, "completion", return_value=_STREAM_MOCK_OK
+    ) as mock_completion:
+        llm.invoke("hi", stream=False)
+
+    assert mock_completion.call_args.kwargs["stream"] is False
+
+
+def test_per_call_stream_options_are_not_discarded() -> None:
+    """`_stream` overwrote a per-call value with the instance one or the default."""
+    llm = ChatLiteLLM(model="gpt-4o", api_key="k", streaming=True)
+
+    def _chunks(**kwargs: Any) -> Any:
+        yield {
+            "choices": [
+                {"delta": {"role": "assistant", "content": "x"}, "finish_reason": None}
+            ]
+        }
+
+    with patch.object(llm.client, "completion", side_effect=_chunks) as mock_completion:
+        list(llm.stream("hi", stream_options={"include_usage": False}))
+
+    assert mock_completion.call_args.kwargs["stream_options"] == {
+        "include_usage": False
+    }
+
+
+def test_credentials_are_not_shown_in_repr() -> None:
+    """A key in repr() reaches logs and tracebacks."""
+    llm = ChatLiteLLM(model="gpt-4o", openai_api_key="sk-should-not-appear")
+    assert "sk-should-not-appear" not in repr(llm)
+
+
+def test_ls_model_name_follows_a_per_call_override() -> None:
+    """The override is what reaches litellm, so it is what the trace should name."""
+    llm = ChatLiteLLM(model="gpt-4o", api_key="k")
+    params = llm._get_ls_params(model="anthropic/claude-3-5-sonnet-20241022")
+    assert params["ls_model_name"] == "anthropic/claude-3-5-sonnet-20241022"
+    assert llm._get_ls_params()["ls_model_name"] == "gpt-4o"
+
+
+def test_client_params_does_not_alias_model_kwargs() -> None:
+    """A caller mutating the returned params must not reach back into the model."""
+    llm = ChatLiteLLM(model="gpt-4o", api_key="k", model_kwargs={"nested": {"a": 1}})
+    llm._client_params["nested"]["a"] = 999
+    assert llm.model_kwargs["nested"]["a"] == 1

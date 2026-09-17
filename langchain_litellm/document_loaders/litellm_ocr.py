@@ -7,6 +7,7 @@ import base64
 import mimetypes
 import time
 from pathlib import Path
+import os
 from typing import Any, Dict, Iterator, List, Literal, Optional
 
 import httpx
@@ -87,7 +88,9 @@ class LiteLLMOCRLoader(BaseLoader):
         """Initialize the LiteLLM OCR loader."""
         # Validate input sources
         input_sources = [file_path, url_path, base64_content, bytes_content]
-        provided_sources = [s for s in input_sources if s is not None]
+        # Truthiness, not `is not None`: an empty string or empty bytes would
+        # otherwise pass here and fail at load() claiming nothing was provided.
+        provided_sources = [s for s in input_sources if s]
 
         if len(provided_sources) == 0:
             raise ValueError(
@@ -119,7 +122,7 @@ class LiteLLMOCRLoader(BaseLoader):
             raise ValueError(f"max_retries must be non-negative, got: {max_retries}")
 
         self.proxy_base_url = proxy_base_url.rstrip("/")
-        self.api_key = api_key
+        self.api_key = api_key or os.environ.get("LITELLM_OCR_API_KEY") or None
         self.model = model
         self.file_path = file_path
         self.url_path = url_path

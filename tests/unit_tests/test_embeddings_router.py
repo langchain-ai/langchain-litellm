@@ -1,7 +1,7 @@
 """Unit tests for LiteLLMEmbeddingsRouter."""
 
-from typing import Type
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any, Type
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_tests.unit_tests import EmbeddingsUnitTests
@@ -117,3 +117,71 @@ class TestLiteLLMEmbeddingsRouterParams:
 
         router.aembedding.assert_called_once()
         assert result == [0.1, 0.2, 0.3]
+
+
+def _one_deployment_router() -> Any:
+    import litellm
+
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "emb-small",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_key": "sk-deployment",
+                },
+            }
+        ]
+    )
+
+
+def test_embeddings_router_honours_max_retries() -> None:
+    """The embed methods called router.embedding directly, bypassing the decorator.
+
+    Same defect ChatLiteLLMRouter had: the inherited `max_retries` had no effect.
+    """
+    import litellm
+
+    embeddings = LiteLLMEmbeddingsRouter(router=_one_deployment_router(), max_retries=4)
+
+    def _raise(*args: Any, **kwargs: Any) -> Any:
+        raise litellm.RateLimitError(
+            message="rate limited", llm_provider="openai", model="x"
+        )
+
+    with patch.object(
+        embeddings.router, "embedding", side_effect=_raise
+    ) as mock_embedding:
+        with patch("time.sleep", return_value=None):
+            with pytest.raises(litellm.RateLimitError):
+                embeddings.embed_query("hi")
+
+    assert mock_embedding.call_count == 4
+
+
+def test_embeddings_router_defaults_its_model_from_the_router() -> None:
+    """ChatLiteLLMRouter does this; the embeddings router left `model` unset."""
+    embeddings = LiteLLMEmbeddingsRouter(router=_one_deployment_router())
+    assert embeddings.model == "emb-small"
+
+
+def test_embeddings_router_forwards_only_an_explicit_api_key() -> None:
+    """Each deployment owns its endpoint, so the connector's must not override it."""
+
+    class _Response:
+        data = [{"embedding": [0.1]}]
+
+    captured: dict = {}
+
+    def _capture(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return _Response()
+
+    embeddings = LiteLLMEmbeddingsRouter(
+        router=_one_deployment_router(), api_key="sk-explicit"
+    )
+    with patch.object(embeddings.router, "embedding", side_effect=_capture):
+        embeddings.embed_query("hi")
+
+    assert captured["api_key"] == "sk-explicit"
+    assert captured.get("api_base") is None
