@@ -7,6 +7,7 @@ import logging
 import warnings
 from operator import itemgetter
 from typing import (
+    TYPE_CHECKING,
     Any,
     AsyncIterator,
     Callable,
@@ -535,18 +536,22 @@ class ChatLiteLLM(BaseChatModel):
         self._add_version("langchain-litellm", __version__)
         return self
 
-    def __init__(self, **kwargs: Any) -> None:
-        """Record which fields the caller actually supplied.
+    if not TYPE_CHECKING:
+        # Defined only at runtime so type checkers keep pydantic's synthesized
+        # __init__ and go on validating constructor kwargs. Overriding it outright
+        # would erase that signature and silently stop mypy catching a bad field.
+        def __init__(self, **kwargs: Any) -> None:
+            """Record which fields the caller actually supplied.
 
-        ``@pre_init`` hands pydantic a dict already populated with every default, so
-        pydantic marks all of them as explicitly set. langchain-core reads
-        ``model_fields_set`` to tell a deliberate ``streaming=False`` — a hard opt-out
-        that overrides even ``stream=True`` — from a default nobody chose, so without
-        this ``.stream()`` and ``.astream()`` never stream.
-        """
-        supplied = set(kwargs) & set(type(self).model_fields)
-        super().__init__(**kwargs)
-        object.__setattr__(self, "__pydantic_fields_set__", supplied)
+            ``@pre_init`` hands pydantic a dict already populated with every default,
+            so pydantic marks all of them as explicitly set. langchain-core reads
+            ``model_fields_set`` to tell a deliberate ``streaming=False`` — a hard
+            opt-out that overrides even ``stream=True`` — from a default nobody chose,
+            so without this ``.stream()`` and ``.astream()`` never stream.
+            """
+            supplied = set(kwargs) & set(type(self).model_fields)
+            super().__init__(**kwargs)
+            object.__setattr__(self, "__pydantic_fields_set__", supplied)
 
     @pre_init
     def validate_environment(cls, values: Dict) -> Dict:

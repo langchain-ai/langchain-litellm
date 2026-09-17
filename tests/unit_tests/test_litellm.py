@@ -935,3 +935,18 @@ def test_client_params_does_not_alias_model_kwargs() -> None:
     # Copying only the first level would leave both of these aliased.
     assert llm.model_kwargs["top"]["nested"]["a"] == 1
     assert llm.model_kwargs["items"][0]["b"] == 2
+
+
+def test_constructor_signature_is_not_erased() -> None:
+    """Fixing `model_fields_set` must not cost the constructor's typed signature.
+
+    Overriding `__init__` outright replaces pydantic's synthesized signature with
+    `**kwargs`, so type checkers silently stop flagging an unknown or mistyped field.
+    The override is defined only at runtime to keep both.
+    """
+    import inspect
+
+    params = list(inspect.signature(ChatLiteLLM).parameters)
+    assert params != ["kwargs"]
+    for field in ("model", "api_key", "streaming", "temperature"):
+        assert field in params, field
