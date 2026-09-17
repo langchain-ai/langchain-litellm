@@ -94,6 +94,20 @@ class ChatLiteLLMException(Exception):
     """Exception raised for errors in the LiteLLM integration."""
 
 
+def _copy_containers(value: Any) -> Any:
+    """Copy dicts and lists recursively, leaving anything else shared.
+
+    Deep enough that a caller cannot mutate this model's configuration through the
+    params it is handed, and shallow enough not to fail on a client object or any
+    other value that cannot be copied.
+    """
+    if isinstance(value, dict):
+        return {key: _copy_containers(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_copy_containers(item) for item in value]
+    return value
+
+
 def _create_retry_decorator(
     llm: ChatLiteLLM,
     run_manager: Optional[
@@ -471,11 +485,10 @@ class ChatLiteLLM(BaseChatModel):
             "custom_llm_provider": self.custom_llm_provider,
             "num_ctx": self.num_ctx,
             "base_model": self.base_model,
-            # Copy nested containers: a caller mutating the returned params must
-            # not reach back into this instance's model_kwargs.
+            # Copy containers at every level: a caller mutating the returned params,
+            # however deeply, must not reach back into this instance's model_kwargs.
             **{
-                key: value.copy() if isinstance(value, (dict, list)) else value
-                for key, value in self.model_kwargs.items()
+                key: _copy_containers(value) for key, value in self.model_kwargs.items()
             },
         }
 

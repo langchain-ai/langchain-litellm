@@ -923,6 +923,15 @@ def test_ls_model_name_follows_a_per_call_override() -> None:
 
 def test_client_params_does_not_alias_model_kwargs() -> None:
     """A caller mutating the returned params must not reach back into the model."""
-    llm = ChatLiteLLM(model="gpt-4o", api_key="k", model_kwargs={"nested": {"a": 1}})
-    llm._client_params["nested"]["a"] = 999
-    assert llm.model_kwargs["nested"]["a"] == 1
+    llm = ChatLiteLLM(
+        model="gpt-4o",
+        api_key="k",
+        model_kwargs={"top": {"nested": {"a": 1}}, "items": [{"b": 2}]},
+    )
+    params = llm._client_params
+    params["top"]["nested"]["a"] = 999
+    params["items"][0]["b"] = 999
+
+    # Copying only the first level would leave both of these aliased.
+    assert llm.model_kwargs["top"]["nested"]["a"] == 1
+    assert llm.model_kwargs["items"][0]["b"] == 2

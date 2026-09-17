@@ -69,7 +69,7 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
     failing. Pass provider-specific values through ``model_kwargs``.
     """
 
-    api_key: Optional[str] = None
+    api_key: Optional[str] = Field(default=None, repr=False)
     """API key for the provider."""
 
     api_base: Optional[str] = None
