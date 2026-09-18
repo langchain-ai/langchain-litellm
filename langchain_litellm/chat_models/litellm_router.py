@@ -154,6 +154,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
 
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs}
+        # This branch parses a mapping, so it must not inherit stream=True from a
+        # streaming=True instance that the caller overrode with stream=False.
+        params["stream"] = False
         params = {k: v for k, v in params.items() if v is not None}
         self._prepare_params_for_router(params)
 
@@ -173,11 +176,12 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs, "stream": True}
         params = {k: v for k, v in params.items() if v is not None}
-        params["stream_options"] = (
-            self.stream_options
-            if self.stream_options is not None
-            else {"include_usage": True}
-        )
+        if "stream_options" not in kwargs:
+            params["stream_options"] = (
+                self.stream_options
+                if self.stream_options is not None
+                else {"include_usage": True}
+            )
         self._prepare_params_for_router(params)
         first_chunk_yielded = False
 
@@ -234,11 +238,12 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs, "stream": True}
         params = {k: v for k, v in params.items() if v is not None}
-        params["stream_options"] = (
-            self.stream_options
-            if self.stream_options is not None
-            else {"include_usage": True}
-        )
+        if "stream_options" not in kwargs:
+            params["stream_options"] = (
+                self.stream_options
+                if self.stream_options is not None
+                else {"include_usage": True}
+            )
         self._prepare_params_for_router(params)
         first_chunk_yielded = False
 
@@ -302,6 +307,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
 
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs}
+        # This branch parses a mapping, so it must not inherit stream=True from a
+        # streaming=True instance that the caller overrode with stream=False.
+        params["stream"] = False
         params = {k: v for k, v in params.items() if v is not None}
         self._prepare_params_for_router(params)
 
