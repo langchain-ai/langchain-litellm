@@ -931,6 +931,15 @@ def test_credentials_are_not_shown_in_repr() -> None:
     assert "sk-should-not-appear" not in repr(llm)
 
 
+def test_a_token_in_extra_headers_is_not_shown_in_repr() -> None:
+    """`extra_headers` is how a caller reaches a gateway, so it carries a token."""
+    llm = ChatLiteLLM(
+        model="gpt-4o",
+        extra_headers={"Authorization": "Bearer sk-should-not-appear"},
+    )
+    assert "sk-should-not-appear" not in repr(llm)
+
+
 def test_ls_model_name_follows_a_per_call_override() -> None:
     """The override is what reaches litellm, so it is what the trace should name."""
     llm = ChatLiteLLM(model="gpt-4o", api_key="k")

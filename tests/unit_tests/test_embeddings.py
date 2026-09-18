@@ -274,3 +274,13 @@ def test_embeddings_credentials_are_not_shown_in_repr() -> None:
             model="text-embedding-3-small", api_key="sk-should-not-appear"
         )
     )
+
+
+def test_embeddings_token_in_extra_headers_is_not_shown_in_repr() -> None:
+    """`extra_headers` is how a caller reaches a gateway, so it carries a token."""
+    assert "sk-should-not-appear" not in repr(
+        LiteLLMEmbeddings(
+            model="text-embedding-3-small",
+            extra_headers={"Authorization": "Bearer sk-should-not-appear"},
+        )
+    )
