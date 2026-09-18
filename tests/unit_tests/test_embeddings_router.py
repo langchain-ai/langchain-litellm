@@ -135,7 +135,8 @@ def _one_deployment_router() -> Any:
     )
 
 
-def test_embeddings_router_honours_max_retries() -> None:
+@pytest.mark.parametrize("method", ["embed_query", "embed_documents"])
+def test_embeddings_router_honours_max_retries(method: str) -> None:
     """The embed methods called router.embedding directly, bypassing the decorator.
 
     Same defect ChatLiteLLMRouter had: the inherited `max_retries` had no effect.
@@ -154,7 +155,34 @@ def test_embeddings_router_honours_max_retries() -> None:
     ) as mock_embedding:
         with patch("time.sleep", return_value=None):
             with pytest.raises(litellm.RateLimitError):
-                embeddings.embed_query("hi")
+                getattr(embeddings, method)(["hi"] if "documents" in method else "hi")
+
+    assert mock_embedding.call_count == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["aembed_query", "aembed_documents"])
+async def test_embeddings_router_honours_max_retries_on_the_async_path(
+    method: str,
+) -> None:
+    """`aembed_*` bypassed the decorator the same way the sync methods did."""
+    import litellm
+
+    embeddings = LiteLLMEmbeddingsRouter(router=_one_deployment_router(), max_retries=4)
+
+    async def _raise(*args: Any, **kwargs: Any) -> Any:
+        raise litellm.RateLimitError(
+            message="rate limited", llm_provider="openai", model="x"
+        )
+
+    with patch.object(
+        embeddings.router, "aembedding", side_effect=_raise
+    ) as mock_embedding:
+        with patch("asyncio.sleep", return_value=None):
+            with pytest.raises(litellm.RateLimitError):
+                await getattr(embeddings, method)(
+                    ["hi"] if "documents" in method else "hi"
+                )
 
     assert mock_embedding.call_count == 4
 

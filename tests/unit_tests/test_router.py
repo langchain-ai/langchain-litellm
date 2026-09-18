@@ -384,7 +384,7 @@ def _usage_response() -> dict:
 
 def test_router_set_default_model_changes_the_model_sent() -> None:
     """`_default_params` prefers `model_name`, so setting only `model` had no effect."""
-    llm = ChatLiteLLMRouter(router=make_router())
+    llm = ChatLiteLLMRouter(router=make_router(), model_name="gpt-4")
 
     with patch.object(
         llm.router, "completion", return_value=_usage_response()

@@ -2,6 +2,9 @@
 
 # stdlib
 import logging
+import subprocess
+import sys
+from pathlib import Path
 from typing import Any, Dict, Optional, Union
 from unittest.mock import patch
 
@@ -886,7 +889,11 @@ def test_a_validator_assigned_field_counts_as_set() -> None:
     `model_dump(exclude_unset=True)` is how a configuration is carried between
     processes; dropping a field no kwarg named loses the endpoint the caller chose.
     """
-    llm = ChatLiteLLM(model="gpt-4", api_key="k", base_url="https://proxy.example/v1")
+    llm = ChatLiteLLM(
+        model="gpt-4",
+        api_key="k",
+        base_url="https://proxy.example/v1",  # type: ignore[call-arg]
+    )
 
     config = llm.model_dump(exclude_unset=True)
 
@@ -919,6 +926,51 @@ def test_per_call_stream_options_are_not_discarded() -> None:
 
     with patch.object(llm.client, "completion", side_effect=_chunks) as mock_completion:
         list(llm.stream("hi", stream_options={"include_usage": False}))
+
+    assert mock_completion.call_args.kwargs["stream_options"] == {
+        "include_usage": False
+    }
+
+
+@pytest.mark.asyncio
+async def test_astream_false_is_not_overridden_by_a_streaming_instance() -> None:
+    """The async twin of the branch that parses a mapping."""
+    llm = ChatLiteLLM(model="gpt-4o", api_key="k", streaming=True)
+
+    async def _response(**kwargs: Any) -> Any:
+        return _STREAM_MOCK_OK
+
+    with patch.object(
+        llm.client, "acompletion", side_effect=_response
+    ) as mock_completion:
+        await llm.ainvoke("hi", stream=False)
+
+    assert mock_completion.call_args.kwargs["stream"] is False
+
+
+@pytest.mark.asyncio
+async def test_per_call_stream_options_are_not_discarded_on_the_async_path() -> None:
+    """`_astream` carries the same caller configuration as `_stream`."""
+    llm = ChatLiteLLM(model="gpt-4o", api_key="k", streaming=True)
+
+    async def _chunks(**kwargs: Any) -> Any:
+        async def _aiter() -> Any:
+            yield {
+                "choices": [
+                    {
+                        "delta": {"role": "assistant", "content": "x"},
+                        "finish_reason": None,
+                    }
+                ]
+            }
+
+        return _aiter()
+
+    with patch.object(
+        llm.client, "acompletion", side_effect=_chunks
+    ) as mock_completion:
+        async for _ in llm.astream("hi", stream_options={"include_usage": False}):
+            pass
 
     assert mock_completion.call_args.kwargs["stream_options"] == {
         "include_usage": False
@@ -964,16 +1016,26 @@ def test_client_params_does_not_alias_model_kwargs() -> None:
     assert llm.model_kwargs["items"][0]["b"] == 2
 
 
-def test_constructor_signature_is_not_erased() -> None:
+def test_constructor_signature_is_not_erased(tmp_path: Path) -> None:
     """Fixing `model_fields_set` must not cost the constructor's typed signature.
 
     Overriding `__init__` outright replaces pydantic's synthesized signature with
     `**kwargs`, so type checkers silently stop flagging an unknown or mistyped field.
-    The override is defined only at runtime to keep both.
+    Only a type checker can see that, because the override is identical at runtime.
     """
-    import inspect
+    pytest.importorskip("mypy")
+    probe = tmp_path / "probe.py"
+    probe.write_text(
+        "from langchain_litellm import ChatLiteLLM\n"
+        "ChatLiteLLM(not_a_real_field=1)\n"
+        "ChatLiteLLM(temperature='warm')\n"
+    )
 
-    params = list(inspect.signature(ChatLiteLLM).parameters)
-    assert params != ["kwargs"]
-    for field in ("model", "api_key", "streaming", "temperature"):
-        assert field in params, field
+    result = subprocess.run(
+        [sys.executable, "-m", "mypy", "--no-incremental", str(probe)],
+        capture_output=True,
+        text=True,
+    )
+
+    assert "call-arg" in result.stdout, result.stdout
+    assert "arg-type" in result.stdout, result.stdout
