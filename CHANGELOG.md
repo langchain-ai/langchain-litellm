@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.7.3](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.7.2...langchain-litellm==0.7.3) (2026-09-18)
+
+
+### Bug Fixes
+
+* accept base_url for LiteLLM embeddings ([#203](https://github.com/langchain-ai/langchain-litellm/issues/203)) ([e5b2e5e](https://github.com/langchain-ai/langchain-litellm/commit/e5b2e5e5b765ffca5f63db4e4346688060b36315))
+* **chat_models:** include top_p and top_k in _default_params ([#233](https://github.com/langchain-ai/langchain-litellm/issues/233)) ([a03a841](https://github.com/langchain-ai/langchain-litellm/commit/a03a8415584b6014170ca5fb14077858b390f465))
+* **chat_models:** report unparsable tool-call arguments as invalid ([#260](https://github.com/langchain-ai/langchain-litellm/issues/260)) ([c93299f](https://github.com/langchain-ai/langchain-litellm/commit/c93299f9dc5f951cad3a1a94d7b540fd8c2d7e12))
+* **chat_models:** stop injecting thinking blocks into AIMessage.content ([#244](https://github.com/langchain-ai/langchain-litellm/issues/244)) ([a47db29](https://github.com/langchain-ai/langchain-litellm/commit/a47db29cb7dfeeaac13ba3e2401f86474ec256e4))
+* **router:** honour max_retries in ChatLiteLLMRouter ([#262](https://github.com/langchain-ai/langchain-litellm/issues/262)) ([dd8b4f1](https://github.com/langchain-ai/langchain-litellm/commit/dd8b4f1c61c6c8ff7794eec21d1899be486a8a3b))
+
 ## [0.7.2](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.7.1...langchain-litellm==0.7.2) (2026-09-16)
 
 
