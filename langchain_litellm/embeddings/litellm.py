@@ -95,7 +95,7 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
     """Maximum number of retries on transient errors (Timeout, APIError,
     APIConnectionError, RateLimitError)."""
 
-    extra_headers: Optional[Dict[str, str]] = None
+    extra_headers: Optional[Dict[str, str]] = Field(default=None, repr=False)
     """Extra headers to include in the request."""
 
     model_kwargs: Dict[str, Any] = Field(default_factory=dict)

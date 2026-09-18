@@ -438,7 +438,7 @@ class ChatLiteLLM(BaseChatModel):
     organization: Optional[str] = None
     custom_llm_provider: Optional[str] = None
     base_model: Optional[str] = None
-    extra_headers: Optional[Dict[str, str]] = None
+    extra_headers: Optional[Dict[str, str]] = Field(default=None, repr=False)
     request_timeout: Optional[Union[float, Tuple[float, float]]] = None
     temperature: Optional[float] = None
     """Run inference with this temperature. Must be in the closed
