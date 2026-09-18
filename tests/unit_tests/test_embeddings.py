@@ -276,6 +276,13 @@ def test_embeddings_credentials_are_not_shown_in_repr() -> None:
     )
 
 
+def test_every_embeddings_credential_field_is_kept_out_of_repr() -> None:
+    """A credential added later must not arrive without the same protection."""
+    for name, field in LiteLLMEmbeddings.model_fields.items():
+        if name in ("api_key", "extra_headers") or name.endswith("_api_key"):
+            assert field.repr is False, name
+
+
 def test_embeddings_token_in_extra_headers_is_not_shown_in_repr() -> None:
     """`extra_headers` is how a caller reaches a gateway, so it carries a token."""
     assert "sk-should-not-appear" not in repr(

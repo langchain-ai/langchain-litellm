@@ -979,8 +979,24 @@ async def test_per_call_stream_options_are_not_discarded_on_the_async_path() -> 
 
 def test_credentials_are_not_shown_in_repr() -> None:
     """A key in repr() reaches logs and tracebacks."""
-    llm = ChatLiteLLM(model="gpt-4o", openai_api_key="sk-should-not-appear")
-    assert "sk-should-not-appear" not in repr(llm)
+    llm = ChatLiteLLM(
+        model="gpt-4o",
+        api_key="sk-generic",
+        openai_api_key="sk-openai",
+        azure_api_key="sk-azure",
+        anthropic_api_key="sk-anthropic",
+        replicate_api_key="sk-replicate",
+        cohere_api_key="sk-cohere",
+        openrouter_api_key="sk-openrouter",
+    )
+    assert "sk-" not in repr(llm)
+
+
+def test_every_credential_field_is_kept_out_of_repr() -> None:
+    """A provider added later must not arrive without the same protection."""
+    for name, field in ChatLiteLLM.model_fields.items():
+        if name in ("api_key", "extra_headers") or name.endswith("_api_key"):
+            assert field.repr is False, name
 
 
 def test_a_token_in_extra_headers_is_not_shown_in_repr() -> None:

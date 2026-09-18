@@ -206,10 +206,13 @@ def test_embeddings_router_forwards_only_an_explicit_api_key() -> None:
         return _Response()
 
     embeddings = LiteLLMEmbeddingsRouter(
-        router=_one_deployment_router(), api_key="sk-explicit"
+        router=_one_deployment_router(),
+        api_key="sk-explicit",
+        api_base="https://connector.example/v1",
     )
     with patch.object(embeddings.router, "embedding", side_effect=_capture):
         embeddings.embed_query("hi")
 
     assert captured["api_key"] == "sk-explicit"
+    # Set on the object under test, so an absent key here is a real decision.
     assert captured.get("api_base") is None
