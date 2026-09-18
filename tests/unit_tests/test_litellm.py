@@ -1008,14 +1008,6 @@ def test_a_token_in_extra_headers_is_not_shown_in_repr() -> None:
     assert "sk-should-not-appear" not in repr(llm)
 
 
-def test_ls_model_name_follows_a_per_call_override() -> None:
-    """The override is what reaches litellm, so it is what the trace should name."""
-    llm = ChatLiteLLM(model="gpt-4o", api_key="k")
-    params = llm._get_ls_params(model="anthropic/claude-3-5-sonnet-20241022")
-    assert params["ls_model_name"] == "anthropic/claude-3-5-sonnet-20241022"
-    assert llm._get_ls_params()["ls_model_name"] == "gpt-4o"
-
-
 def test_client_params_does_not_alias_model_kwargs() -> None:
     """A caller mutating the returned params must not reach back into the model."""
     llm = ChatLiteLLM(

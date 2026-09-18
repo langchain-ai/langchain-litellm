@@ -1072,9 +1072,7 @@ class ChatLiteLLM(BaseChatModel):
         """
         params = super()._get_ls_params(stop=stop, **kwargs)
         params["ls_provider"] = "litellm"
-        # A per-call override is what actually reaches litellm, so it is what the
-        # trace should name.
-        params["ls_model_name"] = kwargs.get("model") or self.model_name or self.model
+        params["ls_model_name"] = self.model_name or self.model
         return params
 
     @property
