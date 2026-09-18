@@ -876,6 +876,20 @@ def test_fields_set_reflects_only_what_the_caller_passed() -> None:
     assert llm.model_fields_set == {"model", "api_key"}
 
 
+def test_a_validator_assigned_field_counts_as_set() -> None:
+    """`base_url` reaches `api_base` through a validator, so a round-trip keeps it.
+
+    `model_dump(exclude_unset=True)` is how a configuration is carried between
+    processes; dropping a field no kwarg named loses the endpoint the caller chose.
+    """
+    llm = ChatLiteLLM(model="gpt-4", api_key="k", base_url="https://proxy.example/v1")
+
+    config = llm.model_dump(exclude_unset=True)
+
+    assert config["api_base"] == "https://proxy.example/v1"
+    assert ChatLiteLLM(**config).api_base == "https://proxy.example/v1"
+
+
 def test_stream_false_is_not_overridden_by_a_streaming_instance() -> None:
     """The non-streaming branch parses a mapping, so it must send stream=False."""
     llm = ChatLiteLLM(model="gpt-4o", api_key="k", streaming=True)
