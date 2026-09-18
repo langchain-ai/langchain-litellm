@@ -1017,11 +1017,11 @@ def test_client_params_does_not_alias_model_kwargs() -> None:
 
 
 def test_constructor_signature_is_not_erased(tmp_path: Path) -> None:
-    """Fixing `model_fields_set` must not cost the constructor's typed signature.
+    """Nothing may replace pydantic's synthesized `__init__`.
 
-    Overriding `__init__` outright replaces pydantic's synthesized signature with
-    `**kwargs`, so type checkers silently stop flagging an unknown or mistyped field.
-    Only a type checker can see that, because the override is identical at runtime.
+    An override taking `**kwargs` silently stops type checkers flagging an unknown
+    or mistyped field, and only a type checker can see it: the two are identical at
+    runtime.
     """
     pytest.importorskip("mypy")
     probe = tmp_path / "probe.py"

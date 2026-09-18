@@ -7,7 +7,6 @@ import logging
 import warnings
 from operator import itemgetter
 from typing import (
-    TYPE_CHECKING,
     Any,
     AsyncIterator,
     Callable,
@@ -79,7 +78,7 @@ from langchain_core.outputs import (
 )
 from langchain_core.runnables import Runnable, RunnablePassthrough
 from langchain_core.tools import BaseTool
-from langchain_core.utils import get_from_dict_or_env, pre_init
+from langchain_core.utils import get_from_dict_or_env
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import TypeBaseModel, is_basemodel_subclass
 from litellm.types.utils import Delta
@@ -536,36 +535,18 @@ class ChatLiteLLM(BaseChatModel):
         self._add_version("langchain-litellm", __version__)
         return self
 
-    if not TYPE_CHECKING:
-        # Defined only at runtime so type checkers keep pydantic's synthesized
-        # __init__ and go on validating constructor kwargs. Overriding it outright
-        # would erase that signature and silently stop mypy catching a bad field.
-        def __init__(self, **kwargs: Any) -> None:
-            """Record which fields the caller actually supplied.
+    @model_validator(mode="before")
+    @classmethod
+    def validate_environment(cls, values: Any) -> Any:
+        """Normalize the base_url alias, collect credentials, and check the ranges.
 
-            ``@pre_init`` hands pydantic a dict already populated with every default,
-            so pydantic marks all of them as explicitly set. langchain-core reads
-            ``model_fields_set`` to tell a deliberate ``streaming=False`` — a hard
-            opt-out that overrides even ``stream=True`` — from a default nobody chose,
-            so without this ``.stream()`` and ``.astream()`` never stream.
-            """
-            fields = type(self).model_fields
-            supplied = set(kwargs) & set(fields)
-            super().__init__(**kwargs)
-            # A validator assigns api_base from the base_url alias and client from the
-            # module, so a field holding anything but its default was set too.
-            assigned = {
-                name
-                for name, field in fields.items()
-                if name not in supplied
-                and getattr(self, name, None)
-                != field.get_default(call_default_factory=True)
-            }
-            object.__setattr__(self, "__pydantic_fields_set__", supplied | assigned)
+        A ``mode="before"`` validator sees only what the caller passed, so pydantic's
+        own ``model_fields_set`` stays truthful and langchain-core can tell a chosen
+        ``streaming=False`` from the default.
+        """
+        if not isinstance(values, dict):
+            return values
 
-    @pre_init
-    def validate_environment(cls, values: Dict) -> Dict:
-        """Validate api key, python package exists, temperature, top_p, and top_k."""
         # Accept `base_url` as an alias for `api_base` for cross-provider
         # consistency (e.g. `init_chat_model(..., base_url=...)`). Without this,
         # `base_url` is silently dropped by Pydantic's `extra="ignore"`. The
@@ -600,13 +581,16 @@ class ChatLiteLLM(BaseChatModel):
         )
         values["client"] = litellm
 
-        if values["temperature"] is not None and not 0 <= values["temperature"] <= 2:
+        if (
+            values.get("temperature") is not None
+            and not 0 <= values["temperature"] <= 2
+        ):
             raise ValueError("temperature must be in the range [0.0, 2.0]")
 
-        if values["top_p"] is not None and not 0 <= values["top_p"] <= 1:
+        if values.get("top_p") is not None and not 0 <= values["top_p"] <= 1:
             raise ValueError("top_p must be in the range [0.0, 1.0]")
 
-        if values["top_k"] is not None and values["top_k"] <= 0:
+        if values.get("top_k") is not None and values["top_k"] <= 0:
             raise ValueError("top_k must be positive")
 
         return values
