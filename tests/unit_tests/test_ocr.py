@@ -521,3 +521,48 @@ class TestLiteLLMOCRLoaderResilience:
         assert mock_client.post.call_count == 3
         # Should sleep twice
         assert mock_sleep.call_count == 2
+
+
+def test_empty_source_is_rejected_at_construction() -> None:
+    """An empty-but-not-None source failed later with a misleading message.
+
+    `is not None` let `file_path=""` through, and load() then reported that no
+    source had been provided at all.
+    """
+    import pytest
+
+    from langchain_litellm.document_loaders.litellm_ocr import LiteLLMOCRLoader
+
+    with pytest.raises(ValueError, match="exactly one of"):
+        LiteLLMOCRLoader(model="m", file_path="")
+
+
+def test_api_key_falls_back_to_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The proxy needs a bearer token, and an env var is how a deployment supplies it."""
+    monkeypatch.setenv("LITELLM_OCR_API_KEY", "sk-from-env")
+
+    loader = LiteLLMOCRLoader(
+        proxy_base_url="https://proxy.example",
+        model="mistral-ocr",
+        url_path="https://example.com/doc.pdf",
+    )
+
+    assert loader.api_key == "sk-from-env"
+
+
+def test_an_explicit_api_key_beats_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The caller's own value wins, matching every other credential here."""
+    monkeypatch.setenv("LITELLM_OCR_API_KEY", "sk-from-env")
+
+    loader = LiteLLMOCRLoader(
+        proxy_base_url="https://proxy.example",
+        model="mistral-ocr",
+        url_path="https://example.com/doc.pdf",
+        api_key="sk-explicit",
+    )
+
+    assert loader.api_key == "sk-explicit"

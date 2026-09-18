@@ -1,5 +1,6 @@
 """Test router chat model integration."""
 
+from typing import Any, Callable, Dict, List
 from unittest.mock import patch
 
 import litellm
@@ -9,6 +10,55 @@ from langchain_core.messages import AIMessage
 from langchain_litellm._version import __version__
 from langchain_litellm.chat_models import ChatLiteLLMRouter
 from tests.utils import make_router
+
+
+def _completion_double(seen: List[Dict[str, Any]]) -> Callable[..., Any]:
+    """Record the outbound kwargs and answer in the shape `stream` asked for.
+
+    A double that returns one canned value either way hands a streaming request a
+    mapping, so a wrong `stream` flag reads as success instead of the crash it is.
+    """
+
+    def _completion(**kwargs: Any) -> Any:
+        seen.append(kwargs)
+        if kwargs.get("stream"):
+            return iter(
+                [
+                    {
+                        "choices": [{"delta": {"role": "assistant", "content": "ok"}}],
+                        "usage": None,
+                    }
+                ]
+            )
+        return {
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+
+    return _completion
+
+
+def _acompletion_double(seen: List[Dict[str, Any]]) -> Callable[..., Any]:
+    """Async twin of `_completion_double`."""
+
+    async def _acompletion(**kwargs: Any) -> Any:
+        sync = _completion_double(seen)(**kwargs)
+
+        if not kwargs.get("stream"):
+            return sync
+
+        async def _aiter() -> Any:
+            for chunk in sync:
+                yield chunk
+
+        return _aiter()
+
+    return _acompletion
 
 
 def _rate_limit_error() -> litellm.RateLimitError:
@@ -71,16 +121,68 @@ def test_router_create_chat_result_sets_usage_metadata() -> None:
     assert msg.usage_metadata["total_tokens"] == 20
 
 
-def test_router_stream_options_set_for_all_providers() -> None:
-    """Router _stream must set stream_options for non-OpenAI providers."""
-    router = make_router()
-    llm = ChatLiteLLMRouter(router=router)
-    stream_options = (
-        llm.stream_options
-        if llm.stream_options is not None
-        else {"include_usage": True}
-    )
-    assert stream_options == {"include_usage": True}
+def test_router_stream_options_default_to_include_usage() -> None:
+    """Providers other than OpenAI only report usage when it is asked for."""
+    seen: List[Dict[str, Any]] = []
+    llm = ChatLiteLLMRouter(router=make_router())
+
+    with patch.object(llm.router, "completion", side_effect=_completion_double(seen)):
+        list(llm.stream("hi"))
+
+    assert seen[0]["stream_options"] == {"include_usage": True}
+
+
+def test_router_stream_honours_a_per_call_stream_options() -> None:
+    """`stream_options` is caller configuration, so a per-call value is not replaced."""
+    seen: List[Dict[str, Any]] = []
+    llm = ChatLiteLLMRouter(router=make_router())
+
+    with patch.object(llm.router, "completion", side_effect=_completion_double(seen)):
+        list(llm.stream("hi", stream_options={"include_usage": False}))
+
+    assert seen[0]["stream_options"] == {"include_usage": False}
+
+
+@pytest.mark.asyncio
+async def test_router_astream_honours_a_per_call_stream_options() -> None:
+    """The async path carries the same caller configuration as the sync one."""
+    seen: List[Dict[str, Any]] = []
+    llm = ChatLiteLLMRouter(router=make_router())
+
+    with patch.object(llm.router, "acompletion", side_effect=_acompletion_double(seen)):
+        async for _ in llm.astream("hi", stream_options={"include_usage": False}):
+            pass
+
+    assert seen[0]["stream_options"] == {"include_usage": False}
+
+
+def test_router_generate_does_not_inherit_a_streaming_default() -> None:
+    """This branch parses a mapping, so a caller's `stream=False` must reach litellm.
+
+    A `streaming=True` instance otherwise sends `stream=True` and is handed an
+    iterator where it expects a mapping.
+    """
+    seen: List[Dict[str, Any]] = []
+    llm = ChatLiteLLMRouter(router=make_router(), streaming=True)
+
+    with patch.object(llm.router, "completion", side_effect=_completion_double(seen)):
+        message = llm.invoke("hi", stream=False)
+
+    assert seen[0]["stream"] is False
+    assert message.content == "ok"
+
+
+@pytest.mark.asyncio
+async def test_router_agenerate_does_not_inherit_a_streaming_default() -> None:
+    """The async twin of the same branch."""
+    seen: List[Dict[str, Any]] = []
+    llm = ChatLiteLLMRouter(router=make_router(), streaming=True)
+
+    with patch.object(llm.router, "acompletion", side_effect=_acompletion_double(seen)):
+        message = await llm.ainvoke("hi", stream=False)
+
+    assert seen[0]["stream"] is False
+    assert message.content == "ok"
 
 
 def test_router_metadata_versions() -> None:
@@ -267,3 +369,62 @@ def test_router_generate_no_retry_on_success() -> None:
 
     assert mock_completion.call_count == 1
     assert result.content == "hello"
+
+
+def _usage_response() -> dict:
+    from litellm.utils import Usage
+
+    return {
+        "choices": [
+            {"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+        ],
+        "usage": Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    }
+
+
+def test_router_set_default_model_changes_the_model_sent() -> None:
+    """`_default_params` prefers `model_name`, so setting only `model` had no effect."""
+    llm = ChatLiteLLMRouter(router=make_router(), model_name="gpt-4")
+
+    with patch.object(
+        llm.router, "completion", return_value=_usage_response()
+    ) as first:
+        llm.invoke("hi")
+    llm.set_default_model("gpt-3.5-turbo")
+    with patch.object(
+        llm.router, "completion", return_value=_usage_response()
+    ) as second:
+        llm.invoke("hi")
+
+    assert first.call_args.kwargs["model"] == "gpt-4"
+    assert second.call_args.kwargs["model"] == "gpt-3.5-turbo"
+
+
+def test_router_is_claude_model_reads_the_deployment() -> None:
+    """The Router alias need not contain the provider's model name at all."""
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-alias",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-5-sonnet-20241022",
+                    "api_key": "sk-x",
+                },
+            }
+        ]
+    )
+    llm = ChatLiteLLMRouter(router=router)
+    assert llm._is_claude_model() is True
+
+    assert ChatLiteLLMRouter(router=make_router())._is_claude_model() is False
+
+
+def test_router_combine_llm_outputs_accepts_a_plain_dict_usage() -> None:
+    """`_create_chat_result` passes `response["usage"]` through unchanged."""
+    llm = ChatLiteLLMRouter(router=make_router())
+    combined = llm._combine_llm_outputs(
+        [{"token_usage": {"total_tokens": 3}, "model": "gpt-4"}]
+    )
+    assert combined["token_usage"]["total_tokens"] == 3

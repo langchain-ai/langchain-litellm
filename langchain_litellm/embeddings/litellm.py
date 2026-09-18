@@ -6,7 +6,7 @@ import logging
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 from langchain_core.embeddings import Embeddings
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,15 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
     """Model name in litellm format (e.g. 'openai/text-embedding-3-small',
     'cohere/embed-english-v3.0', 'bedrock/amazon.titan-embed-text-v1')."""
 
-    api_key: Optional[str] = None
+    model_config = ConfigDict(extra="forbid")
+    """Reject unknown constructor kwargs.
+
+    Provider-scoped names such as ``openai_api_key`` are not fields here, and
+    silently dropping a credential the caller believes is set is worse than
+    failing. Pass provider-specific values through ``model_kwargs``.
+    """
+
+    api_key: Optional[str] = Field(default=None, repr=False)
     """API key for the provider."""
 
     api_base: Optional[str] = None
@@ -87,7 +95,7 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
     """Maximum number of retries on transient errors (Timeout, APIError,
     APIConnectionError, RateLimitError)."""
 
-    extra_headers: Optional[Dict[str, str]] = None
+    extra_headers: Optional[Dict[str, str]] = Field(default=None, repr=False)
     """Extra headers to include in the request."""
 
     model_kwargs: Dict[str, Any] = Field(default_factory=dict)
