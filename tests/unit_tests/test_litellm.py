@@ -870,10 +870,14 @@ def test_explicit_streaming_false_still_opts_out() -> None:
     assert llm._should_stream(async_api=False, stream=True) is False
 
 
-def test_fields_set_reflects_only_what_the_caller_passed() -> None:
-    """`model_fields_set` is what langchain-core reads to tell intent from default."""
-    llm = ChatLiteLLM(model="gpt-4o", api_key="k")
-    assert llm.model_fields_set == {"model", "api_key"}
+def test_fields_set_distinguishes_a_chosen_streaming_flag_from_the_default() -> None:
+    """`streaming` is the one field langchain-core reads out of `model_fields_set`.
+
+    It treats a set `streaming=False` as a hard opt-out overriding a per-call
+    `stream=True`, so the default must not look chosen.
+    """
+    assert "streaming" not in ChatLiteLLM(model="gpt-4o", api_key="k").model_fields_set
+    assert "streaming" in ChatLiteLLM(model="gpt-4o", streaming=False).model_fields_set
 
 
 def test_a_validator_assigned_field_counts_as_set() -> None:

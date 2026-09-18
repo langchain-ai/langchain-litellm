@@ -549,9 +549,19 @@ class ChatLiteLLM(BaseChatModel):
             opt-out that overrides even ``stream=True`` — from a default nobody chose,
             so without this ``.stream()`` and ``.astream()`` never stream.
             """
-            supplied = set(kwargs) & set(type(self).model_fields)
+            fields = type(self).model_fields
+            supplied = set(kwargs) & set(fields)
             super().__init__(**kwargs)
-            object.__setattr__(self, "__pydantic_fields_set__", supplied)
+            # A validator assigns api_base from the base_url alias and client from the
+            # module, so a field holding anything but its default was set too.
+            assigned = {
+                name
+                for name, field in fields.items()
+                if name not in supplied
+                and getattr(self, name, None)
+                != field.get_default(call_default_factory=True)
+            }
+            object.__setattr__(self, "__pydantic_fields_set__", supplied | assigned)
 
     @pre_init
     def validate_environment(cls, values: Dict) -> Dict:
