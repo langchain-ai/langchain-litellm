@@ -48,6 +48,36 @@ class TestLiteLLMEmbeddingsParams:
         assert params["dimensions"] == 256
         assert params["timeout"] == 30.0
 
+    def test_base_url_alias_sets_api_base(self):
+        """Test that base_url is accepted as an alias for api_base."""
+        embeddings = LiteLLMEmbeddings(
+            model="openai/text-embedding-3-small",
+            api_key="fake-key",
+            base_url="https://proxy.example/v1",  # type: ignore[call-arg]
+        )
+        assert embeddings.api_base == "https://proxy.example/v1"
+
+    def test_api_base_takes_precedence_over_base_url(self):
+        """Test that api_base wins when both endpoint names are supplied."""
+        embeddings = LiteLLMEmbeddings(
+            model="openai/text-embedding-3-small",
+            api_key="fake-key",
+            api_base="https://explicit.example/v1",
+            base_url="https://alias.example/v1",  # type: ignore[call-arg]
+        )
+        assert embeddings.api_base == "https://explicit.example/v1"
+
+    def test_base_url_forwarded_to_litellm_params_once(self):
+        """Test that the alias reaches litellm.embedding as api_base."""
+        embeddings = LiteLLMEmbeddings(
+            model="openai/text-embedding-3-small",
+            api_key="fake-key",
+            base_url="https://proxy.example/v1",  # type: ignore[call-arg]
+        )
+        params = embeddings._get_litellm_params()
+        assert params["api_base"] == "https://proxy.example/v1"
+        assert params["api_base"].count("/v1") == 1
+
     def test_none_params_excluded(self):
         """Test that None-valued params are excluded from the litellm call."""
         embeddings = LiteLLMEmbeddings(
@@ -216,3 +246,101 @@ class TestLiteLLMEmbeddingsParams:
 
         call_kwargs = mock_embedding.call_args[1]
         assert "input_type" not in call_kwargs
+
+
+def test_unknown_constructor_kwargs_are_rejected() -> None:
+    """A credential the caller believes is set must never vanish silently.
+
+    `LiteLLMEmbeddings` has no provider-scoped `*_api_key` fields, so a name like
+    `openai_api_key` was accepted by pydantic and then dropped. Provider-specific
+    values belong in `model_kwargs`.
+    """
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        LiteLLMEmbeddings(
+            model="text-embedding-3-small",
+            openai_api_key="sk-openai",  # type: ignore[call-arg]
+        )
+
+    # A declared field is of course still accepted.
+    assert LiteLLMEmbeddings(model="text-embedding-3-small", api_key="sk-x").api_key
+
+
+def test_rejecting_an_unknown_kwarg_does_not_echo_its_value() -> None:
+    """The rejection must not print the credential it was protecting.
+
+    Pydantic's own `extra_forbidden` error carries `input_value`, so refusing a
+    misspelled credential would put it in the traceback verbatim.
+    """
+    with pytest.raises(ValueError) as caught:
+        LiteLLMEmbeddings(
+            model="text-embedding-3-small",
+            openai_api_key="sk-should-not-appear",  # type: ignore[call-arg]
+        )
+
+    message = str(caught.value)
+    assert "openai_api_key" in message
+    assert "sk-should-not-appear" not in message
+    # The refusal has to say where the value belongs, or it just blocks the caller.
+    assert "model_kwargs" in message
+
+
+def test_embeddings_keep_a_model_kwargs_value_an_unset_field_would_clobber() -> None:
+    """An unset declared field must not overwrite the same key from model_kwargs.
+
+    The value is written as None, and the trailing filter then deletes the key, so
+    the caller's value disappears rather than losing a precedence contest.
+    """
+    embeddings = LiteLLMEmbeddings(
+        model="text-embedding-3-small",
+        model_kwargs={"api_key": "sk-caller", "dimensions": 256},
+    )
+
+    params = embeddings._get_litellm_params()
+
+    assert params["api_key"] == "sk-caller"
+    assert params["dimensions"] == 256
+
+
+def test_embeddings_declared_field_still_wins_when_set() -> None:
+    """A field the caller actually set keeps precedence over model_kwargs."""
+    embeddings = LiteLLMEmbeddings(
+        model="text-embedding-3-small",
+        api_key="sk-field",
+        model_kwargs={"api_key": "sk-model-kwargs"},
+    )
+
+    assert embeddings._get_litellm_params()["api_key"] == "sk-field"
+
+
+def test_embeddings_non_mapping_input_raises_a_validation_error() -> None:
+    """The alias validator's guard must hand pydantic the bad input, not crash."""
+    with pytest.raises(ValidationError):
+        LiteLLMEmbeddings.model_validate([1, 2])
+
+
+def test_embeddings_credentials_are_not_shown_in_repr() -> None:
+    """The repr protection must cover this class too; the router inherits it."""
+    assert "sk-should-not-appear" not in repr(
+        LiteLLMEmbeddings(
+            model="text-embedding-3-small", api_key="sk-should-not-appear"
+        )
+    )
+
+
+def test_every_embeddings_credential_field_is_kept_out_of_repr() -> None:
+    """A credential added later must not arrive without the same protection."""
+    for name, field in LiteLLMEmbeddings.model_fields.items():
+        if name in ("api_key", "extra_headers") or name.endswith("_api_key"):
+            assert field.repr is False, name
+
+
+def test_embeddings_token_in_extra_headers_is_not_shown_in_repr() -> None:
+    """`extra_headers` is how a caller reaches a gateway, so it carries a token."""
+    assert "sk-should-not-appear" not in repr(
+        LiteLLMEmbeddings(
+            model="text-embedding-3-small",
+            extra_headers={"Authorization": "Bearer sk-should-not-appear"},
+        )
+    )

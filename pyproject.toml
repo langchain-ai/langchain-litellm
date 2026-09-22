@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "langchain-litellm"
-version = "0.7.0"
+version = "0.7.2"
 
 description = "An integration package connecting LiteLLM and LangChain"
 readme = "README.md"
@@ -29,10 +29,9 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "langchain-core>=1.4.7,<2.0.0",
+    "langchain-core>=1.6.1,<2.0.0",
     "litellm>=1.83.14,<2.0.0,!=1.82.7,!=1.82.8",
     "httpx>=0.28.1,<0.29.0",
-    "cryptography>=46.0.5,<51.0.0",
 ]
 
 [project.urls]
@@ -41,6 +40,7 @@ Documentation = "https://docs.langchain.com/oss/python/integrations/chat/litellm
 Repository = "https://github.com/langchain-ai/langchain-litellm"
 Issues = "https://github.com/langchain-ai/langchain-litellm/issues"
 Changelog = "https://github.com/langchain-ai/langchain-litellm/releases"
+Maintainer = "https://akshaydongare.com"
 Twitter = "https://x.com/LangChain"
 Slack = "https://www.langchain.com/join-community"
 Reddit = "https://www.reddit.com/r/LangChain/"
@@ -111,7 +111,13 @@ disallow_untyped_defs = false
 docstring-code-format = true  # Formats code blocks in docstrings
 
 [tool.ruff.lint]
+# Pyflakes plus the pycodestyle checks worth enforcing; `ignore` and
+# `per-file-ignores` below subtract from this set.
 select = [
+    "E4",  # pycodestyle — imports
+    "E7",  # pycodestyle — statements
+    "E9",  # pycodestyle — syntax and IO errors
+    "F",   # Pyflakes — undefined names, unused imports and variables
     #"ALL"  # Enable all rules by default (TODO)
 ]
 ignore = [
@@ -167,6 +173,7 @@ omit = ["tests/*"]
 
 [tool.codespell]
 skip = "*.lock"
+ignore-words-list = "hel"  # "hel" + "lo" is a streaming chunk split across two deltas in the tests
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
