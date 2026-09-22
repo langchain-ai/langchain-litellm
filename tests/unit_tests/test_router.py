@@ -582,8 +582,8 @@ def test_router_combine_llm_outputs_accepts_a_plain_dict_usage() -> None:
 async def test_router_surfaces_finish_reason_in_response_metadata(method: str) -> None:
     """The Router overrides both streaming paths, so it needs the same handling.
 
-    `#215` names no class, so a caller streaming through a Router sees the same
-    missing `finish_reason` the base class was fixed for.
+    A caller streaming through a Router sees the same completed response the base
+    class reports, so it carries the same `finish_reason`.
     """
     chunks = [
         {

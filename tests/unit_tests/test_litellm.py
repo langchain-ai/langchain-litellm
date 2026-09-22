@@ -1668,7 +1668,7 @@ def test_constructor_signature_is_not_erased(tmp_path: Path) -> None:
     assert "arg-type" in result.stdout, result.stdout
 
 
-# ── finish_reason missing from streaming response_metadata (issue #215) ────────
+# ── finish_reason in streamed response_metadata ───────────────────────────────
 
 
 def test_stream_sets_finish_reason_in_response_metadata() -> None:
