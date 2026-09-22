@@ -6,7 +6,7 @@ import logging
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 from langchain_core.embeddings import Embeddings
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,17 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
     """Model name in litellm format (e.g. 'openai/text-embedding-3-small',
     'cohere/embed-english-v3.0', 'bedrock/amazon.titan-embed-text-v1')."""
 
-    api_key: Optional[str] = None
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+    """Reject unknown constructor kwargs, naming them without echoing their values.
+
+    Provider-scoped names such as ``openai_api_key`` are not fields here, and
+    silently dropping a credential the caller believes is set is worse than
+    failing. Pass provider-specific values through ``model_kwargs``. Pydantic
+    reports the offending input alongside the error, so a rejected credential
+    would otherwise reach the traceback this class keeps it out of.
+    """
+
+    api_key: Optional[str] = Field(default=None, repr=False)
     """API key for the provider."""
 
     api_base: Optional[str] = None
@@ -87,7 +97,7 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
     """Maximum number of retries on transient errors (Timeout, APIError,
     APIConnectionError, RateLimitError)."""
 
-    extra_headers: Optional[Dict[str, str]] = None
+    extra_headers: Optional[Dict[str, str]] = Field(default=None, repr=False)
     """Extra headers to include in the request."""
 
     model_kwargs: Dict[str, Any] = Field(default_factory=dict)
@@ -127,26 +137,41 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
         base_url = values.pop("base_url", None)
         if base_url is not None and values.get("api_base") is None:
             values["api_base"] = base_url
+
+        # Name the rejected keys, never their values: pydantic's own
+        # extra_forbidden error carries input_value into the traceback.
+        unknown = sorted(set(values) - set(cls.model_fields))
+        if unknown:
+            raise ValueError(
+                f"Unexpected keyword arguments: {', '.join(unknown)}. "
+                "Pass provider-specific values through model_kwargs."
+            )
         return values
 
     def _get_litellm_params(
         self, *, input_type: Optional[str] = None
     ) -> Dict[str, Any]:
         """Build parameter dict for litellm.embedding(), excluding None values."""
-        params: Dict[str, Any] = {
-            **self.model_kwargs,
-            "model": self.model,
-            "api_key": self.api_key,
-            "api_base": self.api_base,
-            "api_version": self.api_version,
-            "custom_llm_provider": self.custom_llm_provider,
-            "organization": self.organization,
-            "timeout": self.request_timeout,
-            "extra_headers": self.extra_headers,
-            "dimensions": self.dimensions,
-            "encoding_format": self.encoding_format,
-            "input_type": input_type,
-        }
+        # An unset field must not clobber the same key supplied through
+        # model_kwargs, which is where this class sends provider-specific values.
+        params: Dict[str, Any] = {**self.model_kwargs}
+        params.update(
+            (key, value)
+            for key, value in (
+                ("model", self.model),
+                ("api_key", self.api_key),
+                ("api_base", self.api_base),
+                ("api_version", self.api_version),
+                ("custom_llm_provider", self.custom_llm_provider),
+                ("organization", self.organization),
+                ("timeout", self.request_timeout),
+                ("extra_headers", self.extra_headers),
+                ("dimensions", self.dimensions),
+                ("encoding_format", self.encoding_format),
+                ("input_type", input_type),
+            )
+            if value is not None
+        )
         return {k: v for k, v in params.items() if v is not None}
 
     def _embedding_with_retry(self, **kwargs: Any) -> Any:

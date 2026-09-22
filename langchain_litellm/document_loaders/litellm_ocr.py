@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import mimetypes
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Literal, Optional
@@ -24,7 +25,8 @@ class LiteLLMOCRLoader(BaseLoader):
     Args:
         proxy_base_url: Base URL of the LiteLLM proxy server.
             Defaults to "http://localhost:4000".
-        api_key: Optional bearer token for proxy authentication.
+        api_key: Optional bearer token for proxy authentication. Falls back to the
+            ``LITELLM_OCR_API_KEY`` environment variable; pass ``""`` to send none.
         model: Model name configured in the proxy (e.g., "azure-document").
             Defaults to "azure-document".
         file_path: Path to a local file to process.
@@ -87,7 +89,12 @@ class LiteLLMOCRLoader(BaseLoader):
         """Initialize the LiteLLM OCR loader."""
         # Validate input sources
         input_sources = [file_path, url_path, base64_content, bytes_content]
-        provided_sources = [s for s in input_sources if s is not None]
+        # Count what the caller NAMED, so naming two is ambiguous even when one is
+        # empty, then reject an empty one rather than failing later at load().
+        named_sources = [s for s in input_sources if s is not None]
+        provided_sources = [s for s in named_sources if s]
+        if len(named_sources) > 1:
+            provided_sources = named_sources
 
         if len(provided_sources) == 0:
             raise ValueError(
@@ -119,7 +126,11 @@ class LiteLLMOCRLoader(BaseLoader):
             raise ValueError(f"max_retries must be non-negative, got: {max_retries}")
 
         self.proxy_base_url = proxy_base_url.rstrip("/")
-        self.api_key = api_key
+        # Keyed on presence, not truthiness: an explicit "" is a decision to send
+        # no Authorization header, so the environment must not override it.
+        if api_key is None:
+            api_key = os.environ.get("LITELLM_OCR_API_KEY")
+        self.api_key = api_key or None
         self.model = model
         self.file_path = file_path
         self.url_path = url_path
