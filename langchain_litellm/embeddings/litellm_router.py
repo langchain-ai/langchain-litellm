@@ -67,15 +67,21 @@ class LiteLLMEmbeddingsRouter(LiteLLMEmbeddings):
         explicitly configured ``api_key`` is passed through, matching
         ``ChatLiteLLMRouter``.
         """
-        params: Dict[str, Any] = {
-            **self.model_kwargs,
-            "model": self.model,
-            "api_key": self.api_key,
-            "timeout": self.request_timeout,
-            "dimensions": self.dimensions,
-            "encoding_format": self.encoding_format,
-            "input_type": input_type,
-        }
+        # An unset field must not clobber the same key supplied through
+        # model_kwargs, which is where this class sends provider-specific values.
+        params: Dict[str, Any] = {**self.model_kwargs}
+        params.update(
+            (key, value)
+            for key, value in (
+                ("model", self.model),
+                ("api_key", self.api_key),
+                ("timeout", self.request_timeout),
+                ("dimensions", self.dimensions),
+                ("encoding_format", self.encoding_format),
+                ("input_type", input_type),
+            )
+            if value is not None
+        )
         return {k: v for k, v in params.items() if v is not None}
 
     def _embedding_with_retry(self, **kwargs: Any) -> Any:
