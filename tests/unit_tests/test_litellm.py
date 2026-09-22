@@ -4,6 +4,7 @@
 import logging
 import subprocess
 import sys
+from collections import OrderedDict, defaultdict
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 from unittest.mock import patch
@@ -16,7 +17,7 @@ from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langchain_core.runnables import RunnableLambda
 from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 # first-party
 from langchain_litellm._version import __version__
@@ -1058,6 +1059,43 @@ def test_a_token_in_extra_headers_is_not_shown_in_repr() -> None:
         extra_headers={"Authorization": "Bearer sk-should-not-appear"},
     )
     assert "sk-should-not-appear" not in repr(llm)
+
+
+def test_copying_model_kwargs_preserves_the_container_type() -> None:
+    """A caller's defaultdict must not come back as a plain dict.
+
+    `model_kwargs` is the escape hatch for provider payloads, so the type the
+    caller chose is part of the value.
+    """
+    llm = ChatLiteLLM(
+        model="gpt-4o",
+        api_key="k",
+        model_kwargs={"cfg": defaultdict(list), "ord": OrderedDict(b=2)},
+    )
+
+    params = llm._default_params
+
+    assert isinstance(params["cfg"], defaultdict)
+    assert params["cfg"]["missing"] == []
+    assert isinstance(params["ord"], OrderedDict)
+
+
+def test_a_self_referential_model_kwarg_does_not_recurse_forever() -> None:
+    """Copying has to terminate on a value that contains itself."""
+    cyclic: Dict[str, Any] = {}
+    cyclic["self"] = cyclic
+    llm = ChatLiteLLM(model="gpt-4o", api_key="k", model_kwargs={"c": cyclic})
+
+    copied = llm._default_params["c"]
+
+    assert copied is not cyclic
+    assert copied["self"] is copied
+
+
+def test_a_non_mapping_input_raises_a_validation_error() -> None:
+    """The validator's guard must hand pydantic the bad input, not crash inside it."""
+    with pytest.raises(ValidationError):
+        ChatLiteLLM.model_validate([1, 2])
 
 
 def test_client_params_does_not_alias_model_kwargs() -> None:

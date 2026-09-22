@@ -566,3 +566,30 @@ def test_an_explicit_api_key_beats_the_environment(
     )
 
     assert loader.api_key == "sk-explicit"
+
+
+def test_an_explicit_empty_api_key_means_no_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Passing "" is a decision, so the environment must not override it."""
+    monkeypatch.setenv("LITELLM_OCR_API_KEY", "sk-from-env")
+
+    loader = LiteLLMOCRLoader(
+        proxy_base_url="https://proxy.example",
+        model="mistral-ocr",
+        url_path="https://example.com/doc.pdf",
+        api_key="",
+    )
+
+    assert loader.api_key is None
+
+
+def test_two_sources_are_rejected_even_when_one_is_empty() -> None:
+    """An empty source is still a source the caller named, so this is ambiguous."""
+    with pytest.raises(ValueError, match="exactly one"):
+        LiteLLMOCRLoader(
+            proxy_base_url="https://proxy.example",
+            model="mistral-ocr",
+            file_path="",
+            url_path="https://example.com/doc.pdf",
+        )

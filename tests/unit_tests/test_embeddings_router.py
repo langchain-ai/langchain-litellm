@@ -187,6 +187,30 @@ async def test_embeddings_router_honours_max_retries_on_the_async_path(
     assert mock_embedding.call_count == 4
 
 
+@pytest.mark.parametrize(
+    "model_list",
+    [
+        [{"litellm_params": {"model": "openai/text-embedding-3-small"}}],
+        [{"model_name": None, "litellm_params": {}}],
+        ["not-a-dict"],
+    ],
+)
+def test_embeddings_router_falls_back_when_the_first_entry_has_no_alias(
+    model_list: Any,
+) -> None:
+    """A partial or stubbed model_list must leave the field default in place."""
+
+    class _Stub:
+        pass
+
+    stub = _Stub()
+    stub.model_list = model_list  # type: ignore[attr-defined]
+
+    embeddings = LiteLLMEmbeddingsRouter(router=stub)
+
+    assert embeddings.model == LiteLLMEmbeddingsRouter.model_fields["model"].default
+
+
 def test_embeddings_router_defaults_its_model_from_the_router() -> None:
     """ChatLiteLLMRouter does this; the embeddings router left `model` unset."""
     embeddings = LiteLLMEmbeddingsRouter(router=_one_deployment_router())

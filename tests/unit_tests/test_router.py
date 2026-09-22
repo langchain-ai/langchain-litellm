@@ -156,6 +156,54 @@ async def test_router_astream_honours_a_per_call_stream_options() -> None:
     assert seen[0]["stream_options"] == {"include_usage": False}
 
 
+@pytest.mark.parametrize("method", ["stream", "astream"])
+@pytest.mark.asyncio
+async def test_router_per_call_stream_options_none_matches_the_base_class(
+    method: str,
+) -> None:
+    """The two classes must not disagree about what an explicit None means."""
+    seen: List[Dict[str, Any]] = []
+    llm = ChatLiteLLMRouter(router=make_router())
+
+    if method == "stream":
+        with patch.object(
+            llm.router, "completion", side_effect=_completion_double(seen)
+        ):
+            list(llm.stream("hi", stream_options=None))
+    else:
+        with patch.object(
+            llm.router, "acompletion", side_effect=_acompletion_double(seen)
+        ):
+            async for _ in llm.astream("hi", stream_options=None):
+                pass
+
+    assert "stream_options" in seen[0]
+    assert seen[0]["stream_options"] is None
+
+
+def test_router_is_claude_model_reads_the_matching_deployment() -> None:
+    """A model group can fan across providers, so the first entry is not the answer."""
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mixed",
+                "litellm_params": {"model": "azure/gpt-4", "api_key": "k"},
+            },
+            {
+                "model_name": "mixed",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-5-sonnet-20241022",
+                    "api_key": "k",
+                },
+            },
+        ]
+    )
+
+    assert ChatLiteLLMRouter(router=router, model_name="mixed")._is_claude_model()
+
+
 def test_router_generate_does_not_inherit_a_streaming_default() -> None:
     """This branch parses a mapping, so a caller's `stream=False` must reach litellm.
 

@@ -286,6 +286,40 @@ def test_rejecting_an_unknown_kwarg_does_not_echo_its_value() -> None:
     assert "model_kwargs" in message
 
 
+def test_embeddings_keep_a_model_kwargs_value_an_unset_field_would_clobber() -> None:
+    """An unset declared field must not overwrite the same key from model_kwargs.
+
+    The value is written as None, and the trailing filter then deletes the key, so
+    the caller's value disappears rather than losing a precedence contest.
+    """
+    embeddings = LiteLLMEmbeddings(
+        model="text-embedding-3-small",
+        model_kwargs={"api_key": "sk-caller", "dimensions": 256},
+    )
+
+    params = embeddings._get_litellm_params()
+
+    assert params["api_key"] == "sk-caller"
+    assert params["dimensions"] == 256
+
+
+def test_embeddings_declared_field_still_wins_when_set() -> None:
+    """A field the caller actually set keeps precedence over model_kwargs."""
+    embeddings = LiteLLMEmbeddings(
+        model="text-embedding-3-small",
+        api_key="sk-field",
+        model_kwargs={"api_key": "sk-model-kwargs"},
+    )
+
+    assert embeddings._get_litellm_params()["api_key"] == "sk-field"
+
+
+def test_embeddings_non_mapping_input_raises_a_validation_error() -> None:
+    """The alias validator's guard must hand pydantic the bad input, not crash."""
+    with pytest.raises(ValidationError):
+        LiteLLMEmbeddings.model_validate([1, 2])
+
+
 def test_embeddings_credentials_are_not_shown_in_repr() -> None:
     """The repr protection must cover this class too; the router inherits it."""
     assert "sk-should-not-appear" not in repr(
