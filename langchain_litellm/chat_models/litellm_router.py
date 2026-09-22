@@ -220,6 +220,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
 
             # Process standard content chunks
             delta = chunk["choices"][0]["delta"]
+            # Read before `chunk` is rebound from the raw mapping to the message.
+            finish_reason = chunk["choices"][0].get("finish_reason")
             chunk = _convert_delta_to_message_chunk(delta, default_chunk_class)
 
             # Attach usage if it exists on a content chunk
@@ -233,6 +235,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                     "model_provider": "litellm",
                 }
                 first_chunk_yielded = True
+
+            if finish_reason is not None and isinstance(chunk, AIMessageChunk):
+                chunk.response_metadata["finish_reason"] = finish_reason
 
             default_chunk_class = chunk.__class__
             cg_chunk = ChatGenerationChunk(message=chunk)
@@ -288,6 +293,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                 continue
 
             delta = chunk["choices"][0]["delta"]
+            # Read before `chunk` is rebound from the raw mapping to the message.
+            finish_reason = chunk["choices"][0].get("finish_reason")
             chunk = _convert_delta_to_message_chunk(delta, default_chunk_class)
 
             if usage_metadata and isinstance(chunk, AIMessageChunk):
@@ -300,6 +307,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                     "model_provider": "litellm",
                 }
                 first_chunk_yielded = True
+
+            if finish_reason is not None and isinstance(chunk, AIMessageChunk):
+                chunk.response_metadata["finish_reason"] = finish_reason
 
             default_chunk_class = chunk.__class__
             cg_chunk = ChatGenerationChunk(message=chunk)
