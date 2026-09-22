@@ -61,12 +61,14 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
     """Model name in litellm format (e.g. 'openai/text-embedding-3-small',
     'cohere/embed-english-v3.0', 'bedrock/amazon.titan-embed-text-v1')."""
 
-    model_config = ConfigDict(extra="forbid")
-    """Reject unknown constructor kwargs.
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+    """Reject unknown constructor kwargs, naming them without echoing their values.
 
     Provider-scoped names such as ``openai_api_key`` are not fields here, and
     silently dropping a credential the caller believes is set is worse than
-    failing. Pass provider-specific values through ``model_kwargs``.
+    failing. Pass provider-specific values through ``model_kwargs``. Pydantic
+    reports the offending input alongside the error, so a rejected credential
+    would otherwise reach the traceback this class keeps it out of.
     """
 
     api_key: Optional[str] = Field(default=None, repr=False)
@@ -135,6 +137,15 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
         base_url = values.pop("base_url", None)
         if base_url is not None and values.get("api_base") is None:
             values["api_base"] = base_url
+
+        # Name the rejected keys, never their values: pydantic's own
+        # extra_forbidden error carries input_value into the traceback.
+        unknown = sorted(set(values) - set(cls.model_fields))
+        if unknown:
+            raise ValueError(
+                f"Unexpected keyword arguments: {', '.join(unknown)}. "
+                "Pass provider-specific values through model_kwargs."
+            )
         return values
 
     def _get_litellm_params(

@@ -915,7 +915,9 @@ def test_an_explicit_none_falls_back_to_the_default(field: str) -> None:
     Dropping it leaves the default in place and, unlike backfilling the default,
     keeps the field out of `model_fields_set` where langchain-core reads it.
     """
-    llm = ChatLiteLLM(**{"model": "anthropic/claude-3-5-sonnet-20241022", field: None})
+    kwargs: Dict[str, Any] = {"model": "anthropic/claude-3-5-sonnet-20241022"}
+    kwargs[field] = None
+    llm = ChatLiteLLM(**kwargs)  # type: ignore[arg-type]
 
     assert getattr(llm, field) == ChatLiteLLM.model_fields[field].get_default(
         call_default_factory=True
@@ -924,8 +926,11 @@ def test_an_explicit_none_falls_back_to_the_default(field: str) -> None:
 
 
 def test_a_null_streaming_still_streams() -> None:
-    """`streaming=None` means unset, so it must not read as a chosen opt-out."""
-    llm = ChatLiteLLM(model="gpt-4o", api_key="k", streaming=None)
+    """`streaming=None` means unset, so it must not read as a chosen opt-out.
+
+    A type checker rejects this, which is why only config-driven callers hit it.
+    """
+    llm = ChatLiteLLM(model="gpt-4o", api_key="k", streaming=None)  # type: ignore[arg-type]
 
     assert "streaming" not in llm.model_fields_set
 

@@ -21,6 +21,7 @@ from typing import (
     Type,
     Union,
     cast,
+    get_args,
 )
 
 import litellm
@@ -546,6 +547,15 @@ class ChatLiteLLM(BaseChatModel):
         """
         if not isinstance(values, dict):
             return values
+
+        # A config built from JSON or os.getenv carries None for an unset value.
+        # Dropping it leaves the default in place without marking the field set.
+        for name in [key for key, value in values.items() if value is None]:
+            field = cls.model_fields.get(name)
+            if field is None or field.is_required():
+                continue
+            if type(None) not in get_args(field.annotation):
+                del values[name]
 
         # Accept `base_url` as an alias for `api_base` for cross-provider
         # consistency (e.g. `init_chat_model(..., base_url=...)`). Without this,

@@ -279,8 +279,11 @@ def test_rejecting_an_unknown_kwarg_does_not_echo_its_value() -> None:
             openai_api_key="sk-should-not-appear",  # type: ignore[call-arg]
         )
 
-    assert "openai_api_key" in str(caught.value)
-    assert "sk-should-not-appear" not in str(caught.value)
+    message = str(caught.value)
+    assert "openai_api_key" in message
+    assert "sk-should-not-appear" not in message
+    # The refusal has to say where the value belongs, or it just blocks the caller.
+    assert "model_kwargs" in message
 
 
 def test_embeddings_credentials_are_not_shown_in_repr() -> None:
