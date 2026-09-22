@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage
 
 from langchain_litellm._version import __version__
 from langchain_litellm.chat_models import ChatLiteLLMRouter
+from langchain_litellm.chat_models.litellm_router import _deployment_metadata
 from tests.utils import make_router
 
 
@@ -376,6 +377,138 @@ def test_router_stream_sets_model_provider_in_response_metadata() -> None:
 
     assert chunks[0].message.response_metadata.get("model_provider") == "litellm"
     assert chunks[1].message.response_metadata == {}
+
+
+def _router_chunks_with_cost() -> List[Dict[str, Any]]:
+    """The shape the router streams back: every chunk names the deployment."""
+    deployment = {"model_id": "deployment-A"}
+    return [
+        {
+            "choices": [{"delta": {"role": "assistant", "content": "hel"}}],
+            "usage": None,
+            "_hidden_params": deployment,
+        },
+        {
+            "choices": [{"delta": {"content": "lo"}, "finish_reason": "stop"}],
+            "usage": None,
+            "_hidden_params": deployment,
+        },
+        {
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 2,
+                "total_tokens": 7,
+                "cost": 2.4e-06,
+            },
+            "_hidden_params": deployment,
+        },
+    ]
+
+
+def _merge(chunks: List[Any]) -> Any:
+    """Merge a stream the way a caller consuming it does."""
+    merged = chunks[0]
+    for chunk in chunks[1:]:
+        merged = merged + chunk
+    return merged
+
+
+def test_router_streamed_cost_reaches_response_metadata() -> None:
+    """The router reports a streamed cost on a trailing chunk with no content.
+
+    That chunk arrives with an empty `choices`, so a cost read only off content
+    chunks never surfaces at all.
+    """
+    llm = ChatLiteLLMRouter(router=make_router())
+
+    with patch.object(
+        llm.router, "completion", return_value=iter(_router_chunks_with_cost())
+    ):
+        chunks = [chunk.message for chunk in llm._stream([])]
+
+    assert _merge(chunks).response_metadata["response_cost"] == 2.4e-06
+
+
+@pytest.mark.asyncio
+async def test_router_astreamed_cost_reaches_response_metadata() -> None:
+    """The async path must surface the cost the sync path surfaces."""
+    llm = ChatLiteLLMRouter(router=make_router())
+
+    async def _acompletion(**kwargs: Any) -> Any:
+        async def _aiter() -> Any:
+            for chunk in _router_chunks_with_cost():
+                yield chunk
+
+        return _aiter()
+
+    with patch.object(llm.router, "acompletion", side_effect=_acompletion):
+        chunks = [chunk.message async for chunk in llm._astream([])]
+
+    assert _merge(chunks).response_metadata["response_cost"] == 2.4e-06
+
+
+def test_router_names_the_deployment_once_across_a_stream() -> None:
+    """The deployment holds for the whole response, and langchain joins strings.
+
+    Named on every chunk, the merged message reads `deployment-Adeployment-A`.
+    """
+    llm = ChatLiteLLMRouter(router=make_router())
+
+    with patch.object(
+        llm.router, "completion", return_value=iter(_router_chunks_with_cost())
+    ):
+        chunks = [chunk.message for chunk in llm._stream([])]
+
+    assert _merge(chunks).response_metadata["model_id"] == "deployment-A"
+
+
+def test_deployment_is_read_from_either_shape_litellm_hands_over() -> None:
+    """The router's loops hold the response model, and its result builder a mapping.
+
+    An unset deployment must add no key: a `model_id` of None reads downstream as a
+    deployment that was named.
+    """
+    from types import SimpleNamespace
+
+    named = {"model_id": "deployment-A"}
+    assert _deployment_metadata({"_hidden_params": named}) == named
+    assert _deployment_metadata(SimpleNamespace(_hidden_params=named)) == named
+    assert _deployment_metadata({"_hidden_params": {"model_id": None}}) == {}
+    assert _deployment_metadata({}) == {}
+
+
+def test_router_create_chat_result_names_the_cost_and_deployment() -> None:
+    """A complete response carries both in `_hidden_params`, alongside much else.
+
+    The assertion is on the exact set this block builds, so copying `_hidden_params`
+    wholesale fails here. What a caller finally receives is wider: `get_llm_output`
+    copies litellm's router bookkeeping into `llm_output`, and core merges that in
+    afterwards. Narrowing that copy is its own change.
+    """
+    llm = ChatLiteLLMRouter(router=make_router())
+    mock_response = {
+        "choices": [
+            {"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        "_hidden_params": {
+            "response_cost": 1.35e-05,
+            "model_id": "deployment-A",
+            "api_base": "https://faketesturl/",
+            "optional_params": {"temperature": 0.1},
+        },
+    }
+
+    result = llm._create_chat_result(mock_response, metadata={})
+    metadata = result.generations[0].message.response_metadata
+
+    assert metadata == {
+        "model_name": llm.model_name or llm.model,
+        "model_provider": "litellm",
+        "response_cost": 1.35e-05,
+        "model_id": "deployment-A",
+    }
 
 
 def test_router_base_url_alias_reaches_completion() -> None:

@@ -117,6 +117,29 @@ def _provider_api_key_field(
     return field if field in cls.model_fields else None
 
 
+def _get_field(source: Any, name: str) -> Any:
+    """Retrieve *name* by dict lookup or attribute access.
+
+    litellm hands a response over as a Pydantic model on one path and as the dict
+    `model_dump()` produced on another, so neither access alone reaches both.
+    """
+    if isinstance(source, dict):
+        return source.get(name)
+    return getattr(source, name, None)
+
+
+def _cost_metadata(response: Any) -> Dict[str, Any]:
+    """Name what a call cost, from whichever field litellm recorded it in.
+
+    A complete response carries the figure in `_hidden_params`; a stream leaves it
+    there unset and reports it under `usage` on the trailing usage chunk.
+    """
+    cost = _get_field(_get_field(response, "_hidden_params"), "response_cost")
+    if cost is None:
+        cost = _get_field(_get_field(response, "usage"), "cost")
+    return {"response_cost": cost} if cost is not None else {}
+
+
 class ChatLiteLLMException(Exception):
     """Exception raised for errors in the LiteLLM integration."""
 
@@ -782,6 +805,7 @@ class ChatLiteLLM(BaseChatModel):
                 message.response_metadata = {
                     "model_name": self.model_name or self.model,
                     "model_provider": "litellm",
+                    **_cost_metadata(response),
                 }
                 message.usage_metadata = usage_metadata
             gen = ChatGeneration(
@@ -846,6 +870,10 @@ class ChatLiteLLM(BaseChatModel):
             if "usage" in chunk and chunk["usage"]:
                 usage_metadata = _create_usage_metadata(chunk["usage"])
 
+            # Read while `chunk` is still the raw response: both the usage-only
+            # branch below and the content path need it.
+            cost_metadata = _cost_metadata(chunk)
+
             # Handle empty choices (usage-only chunks)
             if len(chunk["choices"]) == 0:
                 if usage_metadata:
@@ -853,6 +881,8 @@ class ChatLiteLLM(BaseChatModel):
                     chunk_obj = default_chunk_class(
                         content="", usage_metadata=usage_metadata
                     )
+                    # A stream reports its cost here, on a chunk with no content.
+                    chunk_obj.response_metadata.update(cost_metadata)
                     cg_chunk = ChatGenerationChunk(message=chunk_obj)
                     if run_manager:
                         run_manager.on_llm_new_token("", chunk=cg_chunk)
@@ -885,6 +915,10 @@ class ChatLiteLLM(BaseChatModel):
 
             if finish_reason is not None and isinstance(chunk, AIMessageChunk):
                 chunk.response_metadata["finish_reason"] = finish_reason
+
+            # Some providers attach the usage, and so the cost, to a content chunk.
+            if cost_metadata and isinstance(chunk, AIMessageChunk):
+                chunk.response_metadata.update(cost_metadata)
 
             default_chunk_class = chunk.__class__
             cg_chunk = ChatGenerationChunk(message=chunk)
@@ -922,12 +956,18 @@ class ChatLiteLLM(BaseChatModel):
             if "usage" in chunk and chunk["usage"]:
                 usage_metadata = _create_usage_metadata(chunk["usage"])
 
+            # Read while `chunk` is still the raw response: both the usage-only
+            # branch below and the content path need it.
+            cost_metadata = _cost_metadata(chunk)
+
             # Handle empty choices (usage-only chunks)
             if len(chunk["choices"]) == 0:
                 if usage_metadata:
                     chunk_obj = default_chunk_class(
                         content="", usage_metadata=usage_metadata
                     )
+                    # A stream reports its cost here, on a chunk with no content.
+                    chunk_obj.response_metadata.update(cost_metadata)
                     cg_chunk = ChatGenerationChunk(message=chunk_obj)
                     if run_manager:
                         await run_manager.on_llm_new_token("", chunk=cg_chunk)
@@ -960,6 +1000,10 @@ class ChatLiteLLM(BaseChatModel):
 
             if finish_reason is not None and isinstance(chunk, AIMessageChunk):
                 chunk.response_metadata["finish_reason"] = finish_reason
+
+            # Some providers attach the usage, and so the cost, to a content chunk.
+            if cost_metadata and isinstance(chunk, AIMessageChunk):
+                chunk.response_metadata.update(cost_metadata)
 
             default_chunk_class = chunk.__class__
             cg_chunk = ChatGenerationChunk(message=chunk)
@@ -1251,35 +1295,28 @@ def _create_usage_metadata(token_usage: Any) -> UsageMetadata:
     a Pydantic `Usage` model (non-streaming path, where
     `ModelResponse.get("usage")` returns the raw model).
 
-    Both are handled uniformly via `_get`.
+    Both are handled uniformly via `_get_field`.
     """
-
-    def _get(obj: Any, key: str) -> Any:
-        """Retrieve *key* via dict lookup or attribute access."""
-        if isinstance(obj, dict):
-            return obj.get(key)
-        return getattr(obj, key, None)
-
-    input_tokens = int(_get(token_usage, "prompt_tokens") or 0)
-    output_tokens = int(_get(token_usage, "completion_tokens") or 0)
-    _raw_total = _get(token_usage, "total_tokens")
+    input_tokens = int(_get_field(token_usage, "prompt_tokens") or 0)
+    output_tokens = int(_get_field(token_usage, "completion_tokens") or 0)
+    _raw_total = _get_field(token_usage, "total_tokens")
     total_tokens = (
         int(_raw_total) if _raw_total is not None else (input_tokens + output_tokens)
     )
 
     # ── input token details (cache) ───────────────────────────────────────
-    cache_read = _get(token_usage, "cache_read_input_tokens")
-    cache_creation = _get(token_usage, "cache_creation_input_tokens")
+    cache_read = _get_field(token_usage, "cache_read_input_tokens")
+    cache_creation = _get_field(token_usage, "cache_creation_input_tokens")
 
     # Fallback: some providers nest cache info inside prompt_tokens_details
     # instead of top-level keys.
     if cache_read is None or cache_creation is None:
-        prompt_details = _get(token_usage, "prompt_tokens_details")
+        prompt_details = _get_field(token_usage, "prompt_tokens_details")
         if prompt_details is not None:
             if cache_read is None:
-                cache_read = _get(prompt_details, "cached_tokens")
+                cache_read = _get_field(prompt_details, "cached_tokens")
             if cache_creation is None:
-                cache_creation = _get(prompt_details, "cache_creation_tokens")
+                cache_creation = _get_field(prompt_details, "cache_creation_tokens")
 
     input_token_details: dict = {
         "cache_read": int(cache_read) if cache_read is not None else None,
@@ -1287,9 +1324,9 @@ def _create_usage_metadata(token_usage: Any) -> UsageMetadata:
     }
 
     # ── output token details (reasoning) ──────────────────────────────────
-    completion_details = _get(token_usage, "completion_tokens_details")
+    completion_details = _get_field(token_usage, "completion_tokens_details")
     reasoning = (
-        _get(completion_details, "reasoning_tokens")
+        _get_field(completion_details, "reasoning_tokens")
         if completion_details is not None
         else None
     )

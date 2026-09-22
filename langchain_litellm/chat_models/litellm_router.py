@@ -21,12 +21,26 @@ from langchain_litellm.chat_models.litellm import (
     ChatLiteLLM,
     _convert_delta_to_message_chunk,
     _convert_dict_to_message,
+    _cost_metadata,
     _create_retry_decorator,
     _create_usage_metadata,
+    _get_field,
 )
 
 token_usage_key_name = "token_usage"  # nosec # incorrectly flagged as password
 model_extra_key_name = "model_extra"  # nosec # incorrectly flagged as password
+
+
+def _deployment_metadata(response: Any) -> Dict[str, Any]:
+    """Name which deployment the router picked, never the rest of `_hidden_params`.
+
+    `_hidden_params` also carries `api_base` and the resolved request params, and
+    this metadata reaches every trace and log. Only the router routes, and only its
+    loops still hold the response model: the base class dumps each chunk to a dict,
+    which drops the private attribute this reads.
+    """
+    model_id = _get_field(_get_field(response, "_hidden_params"), "model_id")
+    return {"model_id": model_id} if model_id is not None else {}
 
 
 def get_llm_output(usage: Any, **params: Any) -> Dict[str, Any]:
@@ -205,6 +219,11 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             if "usage" in chunk and chunk["usage"]:
                 usage_metadata = _create_usage_metadata(chunk["usage"])
 
+            # Read while `chunk` is still the raw response: both the usage-only
+            # branch below and the content path need these.
+            cost_metadata = _cost_metadata(chunk)
+            deployment_metadata = _deployment_metadata(chunk)
+
             if len(chunk["choices"]) == 0:
                 # If the chunk has usage metadata but no content (typical for final stream chunk),
                 # yield it so the usage is not lost.
@@ -212,6 +231,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                     chunk_obj = default_chunk_class(
                         content="", usage_metadata=usage_metadata
                     )
+                    # A stream reports its cost here, on a chunk with no content.
+                    chunk_obj.response_metadata.update(cost_metadata)
                     cg_chunk = ChatGenerationChunk(message=chunk_obj)
                     if run_manager:
                         run_manager.on_llm_new_token("", chunk=cg_chunk, **params)
@@ -233,11 +254,18 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                 chunk.response_metadata = {
                     "model_name": self.model_name or self.model,
                     "model_provider": "litellm",
+                    # Named once: it holds for the whole response, and langchain
+                    # concatenates a string that two merged chunks both carry.
+                    **deployment_metadata,
                 }
                 first_chunk_yielded = True
 
             if finish_reason is not None and isinstance(chunk, AIMessageChunk):
                 chunk.response_metadata["finish_reason"] = finish_reason
+
+            # Some providers attach the usage, and so the cost, to a content chunk.
+            if cost_metadata and isinstance(chunk, AIMessageChunk):
+                chunk.response_metadata.update(cost_metadata)
 
             default_chunk_class = chunk.__class__
             cg_chunk = ChatGenerationChunk(message=chunk)
@@ -279,6 +307,11 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             if "usage" in chunk and chunk["usage"]:
                 usage_metadata = _create_usage_metadata(chunk["usage"])
 
+            # Read while `chunk` is still the raw response: both the usage-only
+            # branch below and the content path need these.
+            cost_metadata = _cost_metadata(chunk)
+            deployment_metadata = _deployment_metadata(chunk)
+
             # Check for empty choices
             if len(chunk["choices"]) == 0:
                 # Yield pure usage chunk if present
@@ -286,6 +319,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                     chunk_obj = default_chunk_class(
                         content="", usage_metadata=usage_metadata
                     )
+                    # A stream reports its cost here, on a chunk with no content.
+                    chunk_obj.response_metadata.update(cost_metadata)
                     cg_chunk = ChatGenerationChunk(message=chunk_obj)
                     if run_manager:
                         await run_manager.on_llm_new_token("", chunk=cg_chunk, **params)
@@ -305,11 +340,18 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                 chunk.response_metadata = {
                     "model_name": self.model_name or self.model,
                     "model_provider": "litellm",
+                    # Named once: it holds for the whole response, and langchain
+                    # concatenates a string that two merged chunks both carry.
+                    **deployment_metadata,
                 }
                 first_chunk_yielded = True
 
             if finish_reason is not None and isinstance(chunk, AIMessageChunk):
                 chunk.response_metadata["finish_reason"] = finish_reason
+
+            # Some providers attach the usage, and so the cost, to a content chunk.
+            if cost_metadata and isinstance(chunk, AIMessageChunk):
+                chunk.response_metadata.update(cost_metadata)
 
             default_chunk_class = chunk.__class__
             cg_chunk = ChatGenerationChunk(message=chunk)
@@ -393,6 +435,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                 message.response_metadata = {
                     "model_name": self.model_name or self.model,
                     "model_provider": "litellm",
+                    **_deployment_metadata(response),
+                    **_cost_metadata(response),
                 }
                 message.usage_metadata = usage_metadata
             gen = ChatGeneration(

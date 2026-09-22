@@ -26,6 +26,7 @@ from langchain_litellm.chat_models.litellm import (
     _convert_delta_to_message_chunk,
     _convert_dict_to_message,
     _convert_message_to_dict,
+    _cost_metadata,
     _create_usage_metadata,
     _provider_api_key_field,
 )
@@ -1560,7 +1561,11 @@ async def test_per_call_stream_options_are_not_discarded_on_the_async_path() -> 
 
 
 def test_response_cost_reaches_response_metadata() -> None:
-    """Cost is what a caller aggregates across a workflow, so it must survive."""
+    """Cost is what a caller aggregates across a workflow, so it must survive.
+
+    The deployment id does not travel with it here. Only a router picks a
+    deployment, so naming one on a direct call would report a choice nobody made.
+    """
     llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k")
     response = _MOCK_OK_WITH_COST()
 
@@ -1568,7 +1573,7 @@ def test_response_cost_reaches_response_metadata() -> None:
         message = llm.invoke("hi")
 
     assert message.response_metadata["response_cost"] == 1.35e-05
-    assert message.response_metadata["model_id"] == "deployment-A"
+    assert "model_id" not in message.response_metadata
 
 
 def test_hidden_params_are_not_copied_wholesale() -> None:
@@ -1612,6 +1617,93 @@ def _MOCK_OK_WITH_COST() -> Any:
         "optional_params": {"temperature": 0.1},
     }
     return response
+
+
+def _streamed_chunks_with_cost() -> list:
+    """The shape a provider streams back: the cost trails the content."""
+    return [
+        {
+            "choices": [{"delta": {"role": "assistant", "content": "hel"}}],
+            "usage": None,
+        },
+        {
+            "choices": [{"delta": {"content": "lo"}, "finish_reason": "stop"}],
+            "usage": None,
+        },
+        {
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 2,
+                "total_tokens": 7,
+                "cost": 2.4e-06,
+            },
+        },
+    ]
+
+
+def _merge(chunks: list) -> AIMessageChunk:
+    """Merge a stream the way a caller consuming it does."""
+    merged = chunks[0]
+    for chunk in chunks[1:]:
+        merged = merged + chunk
+    return merged
+
+
+def test_streamed_cost_reaches_response_metadata() -> None:
+    """A stream reports its cost on a trailing chunk that carries no content.
+
+    That chunk arrives with an empty `choices`, so a cost read only off content
+    chunks never surfaces at all.
+    """
+    llm = ChatLiteLLM(model="gpt-4", api_key="fake")
+
+    with patch.object(
+        ChatLiteLLM,
+        "completion_with_retry",
+        return_value=iter(_streamed_chunks_with_cost()),
+    ):
+        chunks = [chunk.message for chunk in llm._stream([])]
+
+    assert _merge(chunks).response_metadata["response_cost"] == 2.4e-06
+
+
+async def test_astreamed_cost_reaches_response_metadata() -> None:
+    """Async streaming must surface the cost the sync path surfaces."""
+    llm = ChatLiteLLM(model="gpt-4", api_key="fake")
+
+    async def _fake_async_stream() -> Any:
+        for chunk in _streamed_chunks_with_cost():
+            yield chunk
+
+    with patch.object(
+        ChatLiteLLM,
+        "acompletion_with_retry",
+        new=AsyncMock(return_value=_fake_async_stream()),
+    ):
+        chunks = [chunk.message async for chunk in llm._astream([])]
+
+    assert _merge(chunks).response_metadata["response_cost"] == 2.4e-06
+
+
+def test_cost_is_read_from_either_shape_litellm_hands_over() -> None:
+    """The streaming path dumps a chunk to a dict; the router path leaves the model.
+
+    Reading one shape alone drops the cost on whichever path is not tested.
+    """
+    from types import SimpleNamespace
+
+    as_dict = {"usage": {"cost": 2.4e-06}}
+    as_model = SimpleNamespace(usage=SimpleNamespace(cost=2.4e-06))
+
+    assert _cost_metadata(as_dict) == {"response_cost": 2.4e-06}
+    assert _cost_metadata(as_model) == {"response_cost": 2.4e-06}
+
+
+def test_a_response_that_names_no_cost_adds_no_key() -> None:
+    """A key present and None reads as a real figure of zero value downstream."""
+    assert _cost_metadata({}) == {}
+    assert _cost_metadata({"usage": None, "_hidden_params": {}}) == {}
 
 
 def test_credentials_are_not_shown_in_repr() -> None:
