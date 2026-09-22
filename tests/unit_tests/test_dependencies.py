@@ -3,6 +3,7 @@
 # stdlib
 import ast
 import re
+import sys
 from importlib.metadata import packages_distributions
 from pathlib import Path
 
@@ -82,4 +83,32 @@ def test_every_runtime_dependency_is_imported_by_the_package() -> None:
 
     assert not unused, (
         f"declared in [project].dependencies but never imported: {unused}"
+    )
+
+
+def test_every_imported_distribution_is_declared() -> None:
+    """A third-party import that nothing declares installs only by luck.
+
+    It resolves today because another dependency happens to pull it in, so the
+    day that dependency drops it, this package breaks with no gate having fired.
+    """
+    declared = {_canonical(name) for name in _runtime_dependency_names()}
+    installed = _modules_by_distribution()
+    stdlib = set(sys.stdlib_module_names)
+
+    undeclared = set()
+    for module in _imported_modules():
+        if module in stdlib or module == PACKAGE.name:
+            continue
+        providers = {
+            distribution
+            for distribution, modules in installed.items()
+            if module in modules
+        }
+        if providers and not providers & declared:
+            undeclared.add(f"{module} (from {', '.join(sorted(providers))})")
+
+    assert not undeclared, (
+        f"imported by the package but not in [project].dependencies: "
+        f"{sorted(undeclared)}"
     )
