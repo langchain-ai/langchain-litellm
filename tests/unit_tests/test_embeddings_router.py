@@ -193,6 +193,31 @@ def test_embeddings_router_defaults_its_model_from_the_router() -> None:
     assert embeddings.model == "emb-small"
 
 
+def test_embeddings_router_keeps_a_model_kwargs_api_key() -> None:
+    """`model_kwargs` is where the class tells rejected credentials to go.
+
+    An unset field must not clobber the key supplied there and then vanish in
+    the None filter.
+    """
+
+    class _Response:
+        data = [{"embedding": [0.1]}]
+
+    captured: dict = {}
+
+    def _capture(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return _Response()
+
+    embeddings = LiteLLMEmbeddingsRouter(
+        router=_one_deployment_router(), model_kwargs={"api_key": "sk-caller"}
+    )
+    with patch.object(embeddings.router, "embedding", side_effect=_capture):
+        embeddings.embed_query("hi")
+
+    assert captured["api_key"] == "sk-caller"
+
+
 def test_embeddings_router_forwards_only_an_explicit_api_key() -> None:
     """Each deployment owns its endpoint, so the connector's must not override it."""
 
