@@ -152,20 +152,26 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
         self, *, input_type: Optional[str] = None
     ) -> Dict[str, Any]:
         """Build parameter dict for litellm.embedding(), excluding None values."""
-        params: Dict[str, Any] = {
-            **self.model_kwargs,
-            "model": self.model,
-            "api_key": self.api_key,
-            "api_base": self.api_base,
-            "api_version": self.api_version,
-            "custom_llm_provider": self.custom_llm_provider,
-            "organization": self.organization,
-            "timeout": self.request_timeout,
-            "extra_headers": self.extra_headers,
-            "dimensions": self.dimensions,
-            "encoding_format": self.encoding_format,
-            "input_type": input_type,
-        }
+        # An unset field must not clobber the same key supplied through
+        # model_kwargs, which is where this class sends provider-specific values.
+        params: Dict[str, Any] = {**self.model_kwargs}
+        params.update(
+            (key, value)
+            for key, value in (
+                ("model", self.model),
+                ("api_key", self.api_key),
+                ("api_base", self.api_base),
+                ("api_version", self.api_version),
+                ("custom_llm_provider", self.custom_llm_provider),
+                ("organization", self.organization),
+                ("timeout", self.request_timeout),
+                ("extra_headers", self.extra_headers),
+                ("dimensions", self.dimensions),
+                ("encoding_format", self.encoding_format),
+                ("input_type", input_type),
+            )
+            if value is not None
+        )
         return {k: v for k, v in params.items() if v is not None}
 
     def _embedding_with_retry(self, **kwargs: Any) -> Any:

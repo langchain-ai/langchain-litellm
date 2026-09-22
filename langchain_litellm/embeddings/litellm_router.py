@@ -53,8 +53,11 @@ class LiteLLMEmbeddingsRouter(LiteLLMEmbeddings):
             router: A litellm.Router instance.
             **kwargs: Additional parameters passed to LiteLLMEmbeddings.
         """
-        if "model" not in kwargs and getattr(router, "model_list", None):
-            kwargs["model"] = router.model_list[0]["model_name"]
+        if "model" not in kwargs:
+            first = next(iter(getattr(router, "model_list", None) or []), None)
+            alias = first.get("model_name") if isinstance(first, dict) else None
+            if alias:
+                kwargs["model"] = alias
         super().__init__(**{**kwargs, "router": router})  # type: ignore[call-arg]
         self.router = router
 
@@ -85,6 +88,12 @@ class LiteLLMEmbeddingsRouter(LiteLLMEmbeddings):
         return {k: v for k, v in params.items() if v is not None}
 
     def _embedding_with_retry(self, **kwargs: Any) -> Any:
+        """Use tenacity to retry the router embedding call.
+
+        Note: `max_retries` here is independent of any retry/fallback
+        configuration (e.g. `num_retries`, `fallbacks`) set on the underlying
+        `litellm.Router` instance. If both are configured, retries will stack.
+        """
         """Call router.embedding with retry, so max_retries is honoured."""
         retry_decorator = _create_retry_decorator(self.max_retries)
 
@@ -95,6 +104,7 @@ class LiteLLMEmbeddingsRouter(LiteLLMEmbeddings):
         return _embed()
 
     async def _aembedding_with_retry(self, **kwargs: Any) -> Any:
+        """Async twin of `_embedding_with_retry`; the same stacking note applies."""
         """Call router.aembedding with retry, so max_retries is honoured."""
         retry_decorator = _create_retry_decorator(self.max_retries)
 

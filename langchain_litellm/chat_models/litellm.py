@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import warnings
@@ -95,17 +96,29 @@ class ChatLiteLLMException(Exception):
     """Exception raised for errors in the LiteLLM integration."""
 
 
-def _copy_containers(value: Any) -> Any:
+def _copy_containers(value: Any, memo: Optional[Dict[int, Any]] = None) -> Any:
     """Copy dicts and lists recursively, leaving anything else shared.
 
     Deep enough that a caller cannot mutate this model's configuration through the
     params it is handed, and shallow enough not to fail on a client object or any
-    other value that cannot be copied.
+    other value that cannot be copied. ``copy.copy`` rather than a fresh literal so
+    a defaultdict keeps its factory, and ``memo`` so a self-referential value ends.
     """
+    memo = {} if memo is None else memo
+    if id(value) in memo:
+        return memo[id(value)]
     if isinstance(value, dict):
-        return {key: _copy_containers(item) for key, item in value.items()}
+        copied_dict = copy.copy(value)
+        memo[id(value)] = copied_dict
+        for key, item in value.items():
+            copied_dict[key] = _copy_containers(item, memo)
+        return copied_dict
     if isinstance(value, list):
-        return [_copy_containers(item) for item in value]
+        copied_list = copy.copy(value)
+        memo[id(value)] = copied_list
+        for index, item in enumerate(value):
+            copied_list[index] = _copy_containers(item, memo)
+        return copied_list
     return value
 
 

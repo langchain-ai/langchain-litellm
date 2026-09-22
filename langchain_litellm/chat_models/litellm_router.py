@@ -93,11 +93,18 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         Claude deployment routed under an unrelated alias.
         """
         alias = self.model_name or self.model
-        for entry in self.router.model_list or []:
-            if entry.get("model_name") == alias:
-                deployment = entry.get("litellm_params", {}).get("model", "")
-                return "claude" in str(deployment).lower()
-        return super()._is_claude_model()
+        matched = [
+            entry
+            for entry in self.router.model_list or []
+            if entry.get("model_name") == alias
+        ]
+        if not matched:
+            return super()._is_claude_model()
+        # A model group can fan across providers, so any Claude deployment counts.
+        return any(
+            "claude" in str(entry.get("litellm_params", {}).get("model", "")).lower()
+            for entry in matched
+        )
 
     def completion_with_retry(
         self, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any
@@ -175,13 +182,19 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         default_chunk_class = AIMessageChunk
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs, "stream": True}
-        params = {k: v for k, v in params.items() if v is not None}
         if "stream_options" not in kwargs:
             params["stream_options"] = (
                 self.stream_options
                 if self.stream_options is not None
                 else {"include_usage": True}
             )
+        # After the default, so a caller's explicit None survives the way it does on
+        # the base class rather than being filtered out here.
+        params = {
+            key: value
+            for key, value in params.items()
+            if value is not None or key == "stream_options"
+        }
         self._prepare_params_for_router(params)
         first_chunk_yielded = False
 
@@ -237,13 +250,19 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         default_chunk_class = AIMessageChunk
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs, "stream": True}
-        params = {k: v for k, v in params.items() if v is not None}
         if "stream_options" not in kwargs:
             params["stream_options"] = (
                 self.stream_options
                 if self.stream_options is not None
                 else {"include_usage": True}
             )
+        # After the default, so a caller's explicit None survives the way it does on
+        # the base class rather than being filtered out here.
+        params = {
+            key: value
+            for key, value in params.items()
+            if value is not None or key == "stream_options"
+        }
         self._prepare_params_for_router(params)
         first_chunk_yielded = False
 
