@@ -1559,6 +1559,61 @@ async def test_per_call_stream_options_are_not_discarded_on_the_async_path() -> 
     }
 
 
+def test_response_cost_reaches_response_metadata() -> None:
+    """Cost is what a caller aggregates across a workflow, so it must survive."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k")
+    response = _MOCK_OK_WITH_COST()
+
+    with patch.object(llm.client, "completion", return_value=response):
+        message = llm.invoke("hi")
+
+    assert message.response_metadata["response_cost"] == 1.35e-05
+    assert message.response_metadata["model_id"] == "deployment-A"
+
+
+def test_hidden_params_are_not_copied_wholesale() -> None:
+    """litellm puts api_base and the resolved request params in there too.
+
+    `response_metadata` reaches every trace and log, so only the named keys travel.
+    """
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k")
+    response = _MOCK_OK_WITH_COST()
+
+    with patch.object(llm.client, "completion", return_value=response):
+        metadata = llm.invoke("hi").response_metadata
+
+    assert "api_base" not in metadata
+    assert "optional_params" not in metadata
+    assert "hidden_params" not in metadata
+
+
+def _MOCK_OK_WITH_COST() -> Any:
+    """A response shaped like litellm's, hidden params and all."""
+    from litellm.utils import Choices, Message, ModelResponse
+
+    response = ModelResponse(
+        id="x",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="ok", role="assistant"),
+            )
+        ],
+        created=0,
+        model="gpt-4o-mini",
+        object="chat.completion",
+        usage={"prompt_tokens": 8, "completion_tokens": 2, "total_tokens": 10},
+    )
+    response._hidden_params = {
+        "response_cost": 1.35e-05,
+        "model_id": "deployment-A",
+        "api_base": "https://api.openai.com",
+        "optional_params": {"temperature": 0.1},
+    }
+    return response
+
+
 def test_credentials_are_not_shown_in_repr() -> None:
     """A key in repr() reaches logs and tracebacks."""
     llm = ChatLiteLLM(
