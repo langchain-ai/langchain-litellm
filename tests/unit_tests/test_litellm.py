@@ -904,6 +904,32 @@ def test_fields_set_distinguishes_a_chosen_streaming_flag_from_the_default() -> 
     assert "streaming" in ChatLiteLLM(model="gpt-4o", streaming=False).model_fields_set
 
 
+@pytest.mark.parametrize(
+    "field",
+    ["model", "streaming", "max_retries", "model_kwargs", "disable_streaming"],
+)
+def test_an_explicit_none_falls_back_to_the_default(field: str) -> None:
+    """A config built from JSON or os.getenv carries nulls for unset values.
+
+    These fields are not Optional, so a None that reaches pydantic is rejected.
+    Dropping it leaves the default in place and, unlike backfilling the default,
+    keeps the field out of `model_fields_set` where langchain-core reads it.
+    """
+    llm = ChatLiteLLM(**{"model": "anthropic/claude-3-5-sonnet-20241022", field: None})
+
+    assert getattr(llm, field) == ChatLiteLLM.model_fields[field].get_default(
+        call_default_factory=True
+    )
+    assert field not in llm.model_fields_set
+
+
+def test_a_null_streaming_still_streams() -> None:
+    """`streaming=None` means unset, so it must not read as a chosen opt-out."""
+    llm = ChatLiteLLM(model="gpt-4o", api_key="k", streaming=None)
+
+    assert "streaming" not in llm.model_fields_set
+
+
 def test_a_validator_assigned_field_counts_as_set() -> None:
     """`base_url` reaches `api_base` through a validator, so a round-trip keeps it.
 

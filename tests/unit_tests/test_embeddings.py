@@ -267,6 +267,22 @@ def test_unknown_constructor_kwargs_are_rejected() -> None:
     assert LiteLLMEmbeddings(model="text-embedding-3-small", api_key="sk-x").api_key
 
 
+def test_rejecting_an_unknown_kwarg_does_not_echo_its_value() -> None:
+    """The rejection must not print the credential it was protecting.
+
+    Pydantic's own `extra_forbidden` error carries `input_value`, so refusing a
+    misspelled credential would put it in the traceback verbatim.
+    """
+    with pytest.raises(ValueError) as caught:
+        LiteLLMEmbeddings(
+            model="text-embedding-3-small",
+            openai_api_key="sk-should-not-appear",  # type: ignore[call-arg]
+        )
+
+    assert "openai_api_key" in str(caught.value)
+    assert "sk-should-not-appear" not in str(caught.value)
+
+
 def test_embeddings_credentials_are_not_shown_in_repr() -> None:
     """The repr protection must cover this class too; the router inherits it."""
     assert "sk-should-not-appear" not in repr(
