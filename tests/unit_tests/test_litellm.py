@@ -1686,6 +1686,58 @@ async def test_astreamed_cost_reaches_response_metadata() -> None:
     assert _merge(chunks).response_metadata["response_cost"] == 2.4e-06
 
 
+def _chunks_costing_twice() -> list:
+    """A provider that attaches usage, and so a cost, to content chunks.
+
+    langchain raises on two differing floats under one key, so a stream that
+    names its cost on more than one chunk cannot be merged at all.
+    """
+    return [
+        {
+            "choices": [{"delta": {"role": "assistant", "content": "hel"}}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 1, "cost": 1.0e-06},
+        },
+        {
+            "choices": [{"delta": {"content": "lo"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "cost": 2.4e-06},
+        },
+    ]
+
+
+def test_a_streamed_cost_is_named_once() -> None:
+    """The merge a caller performs must survive a provider that reports twice."""
+    llm = ChatLiteLLM(model="gpt-4", api_key="fake")
+
+    with patch.object(
+        ChatLiteLLM, "completion_with_retry", return_value=iter(_chunks_costing_twice())
+    ):
+        chunks = [chunk.message for chunk in llm._stream([])]
+
+    naming = [c for c in chunks if "response_cost" in c.response_metadata]
+    assert len(naming) == 1
+    assert _merge(chunks).response_metadata["response_cost"] == 1.0e-06
+
+
+async def test_an_astreamed_cost_is_named_once() -> None:
+    """The async path merges the same way, so it needs the same guarantee."""
+    llm = ChatLiteLLM(model="gpt-4", api_key="fake")
+
+    async def _fake_async_stream() -> Any:
+        for chunk in _chunks_costing_twice():
+            yield chunk
+
+    with patch.object(
+        ChatLiteLLM,
+        "acompletion_with_retry",
+        new=AsyncMock(return_value=_fake_async_stream()),
+    ):
+        chunks = [chunk.message async for chunk in llm._astream([])]
+
+    naming = [c for c in chunks if "response_cost" in c.response_metadata]
+    assert len(naming) == 1
+    assert _merge(chunks).response_metadata["response_cost"] == 1.0e-06
+
+
 def test_cost_is_read_from_either_shape_litellm_hands_over() -> None:
     """The streaming path dumps a chunk to a dict; the router path leaves the model.
 

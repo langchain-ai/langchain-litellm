@@ -463,6 +463,57 @@ def test_router_names_the_deployment_once_across_a_stream() -> None:
     assert _merge(chunks).response_metadata["model_id"] == "deployment-A"
 
 
+def _router_chunks_costing_twice() -> List[Dict[str, Any]]:
+    """A deployment that attaches usage, and so a cost, to content chunks."""
+    deployment = {"model_id": "deployment-A"}
+    return [
+        {
+            "choices": [{"delta": {"role": "assistant", "content": "hel"}}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 1, "cost": 1.0e-06},
+            "_hidden_params": deployment,
+        },
+        {
+            "choices": [{"delta": {"content": "lo"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "cost": 2.4e-06},
+            "_hidden_params": deployment,
+        },
+    ]
+
+
+def test_router_names_a_streamed_cost_once() -> None:
+    """langchain raises on two differing floats, so the merge would not survive."""
+    llm = ChatLiteLLMRouter(router=make_router())
+
+    with patch.object(
+        llm.router, "completion", return_value=iter(_router_chunks_costing_twice())
+    ):
+        chunks = [chunk.message for chunk in llm._stream([])]
+
+    naming = [c for c in chunks if "response_cost" in c.response_metadata]
+    assert len(naming) == 1
+    assert _merge(chunks).response_metadata["response_cost"] == 1.0e-06
+
+
+@pytest.mark.asyncio
+async def test_router_names_an_astreamed_cost_once() -> None:
+    """The async loop merges the same way, so it needs the same guarantee."""
+    llm = ChatLiteLLMRouter(router=make_router())
+
+    async def _acompletion(**kwargs: Any) -> Any:
+        async def _aiter() -> Any:
+            for chunk in _router_chunks_costing_twice():
+                yield chunk
+
+        return _aiter()
+
+    with patch.object(llm.router, "acompletion", side_effect=_acompletion):
+        chunks = [chunk.message async for chunk in llm._astream([])]
+
+    naming = [c for c in chunks if "response_cost" in c.response_metadata]
+    assert len(naming) == 1
+    assert _merge(chunks).response_metadata["response_cost"] == 1.0e-06
+
+
 def test_deployment_is_read_from_either_shape_litellm_hands_over() -> None:
     """The router's loops hold the response model, and its result builder a mapping.
 
