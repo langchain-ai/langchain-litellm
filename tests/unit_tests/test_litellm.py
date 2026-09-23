@@ -1665,7 +1665,9 @@ def test_streamed_cost_reaches_response_metadata() -> None:
     ):
         chunks = [chunk.message for chunk in llm._stream([])]
 
-    assert _merge(chunks).response_metadata["response_cost"] == 2.4e-06
+    merged = _merge(chunks)
+    assert merged.response_metadata["response_cost"] == 2.4e-06
+    assert "model_id" not in merged.response_metadata
 
 
 async def test_astreamed_cost_reaches_response_metadata() -> None:
@@ -1750,6 +1752,15 @@ def test_cost_is_read_from_either_shape_litellm_hands_over() -> None:
 
     assert _cost_metadata(as_dict) == {"response_cost": 2.4e-06}
     assert _cost_metadata(as_model) == {"response_cost": 2.4e-06}
+
+    # A complete response holds the settled figure; `usage` is the stream's fallback.
+    both = {"_hidden_params": {"response_cost": 1.0}, "usage": {"cost": 2.0}}
+    assert _cost_metadata(both) == {"response_cost": 1.0}
+
+
+def test_a_zero_cost_is_a_figure_rather_than_an_absence() -> None:
+    """A free call costs 0.0, and a truthiness check would report it as unknown."""
+    assert _cost_metadata({"usage": {"cost": 0.0}}) == {"response_cost": 0.0}
 
 
 def test_a_response_that_names_no_cost_adds_no_key() -> None:

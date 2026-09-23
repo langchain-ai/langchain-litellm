@@ -445,7 +445,10 @@ async def test_router_astreamed_cost_reaches_response_metadata() -> None:
     with patch.object(llm.router, "acompletion", side_effect=_acompletion):
         chunks = [chunk.message async for chunk in llm._astream([])]
 
-    assert _merge(chunks).response_metadata["response_cost"] == 2.4e-06
+    merged = _merge(chunks)
+    assert merged.response_metadata["response_cost"] == 2.4e-06
+    # The sync loop has its own guard; this loop is a copy and needs its own.
+    assert merged.response_metadata["model_id"] == "deployment-A"
 
 
 def test_router_names_the_deployment_once_across_a_stream() -> None:
