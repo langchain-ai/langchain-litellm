@@ -482,9 +482,7 @@ def test_router_create_chat_result_names_the_cost_and_deployment() -> None:
     """A complete response carries both in `_hidden_params`, alongside much else.
 
     The assertion is on the exact set this block builds, so copying `_hidden_params`
-    wholesale fails here. What a caller finally receives is wider: `get_llm_output`
-    copies litellm's router bookkeeping into `llm_output`, and core merges that in
-    afterwards. Narrowing that copy is its own change.
+    wholesale fails here.
     """
     llm = ChatLiteLLMRouter(router=make_router())
     mock_response = {

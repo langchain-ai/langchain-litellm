@@ -43,18 +43,6 @@ def _deployment_metadata(response: Any) -> Dict[str, Any]:
     return {"model_id": model_id} if model_id is not None else {}
 
 
-def get_llm_output(usage: Any, **params: Any) -> Dict[str, Any]:
-    """Build the llm_output dict from router usage and completion params."""
-    llm_output = {token_usage_key_name: usage}
-    # copy over metadata (metadata came from router completion call)
-    metadata = params["metadata"]
-    for key in metadata:
-        if key not in llm_output:
-            # if token usage in metadata, prefer metadata's copy of it
-            llm_output[key] = metadata[key]
-    return llm_output
-
-
 class ChatLiteLLMRouter(ChatLiteLLM):
     """LiteLLM Router-backed chat model."""
 
@@ -444,7 +432,10 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                 generation_info=dict(finish_reason=res.get("finish_reason")),
             )
             generations.append(gen)
-        llm_output = get_llm_output(token_usage, **params)
+        # The Router fills `params["metadata"]` in place with its own routing and
+        # rate-limit bookkeeping. Core merges whatever is here into the message, so
+        # nothing enters it that this class did not choose to name.
+        llm_output: Dict[str, Any] = {token_usage_key_name: token_usage}
 
         # Check standard field first, then fallback to Vertex specific field
         provider_specific_fields = response.get("provider_specific_fields")
