@@ -511,6 +511,91 @@ def test_router_create_chat_result_names_the_cost_and_deployment() -> None:
     }
 
 
+def _completion_filling_router_metadata() -> Callable[..., Any]:
+    """Answer the way litellm does, by filling the caller's `metadata` dict in place.
+
+    The Router treats that dict as an out-parameter for its own bookkeeping, so a
+    double that ignores it cannot reproduce what a caller finally receives.
+    """
+
+    def _completion(**kwargs: Any) -> Any:
+        kwargs["metadata"].update(
+            {
+                "model_group": "gpt-3.5-turbo",
+                "deployment": "azure/fake-deployment-name-2",
+                "api_base": "https://faketesturl/",
+                "model_info": {"id": "deployment-A"},
+                "hidden_params": {
+                    "api_base": "https://faketesturl/",
+                    "optional_params": {"temperature": 0.1},
+                    "response_cost": 1.35e-05,
+                },
+            }
+        )
+        return {
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            "_hidden_params": {"response_cost": 1.35e-05, "model_id": "deployment-A"},
+        }
+
+    return _completion
+
+
+_DELIVERED_KEYS = {
+    "model_name",
+    "model_provider",
+    "finish_reason",
+    "token_usage",
+    "response_cost",
+    "model_id",
+}
+
+
+def test_router_delivers_only_the_keys_it_names() -> None:
+    """`llm_output` reaches the message only after `_create_chat_result` returns.
+
+    Reading the generation directly is blind to that merge, so this goes through
+    `invoke()`, which is what a caller receives.
+    """
+    llm = ChatLiteLLMRouter(router=make_router())
+
+    with patch.object(
+        llm.router, "completion", side_effect=_completion_filling_router_metadata()
+    ):
+        metadata = llm.invoke("hi").response_metadata
+
+    assert set(metadata) == _DELIVERED_KEYS
+
+
+@pytest.mark.asyncio
+async def test_router_delivers_the_same_keys_on_both_entry_points() -> None:
+    """litellm fills `hidden_params` on the sync path and not on the async one.
+
+    Copying that dict makes the delivered key set depend on which method was
+    called, so a caller reading a key cannot know whether to expect it.
+    """
+    llm = ChatLiteLLMRouter(router=make_router())
+    sync_double = _completion_filling_router_metadata()
+
+    async def _acompletion(**kwargs: Any) -> Any:
+        # litellm does not reach the logging path that writes `hidden_params` here.
+        result = sync_double(**kwargs)
+        kwargs["metadata"].pop("hidden_params", None)
+        return result
+
+    with patch.object(llm.router, "completion", side_effect=sync_double):
+        sync_metadata = llm.invoke("hi").response_metadata
+    with patch.object(llm.router, "acompletion", side_effect=_acompletion):
+        async_metadata = (await llm.ainvoke("hi")).response_metadata
+
+    assert set(sync_metadata) == set(async_metadata) == _DELIVERED_KEYS
+
+
 def test_router_base_url_alias_reaches_completion() -> None:
     """Test that base_url flows through inheritance and survives router param stripping."""
     from litellm import Router
