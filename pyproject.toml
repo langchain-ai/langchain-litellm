@@ -94,6 +94,11 @@ typing = [
     "cffi>=2.0.0,<3.0.0",
 ]
 
+[tool.uv]
+# A plain `uv sync` installs the locked ruff too, so an editor that uses the
+# project environment lints with exactly the ruff `make lint` and CI run.
+default-groups = ["dev", "lint"]
+
 [tool.mypy]
 disallow_untyped_defs = "True"
 mypy_path = "scripts"  # so `make lint_tests` resolves what the tests import from there
