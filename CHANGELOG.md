@@ -105,6 +105,8 @@
 
 ## [0.6.0](https://github.com/langchain-ai/langchain-litellm/compare/v0.5.1...v0.6.0) (2026-03-01)
 
+*Never published to PyPI. 0.6.1, released the same day, is the first published version to include these changes.*
+
 
 ### Features
 
