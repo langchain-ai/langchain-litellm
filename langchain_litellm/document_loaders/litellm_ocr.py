@@ -409,6 +409,4 @@ class LiteLLMOCRLoader(BaseLoader):
         Yields:
             Document objects.
         """
-        documents = self.load()
-        for doc in documents:
-            yield doc
+        yield from self.load()

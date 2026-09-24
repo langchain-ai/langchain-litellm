@@ -694,12 +694,14 @@ def test_router_generate_honours_max_retries() -> None:
     router = make_router()
     llm = ChatLiteLLMRouter(router=router, max_retries=4)
 
-    with patch.object(
-        llm.router, "completion", side_effect=_rate_limit_error()
-    ) as mock_completion:
-        with patch("time.sleep", return_value=None):  # skip tenacity backoff
-            with pytest.raises(litellm.RateLimitError):
-                llm.invoke("hi")
+    with (
+        patch.object(
+            llm.router, "completion", side_effect=_rate_limit_error()
+        ) as mock_completion,
+        patch("time.sleep", return_value=None),  # skip tenacity backoff
+        pytest.raises(litellm.RateLimitError),
+    ):
+        llm.invoke("hi")
 
     assert mock_completion.call_count == 4
 
@@ -730,12 +732,12 @@ async def test_router_agenerate_honours_max_retries() -> None:
     async def _raise(**kwargs: object) -> None:
         raise _rate_limit_error()
 
-    with patch.object(
-        llm.router, "acompletion", side_effect=_raise
-    ) as mock_acompletion:
-        with patch("asyncio.sleep", return_value=None):  # skip tenacity backoff
-            with pytest.raises(litellm.RateLimitError):
-                await llm.ainvoke("hi")
+    with (
+        patch.object(llm.router, "acompletion", side_effect=_raise) as mock_acompletion,
+        patch("asyncio.sleep", return_value=None),  # skip tenacity backoff
+        pytest.raises(litellm.RateLimitError),
+    ):
+        await llm.ainvoke("hi")
 
     assert mock_acompletion.call_count == 4
 
@@ -754,13 +756,13 @@ async def test_router_astream_honours_max_retries() -> None:
     async def _raise(**kwargs: object) -> None:
         raise _rate_limit_error()
 
-    with patch.object(
-        llm.router, "acompletion", side_effect=_raise
-    ) as mock_acompletion:
-        with patch("asyncio.sleep", return_value=None):  # skip tenacity backoff
-            with pytest.raises(litellm.RateLimitError):
-                async for _ in llm.astream("hi"):
-                    pass
+    with (
+        patch.object(llm.router, "acompletion", side_effect=_raise) as mock_acompletion,
+        patch("asyncio.sleep", return_value=None),  # skip tenacity backoff
+        pytest.raises(litellm.RateLimitError),
+    ):
+        async for _ in llm.astream("hi"):
+            pass
 
     assert mock_acompletion.call_count == 4
 

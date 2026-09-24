@@ -249,7 +249,7 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
                                 name=func_name or "", args=func_args, id=tc_id or ""
                             )
                         )
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     # Prevent crash on malformed tool call
                     pass
 
@@ -466,7 +466,8 @@ def _convert_message_to_dict(message: BaseMessage) -> dict[str, Any]:
         message_dict["role"] = "tool"
         message_dict["tool_call_id"] = message.tool_call_id
     else:
-        raise ValueError(f"Got unknown type {message}")
+        # ValueError, not TypeError: callers already catch this one.
+        raise ValueError(f"Got unknown type {message}")  # noqa: TRY004
 
     # Attach the name field if it exists in additional arguments
     if "name" in message.additional_kwargs:
@@ -809,9 +810,10 @@ class ChatLiteLLM(BaseChatModel):
                 message.usage_metadata = usage_metadata
             gen = ChatGeneration(
                 message=message,
-                generation_info=dict(
-                    finish_reason=res.get("finish_reason"), logprobs=res.get("logprobs")
-                ),
+                generation_info={
+                    "finish_reason": res.get("finish_reason"),
+                    "logprobs": res.get("logprobs"),
+                },
             )
             generations.append(gen)
         set_model_value = self.model
@@ -1084,10 +1086,9 @@ class ChatLiteLLM(BaseChatModel):
         # Robustly handle tool_choice='any' or True for ALL providers.
         # Many providers (Gemini, Vertex, etc.) via LiteLLM reject "any" but accept "required".
         # We map "any" (or True) to "required" globally to prevent crashes.
-        if tool_choice == "any" or isinstance(tool_choice, bool):
-            if tool_choice is True or tool_choice == "any":
-                tool_choice = "required"
-            # if tool_choice is False, we leave it (it behaves like None/auto depending on provider)
+        # A False tool_choice is left alone; it behaves like None or auto per provider.
+        if tool_choice is True or tool_choice == "any":
+            tool_choice = "required"
 
         # Handle dict tool_choice logic — validate before any downgrade so
         # typos in tool names always raise, even when thinking is enabled.

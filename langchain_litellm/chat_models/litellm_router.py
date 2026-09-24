@@ -440,7 +440,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                 message.usage_metadata = usage_metadata
             gen = ChatGeneration(
                 message=message,
-                generation_info=dict(finish_reason=res.get("finish_reason")),
+                generation_info={"finish_reason": res.get("finish_reason")},
             )
             generations.append(gen)
         # The Router fills `params["metadata"]` in place with its own routing and

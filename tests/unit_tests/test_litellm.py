@@ -410,7 +410,7 @@ def test_an_unexpected_provider_lookup_error_surfaces(_no_provider_env: None) ->
         ),
         pytest.raises(TypeError),
     ):
-        llm._client_params
+        _ = llm._client_params
 
 
 def test_model_kwargs_decides_the_timeout(_no_provider_env: None) -> None:
@@ -1874,6 +1874,7 @@ def test_constructor_signature_is_not_erased(tmp_path: Path) -> None:
         [sys.executable, "-m", "mypy", "--no-incremental", str(probe)],
         capture_output=True,
         text=True,
+        check=False,
     )
 
     assert "call-arg" in result.stdout, result.stdout

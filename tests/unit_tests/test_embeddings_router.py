@@ -1,6 +1,6 @@
 """Unit tests for LiteLLMEmbeddingsRouter."""
 
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -227,7 +227,7 @@ def test_embeddings_router_keeps_a_model_kwargs_api_key() -> None:
     """
 
     class _Response:
-        data = [{"embedding": [0.1]}]
+        data: ClassVar[list[dict[str, list[float]]]] = [{"embedding": [0.1]}]
 
     captured: dict = {}
 
@@ -248,7 +248,7 @@ def test_embeddings_router_forwards_only_an_explicit_api_key() -> None:
     """Each deployment owns its endpoint, so the connector's must not override it."""
 
     class _Response:
-        data = [{"embedding": [0.1]}]
+        data: ClassVar[list[dict[str, list[float]]]] = [{"embedding": [0.1]}]
 
     captured: dict = {}
 
