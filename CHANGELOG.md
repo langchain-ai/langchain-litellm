@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.1](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.8.0...langchain-litellm==0.8.1) (2026-09-24)
+
+
+### Bug Fixes
+
+* **chat_models:** preserve file metadata after normalization ([#289](https://github.com/langchain-ai/langchain-litellm/issues/289)) ([46abd65](https://github.com/langchain-ai/langchain-litellm/commit/46abd6586b269967fa5f726658485fadb3db9185))
+* **deps:** exclude litellm releases that fail to import on Python 3.10 ([#290](https://github.com/langchain-ai/langchain-litellm/issues/290)) ([092b466](https://github.com/langchain-ai/langchain-litellm/commit/092b466468d32f1144e8f5487d7c09be0eb92f90))
+
 ## [0.8.0](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.7.2...langchain-litellm==0.8.0) (2026-09-23)
 
 
