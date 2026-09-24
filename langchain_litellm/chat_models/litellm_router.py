@@ -20,12 +20,23 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 
 from langchain_litellm.chat_models.litellm import (
     ChatLiteLLM,
+    _attach_thinking_blocks,
     _convert_delta_to_message_chunk,
     _convert_dict_to_message,
     _cost_metadata,
     _create_retry_decorator,
     _create_usage_metadata,
     _get_field,
+    _litellm_providers,
+    _signing_endpoint,
+    _ThinkingBlockAssembler,
+)
+
+# Router settings, and per-call keys, that re-send a request to another group.
+_FALLBACK_SETTINGS = (
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
 )
 
 token_usage_key_name = "token_usage"  # nosec # incorrectly flagged as password
@@ -109,6 +120,53 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             for entry in matched
         )
 
+    def _thinking_endpoint(self, params: dict[str, Any]) -> str | None:
+        """The one signing endpoint every deployment this request can reach shares.
+
+        The Router picks a deployment per request and re-sends the same messages to
+        any fallback, so thinking goes back only for a group with no fallback and no
+        alias whose deployments all sign at the same endpoint.
+        """
+        group = params.get("model")
+        router = self.router
+        if not isinstance(group, str) or any(
+            params.get(key) for key in _FALLBACK_SETTINGS
+        ):
+            return None
+        if getattr(router, "default_fallbacks", None):
+            return None
+        # The Router also matches a fallback keyed by the group minus its provider.
+        names = {group, "*"}
+        prefix, _, bare = group.partition("/")
+        if bare and prefix in _litellm_providers():
+            names.add(bare)
+        for setting in _FALLBACK_SETTINGS:
+            for mapping in getattr(router, setting, None) or []:
+                if not isinstance(mapping, dict) or names & mapping.keys():
+                    return None
+        if group in (getattr(router, "model_group_alias", None) or {}):
+            return None
+        endpoints = set()
+        for entry in router.model_list or []:
+            if entry.get("model_name") != group:
+                continue
+            deployment = entry.get("litellm_params") or {}
+            # Call-level keys override the deployment's, and base_url beats api_base.
+            base = (params.get("base_url") or deployment.get("base_url")) or (
+                params.get("api_base") or deployment.get("api_base")
+            )
+            endpoints.add(
+                _signing_endpoint(
+                    deployment.get("model"),
+                    params.get("custom_llm_provider")
+                    or deployment.get("custom_llm_provider"),
+                    base,
+                    deployment.get("base_model")
+                    or (entry.get("model_info") or {}).get("base_model"),
+                )
+            )
+        return endpoints.pop() if len(endpoints) == 1 else None
+
     def completion_with_retry(
         self, run_manager: CallbackManagerForLLMRun | None = None, **kwargs: Any
     ) -> Any:
@@ -169,6 +227,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         params["stream"] = False
         params = {k: v for k, v in params.items() if v is not None}
         self._prepare_params_for_router(params)
+        _attach_thinking_blocks(
+            messages, message_dicts, self._thinking_endpoint(params)
+        )
 
         response = self.completion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
@@ -199,6 +260,10 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             if value is not None or key == "stream_options"
         }
         self._prepare_params_for_router(params)
+        endpoint = self._thinking_endpoint(params)
+        _attach_thinking_blocks(messages, message_dicts, endpoint)
+        # One per call: fragments from two streams must never meet.
+        thinking = _ThinkingBlockAssembler(endpoint) if endpoint else None
         first_chunk_yielded = False
         cost_named = False
 
@@ -236,7 +301,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             delta = chunk["choices"][0]["delta"]
             # Read before `chunk` is rebound from the raw mapping to the message.
             finish_reason = chunk["choices"][0].get("finish_reason")
-            chunk = _convert_delta_to_message_chunk(delta, default_chunk_class)
+            chunk = _convert_delta_to_message_chunk(
+                delta, default_chunk_class, thinking
+            )
 
             # Attach usage if it exists on a content chunk
             if usage_metadata and isinstance(chunk, AIMessageChunk):
@@ -291,6 +358,10 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             if value is not None or key == "stream_options"
         }
         self._prepare_params_for_router(params)
+        endpoint = self._thinking_endpoint(params)
+        _attach_thinking_blocks(messages, message_dicts, endpoint)
+        # One per call: fragments from two streams must never meet.
+        thinking = _ThinkingBlockAssembler(endpoint) if endpoint else None
         first_chunk_yielded = False
         cost_named = False
 
@@ -328,7 +399,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             delta = chunk["choices"][0]["delta"]
             # Read before `chunk` is rebound from the raw mapping to the message.
             finish_reason = chunk["choices"][0].get("finish_reason")
-            chunk = _convert_delta_to_message_chunk(delta, default_chunk_class)
+            chunk = _convert_delta_to_message_chunk(
+                delta, default_chunk_class, thinking
+            )
 
             if usage_metadata and isinstance(chunk, AIMessageChunk):
                 chunk.usage_metadata = usage_metadata
@@ -382,6 +455,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         params["stream"] = False
         params = {k: v for k, v in params.items() if v is not None}
         self._prepare_params_for_router(params)
+        _attach_thinking_blocks(
+            messages, message_dicts, self._thinking_endpoint(params)
+        )
 
         response = await self.acompletion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
@@ -428,8 +504,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         generations = []
         token_usage = response.get("usage", Usage(prompt_tokens=0, total_tokens=0))
         usage_metadata = _create_usage_metadata(token_usage)
+        endpoint = self._thinking_endpoint(params)
         for res in response["choices"]:
-            message = _convert_dict_to_message(res["message"])
+            message = _convert_dict_to_message(res["message"], thinking_origin=endpoint)
             if isinstance(message, AIMessage):
                 message.response_metadata = {
                     "model_name": self.model_name or self.model,
