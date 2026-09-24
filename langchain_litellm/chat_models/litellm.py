@@ -404,7 +404,19 @@ def _convert_message_to_dict(message: BaseMessage) -> Dict[str, Any]:
                 # Check for LangChain's standard multimodal format (e.g., 'media', 'image_url')
                 # Convert these to the OpenAI/LiteLLM compatible format using the core utility
                 elif is_data_content_block(item):
-                    new_content.append(convert_to_openai_data_block(item))
+                    converted = convert_to_openai_data_block(item)
+                    if isinstance(file_payload := converted.get("file"), dict):
+                        # Core normalization moves nested file fields (e.g.,
+                        # format and video_metadata) into file_-prefixed extras.
+                        # Restore them for LiteLLM after converting back.
+                        file_payload.update(
+                            {
+                                key.removeprefix("file_"): value
+                                for key, value in (item.get("extras") or {}).items()
+                                if key.startswith("file_")
+                            }
+                        )
+                    new_content.append(converted)
 
                 # Skip tool_use / tool_call blocks — these are handled via
                 # message.tool_calls and must not leak into content sent to
