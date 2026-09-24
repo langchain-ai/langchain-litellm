@@ -22,7 +22,7 @@ if __name__ == "__main__":
             if spec is None or spec.loader is None:
                 raise ImportError(f"could not determine a loader for {file}")
             spec.loader.exec_module(importlib.util.module_from_spec(spec))
-        except Exception:
+        except Exception:  # noqa: BLE001 - report every file that fails to import
             has_failure = True
             print(file)
             traceback.print_exc()

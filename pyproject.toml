@@ -74,7 +74,7 @@ codespell = [
     "codespell>=2.2.6,<3.0.0",
 ]
 lint = [
-    "ruff>=0.12.2,<0.17.0",
+    "ruff>=0.16.0,<0.17.0",
 ]
 dev = [
     "ipykernel>=6.29.5,<8.0.0",
@@ -110,56 +110,140 @@ ignore_missing_imports = true
 module = "tests.*"
 disallow_untyped_defs = false
 
+[tool.ruff]
+# Pins the rule set to ruff 0.16; any other minor refuses to run. Patch releases can
+# still change a verdict, so `make lint`'s locked ruff is the authority.
+required-version = ">=0.16.0,<0.17.0"
+
 [tool.ruff.format]
 docstring-code-format = true  # Formats code blocks in docstrings
 
 [tool.ruff.lint]
-# ruff's own default rule set; `ignore` and `per-file-ignores` below subtract
-# from it.
-ignore = [
-    "COM812",  # Trailing comma missing — conflicts with the ruff formatter
-    "ISC001",  # Implicit string concatenation on one line — conflicts with the ruff formatter
-    "PERF203", # `try`-`except` within a loop — incurs overhead only when exceptions are common
-    "SLF001",  # Access to a private member of an external class
-    "PLR0913", # Too many arguments to function definition
-    "PLC0414", # Import alias does not rename original package — conflicts with type-checker re-export conventions
+# Full codes, never prefixes, so no ruff upgrade or preview mode can add a rule unseen.
+select = [
+    # ruff 0.16's default rule set, all 413 codes, as https://docs.astral.sh/ruff/default-rules/
+    # lists them. FA100, FA102, UP040, UP043, UP046 and UP047 wait on a newer requires-python.
+    # flake8-async
+    "ASYNC100", "ASYNC105", "ASYNC115", "ASYNC116", "ASYNC210", "ASYNC220", "ASYNC221",
+    "ASYNC222", "ASYNC230", "ASYNC251",
+    # flake8-bugbear
+    "B002", "B003", "B004", "B005", "B006", "B008", "B009", "B010", "B012", "B013",
+    "B014", "B015", "B016", "B017", "B018", "B019", "B020", "B021", "B022", "B023",
+    "B025", "B026", "B029", "B030", "B031", "B032", "B033", "B035", "B039",
+    # flake8-blind-except
+    "BLE001",
+    # flake8-comprehensions
+    "C400", "C401", "C402", "C403", "C404", "C405", "C406", "C408", "C409", "C410",
+    "C411", "C413", "C414", "C415", "C417", "C418", "C419",
+    # pydocstyle
+    "D419",
+    # flake8-datetimez
+    "DTZ001", "DTZ002", "DTZ003", "DTZ004", "DTZ005", "DTZ006", "DTZ007", "DTZ011",
+    "DTZ012", "DTZ901",
+    # pycodestyle (errors)
+    "E722", "E902",
+    # flake8-executable
+    "EXE001", "EXE002", "EXE004", "EXE005",
+    # Pyflakes
+    "F401", "F402", "F404", "F407", "F501", "F502", "F503", "F504", "F505", "F506",
+    "F507", "F508", "F509", "F521", "F522", "F523", "F524", "F525", "F541", "F601",
+    "F602", "F621", "F622", "F631", "F632", "F633", "F634", "F701", "F702", "F704",
+    "F706", "F707", "F811", "F821", "F822", "F823", "F841", "F842", "F901",
+    # flake8-future-annotations
+    "FA100", "FA102",
+    # flynt
+    "FLY002",
+    # refurb
+    "FURB105", "FURB122", "FURB129", "FURB132", "FURB136", "FURB157", "FURB161",
+    "FURB162", "FURB163", "FURB166", "FURB167", "FURB168", "FURB169", "FURB177",
+    "FURB181", "FURB188", "FURB192",
+    # flake8-logging-format
+    "G010", "G101", "G201", "G202",
+    # isort
+    "I001",
+    # flake8-gettext
+    "INT001", "INT002", "INT003",
+    # flake8-implicit-str-concat
+    "ISC004",
+    # flake8-logging
+    "LOG001", "LOG002", "LOG009", "LOG014", "LOG015",
+    # pep8-naming
+    "N999",
+    # Perflint
+    "PERF101", "PERF102", "PERF402",
+    # pygrep-hooks
+    "PGH005",
+    # flake8-pie
+    "PIE790", "PIE794", "PIE796", "PIE800", "PIE804", "PIE807", "PIE808", "PIE810",
+    # Pylint (conventions)
+    "PLC0105", "PLC0131", "PLC0132", "PLC0205", "PLC0206", "PLC0208", "PLC0414",
+    "PLC3002",
+    # Pylint (errors)
+    "PLE0100", "PLE0101", "PLE0115", "PLE0116", "PLE0117", "PLE0118", "PLE0303",
+    "PLE0304", "PLE0305", "PLE0307", "PLE0308", "PLE0309", "PLE0604", "PLE0605",
+    "PLE0643", "PLE0704", "PLE1132", "PLE1142", "PLE1205", "PLE1206", "PLE1300",
+    "PLE1307", "PLE1310", "PLE1507", "PLE1519", "PLE1520", "PLE1700", "PLE2502",
+    "PLE2510", "PLE2512", "PLE2513", "PLE2514", "PLE2515",
+    # Pylint (refactors)
+    "PLR0124", "PLR0133", "PLR0206", "PLR0402", "PLR1704", "PLR1708", "PLR1711",
+    "PLR1716", "PLR1722", "PLR1730", "PLR1733", "PLR1736", "PLR2044",
+    # Pylint (warnings)
+    "PLW0120", "PLW0127", "PLW0128", "PLW0129", "PLW0131", "PLW0133", "PLW0177",
+    "PLW0211", "PLW0245", "PLW0406", "PLW0602", "PLW0604", "PLW0642", "PLW0711",
+    "PLW1501", "PLW1507", "PLW1508", "PLW1509", "PLW1510", "PLW2101",
+    # flake8-pytest-style
+    "PT010", "PT014", "PT020", "PT025", "PT026", "PT031",
+    # flake8-use-pathlib
+    "PTH124", "PTH210",
+    # flake8-pyi
+    "PYI001", "PYI002", "PYI003", "PYI004", "PYI005", "PYI006", "PYI007", "PYI008",
+    "PYI009", "PYI010", "PYI012", "PYI013", "PYI015", "PYI016", "PYI017", "PYI018",
+    "PYI019", "PYI020", "PYI025", "PYI026", "PYI029", "PYI030", "PYI032", "PYI033",
+    "PYI034", "PYI035", "PYI036", "PYI041", "PYI042", "PYI043", "PYI044", "PYI045",
+    "PYI046", "PYI047", "PYI048", "PYI049", "PYI050", "PYI052", "PYI055", "PYI057",
+    "PYI058", "PYI059", "PYI061", "PYI062", "PYI063", "PYI064", "PYI066",
+    # flake8-return
+    "RET501",
+    # Ruff-specific rules
+    "RUF007", "RUF008", "RUF009", "RUF010", "RUF012", "RUF013", "RUF015", "RUF016",
+    "RUF017", "RUF018", "RUF019", "RUF020", "RUF022", "RUF023", "RUF024", "RUF026",
+    "RUF028", "RUF030", "RUF032", "RUF033", "RUF034", "RUF040", "RUF041", "RUF046",
+    "RUF048", "RUF049", "RUF051", "RUF053", "RUF057", "RUF058", "RUF059", "RUF063",
+    "RUF068", "RUF100", "RUF101", "RUF200",
+    # flake8-bandit
+    "S102", "S110", "S112",
+    # flake8-simplify
+    "SIM101", "SIM102", "SIM103", "SIM107", "SIM113", "SIM114", "SIM115", "SIM117",
+    "SIM118", "SIM201", "SIM202", "SIM208", "SIM210", "SIM211", "SIM220", "SIM221",
+    "SIM222", "SIM223", "SIM401", "SIM905", "SIM911",
+    # flake8-debugger
+    "T100",
+    # flake8-type-checking
+    "TC004", "TC005", "TC007", "TC010",
+    # tryceratops
+    "TRY002", "TRY004", "TRY201", "TRY203", "TRY401",
+    # pyupgrade
+    "UP001", "UP003", "UP004", "UP005", "UP006", "UP007", "UP008", "UP009", "UP010",
+    "UP011", "UP012", "UP014", "UP017", "UP018", "UP019", "UP020", "UP021", "UP022",
+    "UP023", "UP024", "UP025", "UP026", "UP028", "UP029", "UP030", "UP031", "UP032",
+    "UP033", "UP034", "UP035", "UP036", "UP037", "UP039", "UP040", "UP041", "UP043",
+    "UP044", "UP045", "UP046", "UP047", "UP049", "UP050",
+    # pycodestyle (warnings)
+    "W605",
+    # flake8-2020
+    "YTT101", "YTT102", "YTT103", "YTT201", "YTT202", "YTT203", "YTT204", "YTT301",
+    "YTT302", "YTT303",
+    # Enforced here before ruff 0.16 dropped them from its default set.
+    "E401", "E402", "E701", "E702", "E703", "E711", "E712", "E713", "E714", "E721",
+    "E731", "E741", "E742", "E743", "F403", "F405", "F406", "F722",
 ]
-unfixable = ["B028"]  # Rules that shouldn't be auto-fixed
-extend-safe-fixes = ["PLR6201"]
-
-[tool.ruff.lint.flake8-annotations]
-allow-star-arg-any = true
-
-[tool.ruff.lint.flake8-tidy-imports]
-ban-relative-imports = "all"
+# `import X as X` is how a typed package marks an explicit re-export.
+ignore = ["PLC0414"]
 
 [tool.ruff.lint.isort]
-force-single-line = false
 combine-as-imports = true
+# Explicit, because detection depends on the directory ruff runs from.
 known-first-party = ["langchain_litellm"]
-
-[tool.ruff.lint.pydocstyle]
-convention = "google"  # Google-style docstrings
-ignore-var-parameters = true
-
-[tool.ruff.lint.per-file-ignores]
-# Tests: relax annotations, docstrings, magic values, security, and assertion style
-"tests/**" = [
-    "ANN001",  # Missing type annotation for function argument
-    "ANN201",  # Missing return type annotation for public function
-    "ANN202",  # Missing return type annotation for private function
-    "ARG002",  # Unused method argument — common for pytest fixtures
-    "D1",      # Missing docstrings
-    "PLR2004", # Magic value used in comparison — fine in test assertions
-    "PT018",   # Assertion should be broken down into multiple parts
-    "S101",    # Use of `assert` detected
-    "S311",    # Pseudo-random generator not suitable for security — fine in tests
-]
-# Scripts: allow prints, broad exceptions, and standalone modules
-"scripts/**" = [
-    "BLE001",  # Blind exception catch — resilience in standalone scripts
-    "INP001",  # Missing `__init__.py` — scripts are standalone
-]
 
 [tool.coverage.run]
 omit = ["tests/*"]

@@ -1497,7 +1497,7 @@ dev = [
     { name = "ipykernel", specifier = ">=6.29.5,<8.0.0" },
     { name = "python-dotenv", specifier = ">=1.2.1,<2.0.0" },
 ]
-lint = [{ name = "ruff", specifier = ">=0.12.2,<0.17.0" }]
+lint = [{ name = "ruff", specifier = ">=0.16.0,<0.17.0" }]
 test = [
     { name = "blockbuster", specifier = ">=1.5.18,<1.6" },
     { name = "cffi", marker = "python_full_version >= '3.10'", specifier = ">=2.0.0,<3.0.0" },

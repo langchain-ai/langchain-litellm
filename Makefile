@@ -40,8 +40,8 @@ lint lint_diff lint_package lint_tests:
 	[ "$(PYTHON_FILES)" = "" ] || { mkdir -p $(MYPY_CACHE) && uv run --group typing mypy $(PYTHON_FILES) --cache-dir $(MYPY_CACHE); }
 
 format format_diff:
+	[ "$(PYTHON_FILES)" = "" ] || uv run --group lint ruff check --fix --exit-zero $(PYTHON_FILES)
 	[ "$(PYTHON_FILES)" = "" ] || uv run --group lint ruff format $(PYTHON_FILES)
-	[ "$(PYTHON_FILES)" = "" ] || uv run --group lint ruff check --select I --fix $(PYTHON_FILES)
 
 spell_check:
 	uv run --group codespell codespell --toml pyproject.toml
