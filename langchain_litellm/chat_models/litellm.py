@@ -6,21 +6,12 @@ import copy
 import json
 import logging
 import warnings
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from operator import itemgetter
 from typing import (
     Any,
-    AsyncIterator,
-    Callable,
-    Dict,
-    Iterator,
-    List,
     Literal,
-    Mapping,
-    Optional,
-    Sequence,
-    Tuple,
-    Type,
-    Union,
+    Self,
     cast,
     get_args,
 )
@@ -84,7 +75,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import TypeBaseModel, is_basemodel_subclass
 from litellm.types.utils import Delta
 from pydantic import BaseModel, Field, model_validator
-from typing_extensions import Self, is_typeddict
+from typing_extensions import is_typeddict
 
 from langchain_litellm._version import __version__
 
@@ -103,9 +94,7 @@ _PROVIDER_FIELD_ALIASES = {
 }
 
 
-def _provider_api_key_field(
-    cls: Type[BaseModel], provider: Optional[str]
-) -> Optional[str]:
+def _provider_api_key_field(cls: type[BaseModel], provider: str | None) -> str | None:
     """Name the field holding this provider's key on ``cls``, or None if it has none.
 
     Reading ``model_fields`` off the runtime class keeps this honest and lets a
@@ -128,7 +117,7 @@ def _get_field(source: Any, name: str) -> Any:
     return getattr(source, name, None)
 
 
-def _cost_metadata(response: Any) -> Dict[str, Any]:
+def _cost_metadata(response: Any) -> dict[str, Any]:
     """Name what a call cost, from whichever field litellm recorded it in.
 
     A complete response carries the figure in `_hidden_params`; a stream leaves it
@@ -144,7 +133,7 @@ class ChatLiteLLMException(Exception):
     """Exception raised for errors in the LiteLLM integration."""
 
 
-def _copy_containers(value: Any, memo: Optional[Dict[int, Any]] = None) -> Any:
+def _copy_containers(value: Any, memo: dict[int, Any] | None = None) -> Any:
     """Copy dicts and lists recursively, leaving anything else shared.
 
     Deep enough that a caller cannot mutate this model's configuration through the
@@ -172,9 +161,7 @@ def _copy_containers(value: Any, memo: Optional[Dict[int, Any]] = None) -> Any:
 
 def _create_retry_decorator(
     llm: ChatLiteLLM,
-    run_manager: Optional[
-        Union[AsyncCallbackManagerForLLMRun, CallbackManagerForLLMRun]
-    ] = None,
+    run_manager: AsyncCallbackManagerForLLMRun | CallbackManagerForLLMRun | None = None,
 ) -> Callable[[Any], Any]:
     """Return a tenacity retry decorator preconfigured for LiteLLM transient errors."""
 
@@ -198,7 +185,7 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
 
         additional_kwargs = {}
         tool_calls = []
-        invalid_tool_calls: List[InvalidToolCall] = []
+        invalid_tool_calls: list[InvalidToolCall] = []
 
         if _dict.get("function_call"):
             additional_kwargs["function_call"] = dict(_dict["function_call"])
@@ -295,7 +282,7 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
 
 
 def _convert_delta_to_message_chunk(
-    delta: Union[Delta, Dict[str, Any]], default_class: Type[BaseMessageChunk]
+    delta: Delta | dict[str, Any], default_class: type[BaseMessageChunk]
 ) -> BaseMessageChunk:
     # Handle both Delta objects and dicts
     if isinstance(delta, dict):
@@ -376,7 +363,7 @@ def _convert_delta_to_message_chunk(
         return default_class(content=content)  # type: ignore[call-arg]
 
 
-def _lc_tool_call_to_openai_tool_call(tool_call: ToolCall) -> Dict[str, Any]:
+def _lc_tool_call_to_openai_tool_call(tool_call: ToolCall) -> dict[str, Any]:
     return {
         "type": "function",
         "id": tool_call["id"],
@@ -387,13 +374,13 @@ def _lc_tool_call_to_openai_tool_call(tool_call: ToolCall) -> Dict[str, Any]:
     }
 
 
-def _convert_message_to_dict(message: BaseMessage) -> Dict[str, Any]:
+def _convert_message_to_dict(message: BaseMessage) -> dict[str, Any]:
     # Capture the original content from the message
     content = message.content
 
     # Handle multimodal content conversion if the content is a list
     if isinstance(content, list):
-        new_content: List[Any] = []
+        new_content: list[Any] = []
         for item in content:
             if isinstance(item, dict):
                 # Check for LiteLLM's native format which expects a 'file' key
@@ -442,7 +429,7 @@ def _convert_message_to_dict(message: BaseMessage) -> Dict[str, Any]:
         content = new_content or ""
 
     # Initialize the message dictionary with the processed content
-    message_dict: Dict[str, Any] = {"content": content}
+    message_dict: dict[str, Any] = {"content": content}
 
     # Determine the role and specific attributes based on the message type
     if isinstance(message, ChatMessage):
@@ -493,20 +480,20 @@ class ChatLiteLLM(BaseChatModel):
 
     client: Any = None  #: :meta private:
     model: str = "gpt-3.5-turbo"
-    model_name: Optional[str] = None
-    stream_options: Optional[Dict[str, Any]] = None
+    model_name: str | None = None
+    stream_options: dict[str, Any] | None = None
     """Model name to use."""
-    openai_api_key: Optional[str] = Field(default=None, repr=False)
-    azure_api_key: Optional[str] = Field(default=None, repr=False)
-    anthropic_api_key: Optional[str] = Field(default=None, repr=False)
-    replicate_api_key: Optional[str] = Field(default=None, repr=False)
-    cohere_api_key: Optional[str] = Field(default=None, repr=False)
-    openrouter_api_key: Optional[str] = Field(default=None, repr=False)
-    huggingface_api_key: Optional[str] = Field(default=None, repr=False)
-    together_ai_api_key: Optional[str] = Field(default=None, repr=False)
-    api_key: Optional[str] = Field(default=None, repr=False)
+    openai_api_key: str | None = Field(default=None, repr=False)
+    azure_api_key: str | None = Field(default=None, repr=False)
+    anthropic_api_key: str | None = Field(default=None, repr=False)
+    replicate_api_key: str | None = Field(default=None, repr=False)
+    cohere_api_key: str | None = Field(default=None, repr=False)
+    openrouter_api_key: str | None = Field(default=None, repr=False)
+    huggingface_api_key: str | None = Field(default=None, repr=False)
+    together_ai_api_key: str | None = Field(default=None, repr=False)
+    api_key: str | None = Field(default=None, repr=False)
     streaming: bool = False
-    api_base: Optional[str] = None
+    api_base: str | None = None
     """Endpoint override for the upstream provider.
 
     Also accepts ``base_url`` as an alias (normalized in ``validate_environment``)
@@ -514,33 +501,33 @@ class ChatLiteLLM(BaseChatModel):
     ``ChatAnthropic``) and with ``init_chat_model(..., base_url=...)``. A non-None
     ``api_base`` wins; ``base_url`` fills in when ``api_base`` is unset or None,
     so a config built from ``os.getenv`` still reaches the endpoint."""
-    organization: Optional[str] = None
-    custom_llm_provider: Optional[str] = None
-    base_model: Optional[str] = None
-    extra_headers: Optional[Dict[str, str]] = Field(default=None, repr=False)
-    request_timeout: Optional[Union[float, Tuple[float, float]]] = None
-    temperature: Optional[float] = None
+    organization: str | None = None
+    custom_llm_provider: str | None = None
+    base_model: str | None = None
+    extra_headers: dict[str, str] | None = Field(default=None, repr=False)
+    request_timeout: float | tuple[float, float] | None = None
+    temperature: float | None = None
     """Run inference with this temperature. Must be in the closed
        interval [0.0, 2.0]."""
-    model_kwargs: Dict[str, Any] = Field(default_factory=dict)
+    model_kwargs: dict[str, Any] = Field(default_factory=dict)
     """Holds any model parameters valid for API call not explicitly specified."""
-    top_p: Optional[float] = None
+    top_p: float | None = None
     """Decode using nucleus sampling: consider the smallest set of tokens whose
        probability sum is at least top_p. Must be in the closed interval [0.0, 1.0]."""
-    top_k: Optional[int] = None
+    top_k: int | None = None
     """Decode using top-k sampling: consider the set of top_k most probable tokens.
        Must be positive."""
-    n: Optional[int] = None
+    n: int | None = None
     """Number of chat completions to generate for each prompt. Note that the API may
        not return the full n completions if duplicates are generated."""
-    max_tokens: Optional[int] = None
+    max_tokens: int | None = None
     """The maximum number of tokens to generate in the reply."""
-    num_ctx: Optional[int] = None
+    num_ctx: int | None = None
     """Context window size (e.g. for Ollama models)."""
 
     max_retries: int = 1
 
-    def _thinking_config(self) -> Dict[str, Any]:
+    def _thinking_config(self) -> dict[str, Any]:
         thinking_config = self.model_kwargs.get("thinking")
         return thinking_config if isinstance(thinking_config, dict) else {}
 
@@ -548,12 +535,12 @@ class ChatLiteLLM(BaseChatModel):
         return "claude" in (self.model_name or self.model).lower()
 
     @property
-    def _default_params(self) -> Dict[str, Any]:
+    def _default_params(self) -> dict[str, Any]:
         """Get the default parameters for the LiteLLM completion call."""
         set_model_value = self.model
         if self.model_name is not None:
             set_model_value = self.model_name
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "model": set_model_value,
             "timeout": self.request_timeout,
             "max_tokens": self.max_tokens,
@@ -578,7 +565,7 @@ class ChatLiteLLM(BaseChatModel):
             },
         }
 
-    def _constructor_destination(self) -> Tuple[Optional[str], Optional[str]]:
+    def _constructor_destination(self) -> tuple[str | None, str | None]:
         """The model and provider this instance sends to when a call overrides neither.
 
         ``model_kwargs`` is merged last into ``_default_params``, so an entry there
@@ -594,9 +581,9 @@ class ChatLiteLLM(BaseChatModel):
 
     def _resolve_api_key(
         self,
-        model: Optional[str] = None,
-        custom_llm_provider: Optional[str] = None,
-    ) -> Optional[str]:
+        model: str | None = None,
+        custom_llm_provider: str | None = None,
+    ) -> str | None:
         """Resolve the key to send to litellm for this call.
 
         ``api_key`` wins when set. Otherwise fall back to the provider-specific
@@ -650,8 +637,8 @@ class ChatLiteLLM(BaseChatModel):
         return getattr(self, field, None) or None
 
     def _merge_call_params(
-        self, params: Dict[str, Any], kwargs: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, params: dict[str, Any], kwargs: dict[str, Any]
+    ) -> dict[str, Any]:
         """Merge per-call kwargs over the client params, rescoping the destination.
 
         ``_client_params`` is built from constructor state, so every value in it
@@ -691,9 +678,9 @@ class ChatLiteLLM(BaseChatModel):
         return merged
 
     @property
-    def _client_params(self) -> Dict[str, Any]:
+    def _client_params(self) -> dict[str, Any]:
         """Get the per-call parameters passed to litellm.completion."""
-        creds: Dict[str, Any] = {
+        creds: dict[str, Any] = {
             "api_base": self.api_base,
             "api_key": self._resolve_api_key(),
             "organization": self.organization,
@@ -708,7 +695,7 @@ class ChatLiteLLM(BaseChatModel):
         }
 
     def completion_with_retry(
-        self, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any
+        self, run_manager: CallbackManagerForLLMRun | None = None, **kwargs: Any
     ) -> Any:
         """Use tenacity to retry the completion call."""
         retry_decorator = _create_retry_decorator(self, run_manager=run_manager)
@@ -720,7 +707,7 @@ class ChatLiteLLM(BaseChatModel):
         return _completion_with_retry(**kwargs)
 
     async def acompletion_with_retry(
-        self, run_manager: Optional[AsyncCallbackManagerForLLMRun] = None, **kwargs: Any
+        self, run_manager: AsyncCallbackManagerForLLMRun | None = None, **kwargs: Any
     ) -> Any:
         """Use tenacity to retry the async completion call."""
         retry_decorator = _create_retry_decorator(self, run_manager=run_manager)
@@ -784,10 +771,10 @@ class ChatLiteLLM(BaseChatModel):
 
     def _generate(
         self,
-        messages: List[BaseMessage],
-        stop: Optional[List[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
-        stream: Optional[bool] = None,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        stream: bool | None = None,
         **kwargs: Any,
     ) -> ChatResult:
         should_stream = stream if stream is not None else self.streaming
@@ -842,8 +829,8 @@ class ChatLiteLLM(BaseChatModel):
         return ChatResult(generations=generations, llm_output=llm_output)
 
     def _create_message_dicts(
-        self, messages: List[BaseMessage], stop: Optional[List[str]]
-    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        self, messages: list[BaseMessage], stop: list[str] | None
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         params = self._client_params
         if stop is not None:
             if "stop" in params:
@@ -854,9 +841,9 @@ class ChatLiteLLM(BaseChatModel):
 
     def _stream(
         self,
-        messages: List[BaseMessage],
-        stop: Optional[List[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
         message_dicts, params = self._create_message_dicts(messages, stop)
@@ -880,7 +867,7 @@ class ChatLiteLLM(BaseChatModel):
 
             # Extract usage metadata first
             usage_metadata = None
-            if "usage" in chunk and chunk["usage"]:
+            if chunk.get("usage"):
                 usage_metadata = _create_usage_metadata(chunk["usage"])
 
             # Read while `chunk` is still the raw response: both the usage-only
@@ -945,9 +932,9 @@ class ChatLiteLLM(BaseChatModel):
 
     async def _astream(
         self,
-        messages: List[BaseMessage],
-        stop: Optional[List[str]] = None,
-        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
         message_dicts, params = self._create_message_dicts(messages, stop)
@@ -971,7 +958,7 @@ class ChatLiteLLM(BaseChatModel):
 
             # Extract usage metadata first
             usage_metadata = None
-            if "usage" in chunk and chunk["usage"]:
+            if chunk.get("usage"):
                 usage_metadata = _create_usage_metadata(chunk["usage"])
 
             # Read while `chunk` is still the raw response: both the usage-only
@@ -1035,10 +1022,10 @@ class ChatLiteLLM(BaseChatModel):
 
     async def _agenerate(
         self,
-        messages: List[BaseMessage],
-        stop: Optional[List[str]] = None,
-        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
-        stream: Optional[bool] = None,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        stream: bool | None = None,
         **kwargs: Any,
     ) -> ChatResult:
         should_stream = stream if stream is not None else self.streaming
@@ -1060,10 +1047,12 @@ class ChatLiteLLM(BaseChatModel):
 
     def bind_tools(
         self,
-        tools: Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]],
-        tool_choice: Optional[
-            Union[dict, str, Literal["auto", "none", "required", "any"], bool]
-        ] = None,
+        tools: Sequence[dict[str, Any] | type[BaseModel] | Callable | BaseTool],
+        tool_choice: dict
+        | str
+        | Literal["auto", "none", "required", "any"]
+        | bool
+        | None = None,
         **kwargs: Any,
     ) -> Runnable[LanguageModelInput, AIMessage]:
         """Bind tool-like objects to this chat model.
@@ -1143,15 +1132,14 @@ class ChatLiteLLM(BaseChatModel):
 
     def with_structured_output(
         self,
-        schema: Union[Dict[str, Any], type, BaseModel],
+        schema: dict[str, Any] | type | BaseModel,
         *,
-        method: Optional[
-            Literal["json_schema", "function_calling", "json_mode"]
-        ] = "json_schema",
+        method: Literal["json_schema", "function_calling", "json_mode"]
+        | None = "json_schema",
         include_raw: bool = False,
-        strict: Optional[bool] = None,
+        strict: bool | None = None,
         **kwargs: Any,
-    ) -> Runnable[LanguageModelInput, Union[Dict, BaseModel]]:
+    ) -> Runnable[LanguageModelInput, dict | BaseModel]:
         # Remove unsupported parameters
         _ = kwargs.pop("tools", None)
         if kwargs:
@@ -1267,7 +1255,7 @@ class ChatLiteLLM(BaseChatModel):
         return llm | parse_chain
 
     @property
-    def _identifying_params(self) -> Dict[str, Any]:
+    def _identifying_params(self) -> dict[str, Any]:
         """Get the identifying parameters."""
         set_model_value = self.model
         if self.model_name is not None:
@@ -1283,7 +1271,7 @@ class ChatLiteLLM(BaseChatModel):
 
     def _get_ls_params(
         self,
-        stop: Optional[List[str]] = None,
+        stop: list[str] | None = None,
         **kwargs: Any,
     ) -> LangSmithParams:
         """Return LangSmith tracing parameters for this model.
@@ -1374,7 +1362,7 @@ def _create_usage_metadata(token_usage: Any) -> UsageMetadata:
     return usage_metadata
 
 
-def _ensure_additional_properties_false(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
+def _ensure_additional_properties_false(schema_dict: dict[str, Any]) -> dict[str, Any]:
     """Recursively ensure additionalProperties is set to false for all objects."""
     if isinstance(schema_dict, dict):
         result = schema_dict.copy()

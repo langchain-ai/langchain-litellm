@@ -1,6 +1,7 @@
 """Test router chat model integration."""
 
-from typing import Any, Callable, Dict, List
+from collections.abc import Callable
+from typing import Any
 from unittest.mock import patch
 
 import litellm
@@ -13,7 +14,7 @@ from langchain_litellm.chat_models.litellm_router import _deployment_metadata
 from tests.utils import make_router
 
 
-def _completion_double(seen: List[Dict[str, Any]]) -> Callable[..., Any]:
+def _completion_double(seen: list[dict[str, Any]]) -> Callable[..., Any]:
     """Record the outbound kwargs and answer in the shape `stream` asked for.
 
     A double that returns one canned value either way hands a streaming request a
@@ -44,7 +45,7 @@ def _completion_double(seen: List[Dict[str, Any]]) -> Callable[..., Any]:
     return _completion
 
 
-def _acompletion_double(seen: List[Dict[str, Any]]) -> Callable[..., Any]:
+def _acompletion_double(seen: list[dict[str, Any]]) -> Callable[..., Any]:
     """Async twin of `_completion_double`."""
 
     async def _acompletion(**kwargs: Any) -> Any:
@@ -220,7 +221,7 @@ def test_router_create_chat_result_sets_usage_metadata() -> None:
 
 def test_router_stream_options_default_to_include_usage() -> None:
     """Providers other than OpenAI only report usage when it is asked for."""
-    seen: List[Dict[str, Any]] = []
+    seen: list[dict[str, Any]] = []
     llm = ChatLiteLLMRouter(router=make_router())
 
     with patch.object(llm.router, "completion", side_effect=_completion_double(seen)):
@@ -231,7 +232,7 @@ def test_router_stream_options_default_to_include_usage() -> None:
 
 def test_router_stream_honours_a_per_call_stream_options() -> None:
     """`stream_options` is caller configuration, so a per-call value is not replaced."""
-    seen: List[Dict[str, Any]] = []
+    seen: list[dict[str, Any]] = []
     llm = ChatLiteLLMRouter(router=make_router())
 
     with patch.object(llm.router, "completion", side_effect=_completion_double(seen)):
@@ -243,7 +244,7 @@ def test_router_stream_honours_a_per_call_stream_options() -> None:
 @pytest.mark.asyncio
 async def test_router_astream_honours_a_per_call_stream_options() -> None:
     """The async path carries the same caller configuration as the sync one."""
-    seen: List[Dict[str, Any]] = []
+    seen: list[dict[str, Any]] = []
     llm = ChatLiteLLMRouter(router=make_router())
 
     with patch.object(llm.router, "acompletion", side_effect=_acompletion_double(seen)):
@@ -259,7 +260,7 @@ async def test_router_per_call_stream_options_none_matches_the_base_class(
     method: str,
 ) -> None:
     """The two classes must not disagree about what an explicit None means."""
-    seen: List[Dict[str, Any]] = []
+    seen: list[dict[str, Any]] = []
     llm = ChatLiteLLMRouter(router=make_router())
 
     if method == "stream":
@@ -307,7 +308,7 @@ def test_router_generate_does_not_inherit_a_streaming_default() -> None:
     A `streaming=True` instance otherwise sends `stream=True` and is handed an
     iterator where it expects a mapping.
     """
-    seen: List[Dict[str, Any]] = []
+    seen: list[dict[str, Any]] = []
     llm = ChatLiteLLMRouter(router=make_router(), streaming=True)
 
     with patch.object(llm.router, "completion", side_effect=_completion_double(seen)):
@@ -320,7 +321,7 @@ def test_router_generate_does_not_inherit_a_streaming_default() -> None:
 @pytest.mark.asyncio
 async def test_router_agenerate_does_not_inherit_a_streaming_default() -> None:
     """The async twin of the same branch."""
-    seen: List[Dict[str, Any]] = []
+    seen: list[dict[str, Any]] = []
     llm = ChatLiteLLMRouter(router=make_router(), streaming=True)
 
     with patch.object(llm.router, "acompletion", side_effect=_acompletion_double(seen)):
@@ -379,7 +380,7 @@ def test_router_stream_sets_model_provider_in_response_metadata() -> None:
     assert chunks[1].message.response_metadata == {}
 
 
-def _router_chunks_with_cost() -> List[Dict[str, Any]]:
+def _router_chunks_with_cost() -> list[dict[str, Any]]:
     """The shape the router streams back: every chunk names the deployment."""
     deployment = {"model_id": "deployment-A"}
     return [
@@ -406,7 +407,7 @@ def _router_chunks_with_cost() -> List[Dict[str, Any]]:
     ]
 
 
-def _merge(chunks: List[Any]) -> Any:
+def _merge(chunks: list[Any]) -> Any:
     """Merge a stream the way a caller consuming it does."""
     merged = chunks[0]
     for chunk in chunks[1:]:
@@ -466,7 +467,7 @@ def test_router_names_the_deployment_once_across_a_stream() -> None:
     assert _merge(chunks).response_metadata["model_id"] == "deployment-A"
 
 
-def _router_chunks_costing_twice() -> List[Dict[str, Any]]:
+def _router_chunks_costing_twice() -> list[dict[str, Any]]:
     """A deployment that attaches usage, and so a cost, to content chunks."""
     deployment = {"model_id": "deployment-A"}
     return [
@@ -708,12 +709,14 @@ def test_router_stream_honours_max_retries() -> None:
     router = make_router()
     llm = ChatLiteLLMRouter(router=router, max_retries=4, streaming=True)
 
-    with patch.object(
-        llm.router, "completion", side_effect=_rate_limit_error()
-    ) as mock_completion:
-        with patch("time.sleep", return_value=None):
-            with pytest.raises(litellm.RateLimitError):
-                list(llm.stream("hi"))
+    with (
+        patch.object(
+            llm.router, "completion", side_effect=_rate_limit_error()
+        ) as mock_completion,
+        patch("time.sleep", return_value=None),
+        pytest.raises(litellm.RateLimitError),
+    ):
+        list(llm.stream("hi"))
 
     assert mock_completion.call_count == 4
 

@@ -3,8 +3,6 @@
 From LangChain's standard test suite.
 """
 
-from typing import Type
-
 from langchain_tests.unit_tests import ChatModelUnitTests
 
 from langchain_litellm.chat_models import ChatLiteLLMRouter
@@ -13,7 +11,7 @@ from tests.utils import make_router
 
 class TestChatLiteLLMRouterUnit(ChatModelUnitTests):
     @property
-    def chat_model_class(self) -> Type[ChatLiteLLMRouter]:
+    def chat_model_class(self) -> type[ChatLiteLLMRouter]:
         return ChatLiteLLMRouter
 
     @property

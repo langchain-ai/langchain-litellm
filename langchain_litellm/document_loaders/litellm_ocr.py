@@ -7,8 +7,9 @@ import base64
 import mimetypes
 import os
 import time
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Literal, Optional
+from typing import Any, Literal
 
 import httpx
 from langchain_core.document_loaders import BaseLoader
@@ -76,12 +77,12 @@ class LiteLLMOCRLoader(BaseLoader):
         self,
         *,
         proxy_base_url: str = "http://localhost:4000",
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         model: str = "azure-document",
-        file_path: Optional[str] = None,
-        url_path: Optional[str] = None,
-        base64_content: Optional[str] = None,
-        bytes_content: Optional[bytes] = None,
+        file_path: str | None = None,
+        url_path: str | None = None,
+        base64_content: str | None = None,
+        bytes_content: bytes | None = None,
         mode: Literal["single", "page"] = "single",
         timeout: float = 300.0,
         max_retries: int = 3,
@@ -140,7 +141,7 @@ class LiteLLMOCRLoader(BaseLoader):
         self.timeout = timeout
         self.max_retries = max_retries
 
-    def _prepare_document_payload(self) -> Dict[str, Any]:
+    def _prepare_document_payload(self) -> dict[str, Any]:
         """Prepare the document payload for the OCR request.
 
         Returns:
@@ -193,7 +194,7 @@ class LiteLLMOCRLoader(BaseLoader):
             raise ValueError("No input source provided")
 
     def _make_ocr_request(
-        self, document_payload: Dict[str, Any], sync: bool = True
+        self, document_payload: dict[str, Any], sync: bool = True
     ) -> Any:
         """Make synchronous or asynchronous OCR request with retries."""
         url = f"{self.proxy_base_url}/ocr"
@@ -260,7 +261,7 @@ class LiteLLMOCRLoader(BaseLoader):
 
         else:
 
-            async def _async_request() -> Dict[str, Any]:
+            async def _async_request() -> dict[str, Any]:
                 last_error = None
                 attempt = 0
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -314,7 +315,7 @@ class LiteLLMOCRLoader(BaseLoader):
 
             return _async_request()
 
-    def _process_response(self, response: Dict[str, Any]) -> List[Document]:
+    def _process_response(self, response: dict[str, Any]) -> list[Document]:
         """Process OCR response and return LangChain Documents.
 
         Args:
@@ -337,7 +338,7 @@ class LiteLLMOCRLoader(BaseLoader):
             for page in pages:
                 page_content = page.get("markdown", "")
 
-                metadata: Dict[str, Any] = {
+                metadata: dict[str, Any] = {
                     "page": page.get("index", 0),
                 }
 
@@ -365,7 +366,7 @@ class LiteLLMOCRLoader(BaseLoader):
             # Concatenate all pages
             all_content = "\n\n".join(page.get("markdown", "") for page in pages)
 
-            single_metadata: Dict[str, Any] = {
+            single_metadata: dict[str, Any] = {
                 "total_pages": len(pages),
             }
 
@@ -381,7 +382,7 @@ class LiteLLMOCRLoader(BaseLoader):
 
             return [Document(page_content=all_content, metadata=single_metadata)]
 
-    def load(self) -> List[Document]:
+    def load(self) -> list[Document]:
         """Load documents synchronously.
 
         Returns:
@@ -391,7 +392,7 @@ class LiteLLMOCRLoader(BaseLoader):
         response = self._make_ocr_request(document_payload, sync=True)
         return self._process_response(response)
 
-    async def aload(self) -> List[Document]:
+    async def aload(self) -> list[Document]:
         """Load documents asynchronously.
 
         Returns:

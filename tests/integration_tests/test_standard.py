@@ -1,7 +1,5 @@
 """Test ChatLiteLLM chat model."""
 
-from typing import Type
-
 from langchain_tests.integration_tests import ChatModelIntegrationTests
 
 from langchain_litellm.chat_models import ChatLiteLLM
@@ -9,7 +7,7 @@ from langchain_litellm.chat_models import ChatLiteLLM
 
 class TestChatLiteLLMIntegration(ChatModelIntegrationTests):
     @property
-    def chat_model_class(self) -> Type[ChatLiteLLM]:
+    def chat_model_class(self) -> type[ChatLiteLLM]:
         return ChatLiteLLM
 
     @property

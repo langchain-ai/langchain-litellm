@@ -114,15 +114,8 @@ disallow_untyped_defs = false
 docstring-code-format = true  # Formats code blocks in docstrings
 
 [tool.ruff.lint]
-# Pyflakes plus the pycodestyle checks worth enforcing; `ignore` and
-# `per-file-ignores` below subtract from this set.
-select = [
-    "E4",  # pycodestyle — imports
-    "E7",  # pycodestyle — statements
-    "E9",  # pycodestyle — syntax and IO errors
-    "F",   # Pyflakes — undefined names, unused imports and variables
-    #"ALL"  # Enable all rules by default (TODO)
-]
+# ruff's own default rule set; `ignore` and `per-file-ignores` below subtract
+# from it.
 ignore = [
     "COM812",  # Trailing comma missing — conflicts with the ruff formatter
     "ISC001",  # Implicit string concatenation on one line — conflicts with the ruff formatter
@@ -133,9 +126,6 @@ ignore = [
 ]
 unfixable = ["B028"]  # Rules that shouldn't be auto-fixed
 extend-safe-fixes = ["PLR6201"]
-
-[tool.ruff.lint.pyupgrade]
-keep-runtime-typing = true
 
 [tool.ruff.lint.flake8-annotations]
 allow-star-arg-any = true

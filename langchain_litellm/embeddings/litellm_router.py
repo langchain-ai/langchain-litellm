@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from langchain_litellm.embeddings.litellm import (
     LiteLLMEmbeddings,
@@ -61,7 +61,7 @@ class LiteLLMEmbeddingsRouter(LiteLLMEmbeddings):
         super().__init__(**{**kwargs, "router": router})  # type: ignore[call-arg]
         self.router = router
 
-    def _get_router_params(self, *, input_type: Optional[str] = None) -> Dict[str, Any]:
+    def _get_router_params(self, *, input_type: str | None = None) -> dict[str, Any]:
         """Build parameter dict for router.embedding(), excluding None values.
 
         ``api_base``, ``organization`` and the rest are deliberately absent: the
@@ -72,7 +72,7 @@ class LiteLLMEmbeddingsRouter(LiteLLMEmbeddings):
         """
         # An unset field must not clobber the same key supplied through
         # model_kwargs, which is where this class sends provider-specific values.
-        params: Dict[str, Any] = {**self.model_kwargs}
+        params: dict[str, Any] = {**self.model_kwargs}
         params.update(
             (key, value)
             for key, value in (
@@ -114,7 +114,7 @@ class LiteLLMEmbeddingsRouter(LiteLLMEmbeddings):
 
         return await _aembed()
 
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Embed a list of document texts via the router.
 
         Args:
@@ -130,7 +130,7 @@ class LiteLLMEmbeddingsRouter(LiteLLMEmbeddings):
         response = self._embedding_with_retry(input=texts, **params)
         return [item["embedding"] for item in response.data]
 
-    def embed_query(self, text: str) -> List[float]:
+    def embed_query(self, text: str) -> list[float]:
         """Embed a single query text via the router.
 
         Args:
@@ -143,7 +143,7 @@ class LiteLLMEmbeddingsRouter(LiteLLMEmbeddings):
         response = self._embedding_with_retry(input=[text], **params)
         return response.data[0]["embedding"]
 
-    async def aembed_documents(self, texts: List[str]) -> List[List[float]]:
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
         """Async embed a list of document texts via the router.
 
         Args:
@@ -159,7 +159,7 @@ class LiteLLMEmbeddingsRouter(LiteLLMEmbeddings):
         response = await self._aembedding_with_retry(input=texts, **params)
         return [item["embedding"] for item in response.data]
 
-    async def aembed_query(self, text: str) -> List[float]:
+    async def aembed_query(self, text: str) -> list[float]:
         """Async embed a single query text via the router.
 
         Args:

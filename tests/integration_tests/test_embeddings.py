@@ -1,7 +1,5 @@
 """Integration tests for LiteLLMEmbeddings."""
 
-from typing import Type
-
 from langchain_tests.integration_tests import EmbeddingsIntegrationTests
 
 from langchain_litellm.embeddings import LiteLLMEmbeddings
@@ -9,7 +7,7 @@ from langchain_litellm.embeddings import LiteLLMEmbeddings
 
 class TestLiteLLMEmbeddingsIntegration(EmbeddingsIntegrationTests):
     @property
-    def embeddings_class(self) -> Type[LiteLLMEmbeddings]:
+    def embeddings_class(self) -> type[LiteLLMEmbeddings]:
         return LiteLLMEmbeddings
 
     @property
