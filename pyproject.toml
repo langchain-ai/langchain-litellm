@@ -10,7 +10,7 @@ description = "An integration package connecting LiteLLM and LangChain"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Akshay Dongare"}]
-requires-python = ">=3.10,<4.0"
+requires-python = ">=3.11,<4.0"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -19,7 +19,6 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -30,10 +29,8 @@ classifiers = [
 ]
 dependencies = [
     "langchain-core>=1.6.1,<2.0.0",
-    # 1.82.7 and 1.82.8 were compromised. 1.98 through 1.100 import a Python
-    # 3.11-only name from typing, so they are excluded only where that breaks.
-    "litellm>=1.83.14,<2.0.0,!=1.82.7,!=1.82.8,!=1.98.*,!=1.99.*,!=1.100.*; python_version < '3.11'",
-    "litellm>=1.83.14,<2.0.0,!=1.82.7,!=1.82.8; python_version >= '3.11'",
+    # 1.82.7 and 1.82.8 were compromised.
+    "litellm>=1.83.14,<2.0.0,!=1.82.7,!=1.82.8",
     "httpx>=0.28.1,<0.29.0",
     "pydantic>=2.10.0,<3.0.0",
     "typing-extensions>=4.7.0,<5.0.0",
