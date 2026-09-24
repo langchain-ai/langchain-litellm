@@ -96,6 +96,7 @@ typing = [
 
 [tool.mypy]
 disallow_untyped_defs = "True"
+mypy_path = "scripts"  # so `make lint_tests` resolves what the tests import from there
 
 [[tool.mypy.overrides]]
 module = [
@@ -180,6 +181,7 @@ ignore-words-list = "hel"  # "hel" + "lo" is a streaming chunk split across two 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 addopts = "--strict-markers --strict-config --durations=5"
+pythonpath = ["scripts"]  # plain modules, not a package; tests import them by name
 markers = [
     "compile: mark placeholder test used to compile integration tests without running them",
     "integration: mark test as an integration test",
