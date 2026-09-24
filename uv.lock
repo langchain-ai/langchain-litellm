@@ -1668,7 +1668,8 @@ typing = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.28.1,<0.29.0" },
     { name = "langchain-core", specifier = ">=1.6.1,<2.0.0" },
-    { name = "litellm", specifier = "!=1.82.7,!=1.82.8,>=1.83.14,<2.0.0" },
+    { name = "litellm", marker = "python_full_version < '3.11'", specifier = "!=1.82.7,!=1.82.8,>=1.83.14,!=1.98.*,!=1.99.*,!=1.100.*,<2.0.0" },
+    { name = "litellm", marker = "python_full_version >= '3.11'", specifier = "!=1.82.7,!=1.82.8,>=1.83.14,<2.0.0" },
     { name = "pydantic", specifier = ">=2.10.0,<3.0.0" },
     { name = "typing-extensions", specifier = ">=4.7.0,<5.0.0" },
 ]
