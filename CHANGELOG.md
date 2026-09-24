@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.9.0](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.8.1...langchain-litellm==0.9.0) (2026-09-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* langchain-litellm now requires Python 3.11 or later. Stay on langchain-litellm 0.8.x to keep using Python 3.10.
+
+### Features
+
+* drop support for Python 3.10 ([3d75c58](https://github.com/langchain-ai/langchain-litellm/commit/3d75c58b64c0f283156a63baff3293a64eb73b7c))
+
 ## [0.8.1](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.8.0...langchain-litellm==0.8.1) (2026-09-24)
 
 
