@@ -28,7 +28,7 @@ def _run(
         existing = env.get("PYTHONPATH")
         env["PYTHONPATH"] = f"{cwd}{os.pathsep}{existing}" if existing else str(cwd)
 
-    return subprocess.run(  # noqa: S603
+    return subprocess.run(
         [*argv, str(SCRIPT), *paths],
         capture_output=True,
         cwd=cwd or REPO_ROOT,

@@ -1,7 +1,5 @@
 """Integration tests for LiteLLMEmbeddingsRouter."""
 
-from typing import Type
-
 from langchain_tests.integration_tests import EmbeddingsIntegrationTests
 from litellm import Router
 
@@ -10,7 +8,7 @@ from langchain_litellm.embeddings import LiteLLMEmbeddingsRouter
 
 class TestLiteLLMEmbeddingsRouterIntegration(EmbeddingsIntegrationTests):
     @property
-    def embeddings_class(self) -> Type[LiteLLMEmbeddingsRouter]:
+    def embeddings_class(self) -> type[LiteLLMEmbeddingsRouter]:
         return LiteLLMEmbeddingsRouter
 
     @property

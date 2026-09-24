@@ -1,6 +1,5 @@
 """Unit tests for LiteLLMEmbeddings."""
 
-from typing import Type
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -13,7 +12,7 @@ from tests.utils import mock_embedding_response
 
 class TestLiteLLMEmbeddingsUnit(EmbeddingsUnitTests):
     @property
-    def embeddings_class(self) -> Type[LiteLLMEmbeddings]:
+    def embeddings_class(self) -> type[LiteLLMEmbeddings]:
         return LiteLLMEmbeddings
 
     @property

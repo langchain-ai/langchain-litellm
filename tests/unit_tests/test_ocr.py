@@ -2,7 +2,7 @@
 
 import base64
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,7 +12,7 @@ from langchain_litellm.document_loaders import LiteLLMOCRLoader
 
 # Mock OCR response fixture
 @pytest.fixture
-def mock_ocr_response() -> Dict[str, Any]:
+def mock_ocr_response() -> dict[str, Any]:
     """Mock response from LiteLLM OCR endpoint."""
     return {
         "pages": [
@@ -145,7 +145,7 @@ class TestLiteLLMOCRLoaderResponseProcessing:
     """Test response processing."""
 
     def test_process_response_page_mode(
-        self, mock_ocr_response: Dict[str, Any]
+        self, mock_ocr_response: dict[str, Any]
     ) -> None:
         """Test processing response in page mode."""
         loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", mode="page")
@@ -169,7 +169,7 @@ class TestLiteLLMOCRLoaderResponseProcessing:
         assert documents[1].metadata["page"] == 1
 
     def test_process_response_single_mode(
-        self, mock_ocr_response: Dict[str, Any]
+        self, mock_ocr_response: dict[str, Any]
     ) -> None:
         """Test processing response in single mode."""
         loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", mode="single")
@@ -202,7 +202,7 @@ class TestLiteLLMOCRLoaderLoad:
 
     @patch("httpx.Client")
     def test_load_success(
-        self, mock_client_class: MagicMock, mock_ocr_response: Dict[str, Any]
+        self, mock_client_class: MagicMock, mock_ocr_response: dict[str, Any]
     ) -> None:
         """Test successful synchronous load."""
         # Setup mock
@@ -232,7 +232,7 @@ class TestLiteLLMOCRLoaderLoad:
 
     @patch("httpx.Client")
     def test_load_with_auth(
-        self, mock_client_class: MagicMock, mock_ocr_response: Dict[str, Any]
+        self, mock_client_class: MagicMock, mock_ocr_response: dict[str, Any]
     ) -> None:
         """Test load with authentication."""
         # Setup mock
@@ -309,7 +309,7 @@ class TestLiteLLMOCRLoaderAsyncLoad:
     @pytest.mark.asyncio
     @patch("httpx.AsyncClient")
     async def test_aload_success(
-        self, mock_client_class: MagicMock, mock_ocr_response: Dict[str, Any]
+        self, mock_client_class: MagicMock, mock_ocr_response: dict[str, Any]
     ) -> None:
         """Test successful asynchronous load."""
         # Setup mock
@@ -341,7 +341,7 @@ class TestLiteLLMOCRLoaderLazyLoad:
 
     @patch("httpx.Client")
     def test_lazy_load(
-        self, mock_client_class: MagicMock, mock_ocr_response: Dict[str, Any]
+        self, mock_client_class: MagicMock, mock_ocr_response: dict[str, Any]
     ) -> None:
         """Test lazy loading yields documents."""
         # Setup mock
@@ -368,7 +368,7 @@ class TestLiteLLMOCRLoaderResilience:
 
     @patch("httpx.Client")
     def test_custom_timeout(
-        self, mock_client_class: MagicMock, mock_ocr_response: Dict[str, Any]
+        self, mock_client_class: MagicMock, mock_ocr_response: dict[str, Any]
     ) -> None:
         """Test that custom timeout is passed to httpx client."""
         # Setup successful mock
@@ -391,7 +391,7 @@ class TestLiteLLMOCRLoaderResilience:
         self,
         mock_sleep: MagicMock,
         mock_client_class: MagicMock,
-        mock_ocr_response: Dict[str, Any],
+        mock_ocr_response: dict[str, Any],
     ) -> None:
         """Test that loader retries on failure and eventually succeeds."""
         import httpx

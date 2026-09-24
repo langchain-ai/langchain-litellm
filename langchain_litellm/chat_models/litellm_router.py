@@ -1,6 +1,7 @@
 """LiteLLM Router chat model integration for LangChain."""
 
-from typing import Any, AsyncIterator, Dict, Iterator, List, Mapping, Optional
+from collections.abc import AsyncIterator, Iterator, Mapping
+from typing import Any
 
 from langchain_core.callbacks.manager import (
     AsyncCallbackManagerForLLMRun,
@@ -31,7 +32,7 @@ token_usage_key_name = "token_usage"  # nosec # incorrectly flagged as password
 model_extra_key_name = "model_extra"  # nosec # incorrectly flagged as password
 
 
-def _deployment_metadata(response: Any) -> Dict[str, Any]:
+def _deployment_metadata(response: Any) -> dict[str, Any]:
     """Name which deployment the router picked, never the rest of `_hidden_params`.
 
     `_hidden_params` also carries `api_base` and the resolved request params, and
@@ -109,7 +110,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         )
 
     def completion_with_retry(
-        self, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any
+        self, run_manager: CallbackManagerForLLMRun | None = None, **kwargs: Any
     ) -> Any:
         """Use tenacity to retry the router completion call.
 
@@ -128,7 +129,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
 
     async def acompletion_with_retry(
         self,
-        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> Any:
         """Use tenacity to retry the async router completion call.
@@ -148,10 +149,10 @@ class ChatLiteLLMRouter(ChatLiteLLM):
 
     def _generate(
         self,
-        messages: List[BaseMessage],
-        stop: Optional[List[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
-        stream: Optional[bool] = None,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        stream: bool | None = None,
         **kwargs: Any,
     ) -> ChatResult:
         should_stream = stream if stream is not None else self.streaming
@@ -176,9 +177,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
 
     def _stream(
         self,
-        messages: List[BaseMessage],
-        stop: Optional[List[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
         default_chunk_class = AIMessageChunk
@@ -205,7 +206,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             messages=message_dicts, run_manager=run_manager, **params
         ):
             usage_metadata = None
-            if "usage" in chunk and chunk["usage"]:
+            if chunk.get("usage"):
                 usage_metadata = _create_usage_metadata(chunk["usage"])
 
             # Read while `chunk` is still the raw response: both the usage-only
@@ -268,9 +269,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
 
     async def _astream(
         self,
-        messages: List[BaseMessage],
-        stop: Optional[List[str]] = None,
-        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
         default_chunk_class = AIMessageChunk
@@ -298,7 +299,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         ):
             # Parse usage metadata first
             usage_metadata = None
-            if "usage" in chunk and chunk["usage"]:
+            if chunk.get("usage"):
                 usage_metadata = _create_usage_metadata(chunk["usage"])
 
             # Read while `chunk` is still the raw response: both the usage-only
@@ -361,10 +362,10 @@ class ChatLiteLLMRouter(ChatLiteLLM):
 
     async def _agenerate(
         self,
-        messages: List[BaseMessage],
-        stop: Optional[List[str]] = None,
-        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
-        stream: Optional[bool] = None,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        stream: bool | None = None,
         **kwargs: Any,
     ) -> ChatResult:
         should_stream = stream if stream is not None else self.streaming
@@ -391,9 +392,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
     # https://github.com/langchain-ai/langchain/blob/master/libs/community/langchain_community/chat_models/openai.py
     # but modified to handle LiteLLM Usage class
     def _combine_llm_outputs(
-        self, llm_outputs: List[Optional[Dict[str, Any]]]
-    ) -> Dict[str, Any]:
-        overall_token_usage: Dict[str, Any] = {}
+        self, llm_outputs: list[dict[str, Any] | None]
+    ) -> dict[str, Any]:
+        overall_token_usage: dict[str, Any] = {}
         system_fingerprint = None
         for output in llm_outputs:
             if output is None:
@@ -439,13 +440,13 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                 message.usage_metadata = usage_metadata
             gen = ChatGeneration(
                 message=message,
-                generation_info=dict(finish_reason=res.get("finish_reason")),
+                generation_info={"finish_reason": res.get("finish_reason")},
             )
             generations.append(gen)
         # The Router fills `params["metadata"]` in place with its own routing and
         # rate-limit bookkeeping. Core merges whatever is here into the message, so
         # nothing enters it that this class did not choose to name.
-        llm_output: Dict[str, Any] = {token_usage_key_name: token_usage}
+        llm_output: dict[str, Any] = {token_usage_key_name: token_usage}
 
         # Check standard field first, then fallback to Vertex specific field
         provider_specific_fields = response.get("provider_specific_fields")

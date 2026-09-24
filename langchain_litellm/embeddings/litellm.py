@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from collections.abc import Callable
+from typing import Any, Literal
 
 from langchain_core.embeddings import Embeddings
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -71,51 +72,51 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
     would otherwise reach the traceback this class keeps it out of.
     """
 
-    api_key: Optional[str] = Field(default=None, repr=False)
+    api_key: str | None = Field(default=None, repr=False)
     """API key for the provider."""
 
-    api_base: Optional[str] = None
+    api_base: str | None = None
     """Base URL for the API endpoint.
 
     Also accepts ``base_url`` as an alias. A non-None ``api_base`` wins;
     ``base_url`` fills in when ``api_base`` is unset or None, so a config built
     from ``os.getenv`` still reaches the endpoint."""
 
-    api_version: Optional[str] = None
+    api_version: str | None = None
     """API version (e.g. for Azure)."""
 
-    custom_llm_provider: Optional[str] = None
+    custom_llm_provider: str | None = None
     """Override the litellm provider routing."""
 
-    organization: Optional[str] = None
+    organization: str | None = None
     """Organization ID (e.g. for OpenAI)."""
 
-    request_timeout: Optional[Union[float, Tuple[float, float]]] = None
+    request_timeout: float | tuple[float, float] | None = None
     """Timeout for API requests."""
 
     max_retries: int = 1
     """Maximum number of retries on transient errors (Timeout, APIError,
     APIConnectionError, RateLimitError)."""
 
-    extra_headers: Optional[Dict[str, str]] = Field(default=None, repr=False)
+    extra_headers: dict[str, str] | None = Field(default=None, repr=False)
     """Extra headers to include in the request."""
 
-    model_kwargs: Dict[str, Any] = Field(default_factory=dict)
+    model_kwargs: dict[str, Any] = Field(default_factory=dict)
     """Additional model parameters passed to litellm.embedding()."""
 
-    dimensions: Optional[int] = None
+    dimensions: int | None = None
     """Output embedding dimensions (if supported by the model)."""
 
-    encoding_format: Optional[Literal["float"]] = None
+    encoding_format: Literal["float"] | None = None
     """Encoding format for the embeddings. Only 'float' is supported;
     'base64' is not supported as it would return strings instead of floats."""
 
-    document_input_type: Optional[str] = None
+    document_input_type: str | None = None
     """Input type to send when embedding documents (e.g. 'search_document'
     for Cohere, 'RETRIEVAL_DOCUMENT' for Vertex AI). When set,
     ``embed_documents`` passes this as ``input_type``."""
 
-    query_input_type: Optional[str] = None
+    query_input_type: str | None = None
     """Input type to send when embedding queries (e.g. 'search_query'
     for Cohere, 'RETRIEVAL_QUERY' for Vertex AI). When set,
     ``embed_query`` passes this as ``input_type``."""
@@ -148,13 +149,11 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
             )
         return values
 
-    def _get_litellm_params(
-        self, *, input_type: Optional[str] = None
-    ) -> Dict[str, Any]:
+    def _get_litellm_params(self, *, input_type: str | None = None) -> dict[str, Any]:
         """Build parameter dict for litellm.embedding(), excluding None values."""
         # An unset field must not clobber the same key supplied through
         # model_kwargs, which is where this class sends provider-specific values.
-        params: Dict[str, Any] = {**self.model_kwargs}
+        params: dict[str, Any] = {**self.model_kwargs}
         params.update(
             (key, value)
             for key, value in (
@@ -198,7 +197,7 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
 
         return await _aembed()
 
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Embed a list of document texts.
 
         Args:
@@ -214,7 +213,7 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
         response = self._embedding_with_retry(input=texts, **params)
         return [item["embedding"] for item in response.data]
 
-    def embed_query(self, text: str) -> List[float]:
+    def embed_query(self, text: str) -> list[float]:
         """Embed a single query text.
 
         Args:
@@ -227,7 +226,7 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
         response = self._embedding_with_retry(input=[text], **params)
         return response.data[0]["embedding"]
 
-    async def aembed_documents(self, texts: List[str]) -> List[List[float]]:
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
         """Async embed a list of document texts.
 
         Args:
@@ -243,7 +242,7 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
         response = await self._aembedding_with_retry(input=texts, **params)
         return [item["embedding"] for item in response.data]
 
-    async def aembed_query(self, text: str) -> List[float]:
+    async def aembed_query(self, text: str) -> list[float]:
         """Async embed a single query text.
 
         Args:

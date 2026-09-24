@@ -1,6 +1,6 @@
 """Unit tests for LiteLLMEmbeddingsRouter."""
 
-from typing import Any, Type
+from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,7 +12,7 @@ from tests.utils import make_embedding_router, mock_embedding_response
 
 class TestLiteLLMEmbeddingsRouterUnit(EmbeddingsUnitTests):
     @property
-    def embeddings_class(self) -> Type[LiteLLMEmbeddingsRouter]:
+    def embeddings_class(self) -> type[LiteLLMEmbeddingsRouter]:
         return LiteLLMEmbeddingsRouter
 
     @property
@@ -150,12 +150,14 @@ def test_embeddings_router_honours_max_retries(method: str) -> None:
             message="rate limited", llm_provider="openai", model="x"
         )
 
-    with patch.object(
-        embeddings.router, "embedding", side_effect=_raise
-    ) as mock_embedding:
-        with patch("time.sleep", return_value=None):
-            with pytest.raises(litellm.RateLimitError):
-                getattr(embeddings, method)(["hi"] if "documents" in method else "hi")
+    with (
+        patch.object(
+            embeddings.router, "embedding", side_effect=_raise
+        ) as mock_embedding,
+        patch("time.sleep", return_value=None),
+        pytest.raises(litellm.RateLimitError),
+    ):
+        getattr(embeddings, method)(["hi"] if "documents" in method else "hi")
 
     assert mock_embedding.call_count == 4
 
@@ -175,14 +177,14 @@ async def test_embeddings_router_honours_max_retries_on_the_async_path(
             message="rate limited", llm_provider="openai", model="x"
         )
 
-    with patch.object(
-        embeddings.router, "aembedding", side_effect=_raise
-    ) as mock_embedding:
-        with patch("asyncio.sleep", return_value=None):
-            with pytest.raises(litellm.RateLimitError):
-                await getattr(embeddings, method)(
-                    ["hi"] if "documents" in method else "hi"
-                )
+    with (
+        patch.object(
+            embeddings.router, "aembedding", side_effect=_raise
+        ) as mock_embedding,
+        patch("asyncio.sleep", return_value=None),
+        pytest.raises(litellm.RateLimitError),
+    ):
+        await getattr(embeddings, method)(["hi"] if "documents" in method else "hi")
 
     assert mock_embedding.call_count == 4
 
@@ -225,7 +227,7 @@ def test_embeddings_router_keeps_a_model_kwargs_api_key() -> None:
     """
 
     class _Response:
-        data = [{"embedding": [0.1]}]
+        data: ClassVar[list[dict[str, list[float]]]] = [{"embedding": [0.1]}]
 
     captured: dict = {}
 
@@ -246,7 +248,7 @@ def test_embeddings_router_forwards_only_an_explicit_api_key() -> None:
     """Each deployment owns its endpoint, so the connector's must not override it."""
 
     class _Response:
-        data = [{"embedding": [0.1]}]
+        data: ClassVar[list[dict[str, list[float]]]] = [{"embedding": [0.1]}]
 
     captured: dict = {}
 

@@ -9,6 +9,7 @@ from pathlib import Path
 
 # third-party
 import toml
+from packaging.specifiers import SpecifierSet
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = REPO_ROOT / "langchain_litellm"
@@ -112,3 +113,15 @@ def test_every_imported_distribution_is_declared() -> None:
         f"imported by the package but not in [project].dependencies: "
         f"{sorted(undeclared)}"
     )
+
+
+def test_ruff_required_version_matches_the_lint_group() -> None:
+    """ruff's own version gate and the lint group must name the same ruff range."""
+    pyproject = toml.load(REPO_ROOT / "pyproject.toml")
+    required = SpecifierSet(pyproject["tool"]["ruff"]["required-version"])
+    grouped = [
+        SpecifierSet(spec.removeprefix("ruff"))
+        for spec in pyproject["dependency-groups"]["lint"]
+        if re.match(r"ruff\b", spec)
+    ]
+    assert grouped == [required]

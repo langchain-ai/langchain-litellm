@@ -35,14 +35,14 @@ REMEDY = (
 
 
 def _git(*args: str) -> str:
-    return subprocess.run(  # noqa: S603
+    return subprocess.run(
         ["git", *args], stdout=subprocess.PIPE, text=True, check=True
     ).stdout
 
 
 def _exists(rev: str) -> bool:
     return (
-        subprocess.run(  # noqa: S603
+        subprocess.run(
             ["git", "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}"],
             stdout=subprocess.DEVNULL,
             check=False,
@@ -87,7 +87,7 @@ def main() -> int:
 
     released = _version(args.main)
     if not _exists(TAG_PREFIX + released):
-        print(  # noqa: T201
+        print(
             f"main's manifest names {released}, but {TAG_PREFIX}{released} does "
             "not exist: its release PR was merged and never tagged. Look for "
             "'untagged, merged release PRs outstanding' in the release-please log."
@@ -99,20 +99,20 @@ def main() -> int:
     # release-please has rendered none of them.
     pending = _version(args.release) if _exists(args.release) else released
     if _exists(TAG_PREFIX + pending):
-        print("No release notes pending")  # noqa: T201
+        print("No release notes pending")
         missing = releasable
     else:
         changelog = _git("show", f"{args.release}:CHANGELOG.md")
         missing = missing_entries(releasable, pending_section(changelog, pending))
-        print(  # noqa: T201
+        print(
             f"CHANGELOG.md {pending} lists {len(releasable) - len(missing)} of "
             f"{len(releasable)} releasable commits since the last release"
         )
 
     for commit in missing:
-        print(f"missing: {commit.sha[:7]} {commit.subject}")  # noqa: T201
+        print(f"missing: {commit.sha[:7]} {commit.subject}")
     if missing:
-        print(REMEDY)  # noqa: T201
+        print(REMEDY)
     return 1 if missing else 0
 
 

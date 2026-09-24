@@ -200,7 +200,7 @@ def test_a_changelog_without_the_pending_section_is_an_error() -> None:
 
 
 def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(  # noqa: S603
+    return subprocess.run(
         ["git", *args],
         capture_output=True,
         cwd=repo,
@@ -255,7 +255,7 @@ def _release_branch(repo: Path, version: str, listed: list[str]) -> None:
 
 
 def _check(repo: Path, main: str = "main") -> subprocess.CompletedProcess:
-    return subprocess.run(  # noqa: S603
+    return subprocess.run(
         [sys.executable, str(SCRIPT), "--main", main, "--release", "release"],
         capture_output=True,
         cwd=repo,

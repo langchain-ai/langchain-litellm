@@ -1,7 +1,5 @@
 """Test ChatLiteLLMRouter chat model."""
 
-from typing import Type
-
 from langchain_tests.integration_tests import ChatModelIntegrationTests
 from litellm import Router
 
@@ -10,7 +8,7 @@ from langchain_litellm.chat_models import ChatLiteLLMRouter
 
 class TestChatLiteLLMRouterIntegration(ChatModelIntegrationTests):
     @property
-    def chat_model_class(self) -> Type[ChatLiteLLMRouter]:
+    def chat_model_class(self) -> type[ChatLiteLLMRouter]:
         return ChatLiteLLMRouter
 
     @property

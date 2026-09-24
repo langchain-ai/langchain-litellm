@@ -6,7 +6,7 @@ import subprocess
 import sys
 from collections import OrderedDict, defaultdict
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 # third-party
@@ -306,7 +306,7 @@ def test_late_declared_provider_keys_reach_litellm(
     _no_provider_env: None, provider: str, field: str
 ) -> None:
     """These two had no field, so pydantic discarded whatever the caller passed."""
-    kwargs: Dict[str, Any] = {"model": f"{provider}/some-model", field: "sk-late"}
+    kwargs: dict[str, Any] = {"model": f"{provider}/some-model", field: "sk-late"}
     llm = ChatLiteLLM(**kwargs)  # type: ignore[arg-type]
 
     with patch.object(
@@ -384,7 +384,7 @@ def test_a_subclass_provider_key_field_is_forwarded(_no_provider_env: None) -> N
     """
 
     class _DeepSeekChat(ChatLiteLLM):
-        deepseek_api_key: Optional[str] = None
+        deepseek_api_key: str | None = None
 
     llm = _DeepSeekChat(model="deepseek/deepseek-chat", deepseek_api_key="sk-deepseek")
 
@@ -404,11 +404,13 @@ def test_an_unexpected_provider_lookup_error_surfaces(_no_provider_env: None) ->
     """
     llm = ChatLiteLLM(model="gpt-4o", openai_api_key="sk-openai")
 
-    with patch.object(
-        litellm, "get_llm_provider", side_effect=TypeError("signature changed")
+    with (
+        patch.object(
+            litellm, "get_llm_provider", side_effect=TypeError("signature changed")
+        ),
+        pytest.raises(TypeError),
     ):
-        with pytest.raises(TypeError):
-            llm._client_params
+        _ = llm._client_params
 
 
 def test_model_kwargs_decides_the_timeout(_no_provider_env: None) -> None:
@@ -941,7 +943,7 @@ def test_bind_tools_any_becomes_required_without_thinking() -> None:
     ids=["any", "required", "True", "dict"],
 )
 def test_bind_tools_downgraded_with_thinking(
-    tool_choice: Union[str, bool, Dict[str, Any]],
+    tool_choice: str | bool | dict[str, Any],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Forced tool_choice values should be downgraded to 'auto' when thinking
@@ -971,7 +973,7 @@ def test_bind_tools_downgraded_with_thinking(
     ids=["any", "required", "True", "dict"],
 )
 def test_bind_tools_not_downgraded_with_thinking_on_non_claude_models(
-    tool_choice: Union[str, bool, Dict[str, Any]],
+    tool_choice: str | bool | dict[str, Any],
 ) -> None:
     """Forced tool choices should be preserved for non-Claude models."""
     llm = ChatLiteLLM(
@@ -990,7 +992,7 @@ def test_bind_tools_not_downgraded_with_thinking_on_non_claude_models(
     ids=["auto", "none", "None", "False"],
 )
 def test_bind_tools_non_forced_unchanged_with_thinking(
-    tool_choice: Optional[Union[str, bool]],
+    tool_choice: str | bool | None,
 ) -> None:
     """Non-forced tool_choice values should pass through untouched."""
     llm = ChatLiteLLM(
@@ -1008,7 +1010,7 @@ def test_bind_tools_non_forced_unchanged_with_thinking(
     ids=["None", "empty", "disabled"],
 )
 def test_bind_tools_no_downgrade_without_thinking_enabled(
-    thinking_config: Optional[Dict[str, Any]],
+    thinking_config: dict[str, Any] | None,
 ) -> None:
     """tool_choice='any' should stay 'required' when thinking is not enabled."""
     kwargs: dict = {}
@@ -1446,7 +1448,7 @@ def test_an_explicit_none_falls_back_to_the_default(field: str) -> None:
     Dropping it leaves the default in place and, unlike backfilling the default,
     keeps the field out of `model_fields_set` where langchain-core reads it.
     """
-    kwargs: Dict[str, Any] = {"model": "anthropic/claude-3-5-sonnet-20241022"}
+    kwargs: dict[str, Any] = {"model": "anthropic/claude-3-5-sonnet-20241022"}
     kwargs[field] = None
     llm = ChatLiteLLM(**kwargs)  # type: ignore[arg-type]
 
@@ -1821,7 +1823,7 @@ def test_copying_model_kwargs_preserves_the_container_type() -> None:
 
 def test_a_self_referential_model_kwarg_does_not_recurse_forever() -> None:
     """Copying has to terminate on a value that contains itself."""
-    cyclic: Dict[str, Any] = {}
+    cyclic: dict[str, Any] = {}
     cyclic["self"] = cyclic
     llm = ChatLiteLLM(model="gpt-4o", api_key="k", model_kwargs={"c": cyclic})
 
@@ -1872,6 +1874,7 @@ def test_constructor_signature_is_not_erased(tmp_path: Path) -> None:
         [sys.executable, "-m", "mypy", "--no-incremental", str(probe)],
         capture_output=True,
         text=True,
+        check=False,
     )
 
     assert "call-arg" in result.stdout, result.stdout
