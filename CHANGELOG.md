@@ -5,8 +5,9 @@
 
 ### ⚠ BREAKING CHANGES
 
+* **chat_models:** `.stream()` and `.astream()` now stream incrementally on an instance that did not pass `streaming=True`. They previously returned the whole response as a single chunk, because the default `streaming=False` was recorded as an explicit opt-out. Code that assumed one chunk per call, or that expected `astream_events` to emit a single `on_chat_model_stream`, now receives one per token. Pass `streaming=False` explicitly to keep the previous behaviour.
+* **embeddings:** `LiteLLMEmbeddings` rejects unknown constructor kwargs rather than discarding them. `timeout`, `max_tokens`, `client` and `streaming` were accepted and ignored; use the declared `request_timeout`, or pass provider values through `model_kwargs`.
 * **chat_models:** `ChatLiteLLMRouter` no longer copies litellm's router metadata into `response_metadata`. Read `response_cost` instead of `hidden_params.response_cost`, and `model_id` instead of `hidden_params.model_id`; both are now present on the streaming paths too, where none of these keys ever appeared. `api_base`, `attempted_fallbacks`, `attempted_retries`, `caching_groups`, `deployment`, `deployment_model_name`, `hidden_params`, `max_retries`, `model_group`, `model_group_alias`, `model_group_size`, `model_info` and `original_model_group` are gone with no replacement.
-* `LiteLLMEmbeddings` rejects unknown constructor kwargs rather than discarding them. `timeout`, `max_tokens`, `client` and `streaming` were accepted and ignored; use the declared `request_timeout`, or pass provider values through `model_kwargs`.
 
 ### Features
 
@@ -16,6 +17,7 @@
 
 ### Bug Fixes
 
+* accept `base_url` as an alias for `api_base` in `ChatLiteLLM` ([#200](https://github.com/langchain-ai/langchain-litellm/issues/200)) ([14d8c07](https://github.com/langchain-ai/langchain-litellm/commit/14d8c072dc4f4ad2bad95be5d7bd5ed91397b03a))
 * accept base_url for LiteLLM embeddings ([#203](https://github.com/langchain-ai/langchain-litellm/issues/203)) ([e5b2e5e](https://github.com/langchain-ai/langchain-litellm/commit/e5b2e5e5b765ffca5f63db4e4346688060b36315))
 * **chat_models:** forward provider-specific api_key fields to litellm ([#261](https://github.com/langchain-ai/langchain-litellm/issues/261)) ([b57c1e4](https://github.com/langchain-ai/langchain-litellm/commit/b57c1e409c42ca03f08872f9055872e35506e391))
 * **chat_models:** honor per-call model override in _get_ls_params ([#248](https://github.com/langchain-ai/langchain-litellm/issues/248)) ([c2d4fec](https://github.com/langchain-ai/langchain-litellm/commit/c2d4fec22aac0e04e9a1a338f2085412e8983f14))
