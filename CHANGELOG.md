@@ -111,3 +111,190 @@
 ### Features
 
 * add LiteLLMEmbeddings and LiteLLMEmbeddingsRouter ([#88](https://github.com/langchain-ai/langchain-litellm/issues/88)) ([2bace91](https://github.com/langchain-ai/langchain-litellm/commit/2bace9185918964a5e6047190ef86e9495ff7e64))
+
+*Versions 0.1.0 through 0.5.1 predate automated changelog generation and were reconstructed from git history. Dates are PyPI publication dates. Documentation, CI and release-tooling commits are omitted, as they are for later versions.*
+
+## [0.5.1](https://github.com/langchain-ai/langchain-litellm/compare/v0.5.0...v0.5.1) (2026-02-11)
+
+
+### Features
+
+* add configurable timeout and retry logic to LiteLLMOCRLoader ([#68](https://github.com/langchain-ai/langchain-litellm/issues/68)) ([1c079a5](https://github.com/langchain-ai/langchain-litellm/commit/1c079a5f64cea85146247da577f2602da45f8b6e))
+
+**Contributors:** [@Akshay-Dongare](https://github.com/Akshay-Dongare)
+
+## [0.5.0](https://github.com/langchain-ai/langchain-litellm/compare/v0.4.0...v0.5.0) (2026-02-09)
+
+
+### Features
+
+* Initial LiteLLM OCR Loader ([#65](https://github.com/langchain-ai/langchain-litellm/issues/65)) ([ad733f1](https://github.com/langchain-ai/langchain-litellm/commit/ad733f13d9325be4ac1ed392fb75a046067673ae))
+
+**Contributors:** [@Bschim](https://github.com/Bschim)
+
+## [0.4.0](https://github.com/langchain-ai/langchain-litellm/compare/v0.3.5...v0.4.0) (2026-02-02)
+
+
+### Features
+
+* Add support for base_model parameter to fix fine-tuned Vertex AI models ([#63](https://github.com/langchain-ai/langchain-litellm/issues/63)) ([ed37959](https://github.com/langchain-ai/langchain-litellm/commit/ed37959860b7207450c3a96c590870f0c5702704))
+* Add support for gemini-2.5-pro by updating litellm dependency ([#60](https://github.com/langchain-ai/langchain-litellm/issues/60)) ([132d71c](https://github.com/langchain-ai/langchain-litellm/commit/132d71c528451bb6a45171891bdaffaa9f8af7cd))
+* Add support for num_ctx parameter and improve documentation ([#57](https://github.com/langchain-ai/langchain-litellm/issues/57)) ([3cbbb43](https://github.com/langchain-ai/langchain-litellm/commit/3cbbb439d923929f3444101956506c1a6a8b502e))
+
+
+### Bug Fixes
+
+* allow reasoning_content and function_call to coexist in message chunks ([#55](https://github.com/langchain-ai/langchain-litellm/issues/55)) ([338672d](https://github.com/langchain-ai/langchain-litellm/commit/338672d5b695da2288537318b4dae0a76e8856e3))
+* Expose cache tokens in streaming responses ([#53](https://github.com/langchain-ai/langchain-litellm/issues/53)) ([cb02c23](https://github.com/langchain-ai/langchain-litellm/commit/cb02c23be6cd81795e9af0662b742fdf0208a96f))
+* Fix AttributeError in streaming when chunks lack role or function_call attributes ([#59](https://github.com/langchain-ai/langchain-litellm/issues/59)) ([62488a0](https://github.com/langchain-ai/langchain-litellm/commit/62488a01277e978020674a645dcdd98797761ef0))
+* Fix missing usage metadata in streaming responses ([#56](https://github.com/langchain-ai/langchain-litellm/issues/56)) ([ae8b263](https://github.com/langchain-ai/langchain-litellm/commit/ae8b263b3365a93f50b4f1d69b1a1e04b985fe45))
+* Fix multimodal content handling and preserve LiteLLM native format ([#61](https://github.com/langchain-ai/langchain-litellm/issues/61)) ([5e2eed1](https://github.com/langchain-ai/langchain-litellm/commit/5e2eed19795e5b9a0f50e6f4ac972c25d2a9ba71))
+* Fix request_timeout parameter not being respected ([#58](https://github.com/langchain-ai/langchain-litellm/issues/58)) ([f231574](https://github.com/langchain-ai/langchain-litellm/commit/f23157461dff779e515ef1446188aa2d4e498cb2))
+* Fix streaming crash on Bedrock while preserving OpenAI usage stats ([#64](https://github.com/langchain-ai/langchain-litellm/issues/64)) ([28edfda](https://github.com/langchain-ai/langchain-litellm/commit/28edfda96af300e8bebc1d195d870a2825eb61e4))
+* Fix structured output crashes: handle tool_choice and Dict arguments ([#62](https://github.com/langchain-ai/langchain-litellm/issues/62)) ([7793f17](https://github.com/langchain-ai/langchain-litellm/commit/7793f172e331d03fe08acc0c941bed62edf56cb2))
+
+**Contributors:** [@Akshay-Dongare](https://github.com/Akshay-Dongare)
+
+## [0.3.5](https://github.com/langchain-ai/langchain-litellm/compare/v0.3.4...v0.3.5) (2025-12-13)
+
+
+### Bug Fixes
+
+* Inject Root Metadata into Delta ([#47](https://github.com/langchain-ai/langchain-litellm/issues/47)) ([7c239b9](https://github.com/langchain-ai/langchain-litellm/commit/7c239b9e43e29d0abc3ace50d6a7f84b1cecd737))
+
+**Contributors:** [@Akshay-Dongare](https://github.com/Akshay-Dongare)
+
+## [0.3.4](https://github.com/langchain-ai/langchain-litellm/compare/v0.3.3...v0.3.4) (2025-12-13)
+
+
+### Features
+
+* Add compatibility for Vertex AI specific grounding metadata field in Litellm chat model. ([#45](https://github.com/langchain-ai/langchain-litellm/issues/45)) ([6368a4d](https://github.com/langchain-ai/langchain-litellm/commit/6368a4dd97b1bc9ce6c457d9c472d26256e2eb43))
+* Added the handling of 'vertex_ai_grounding_metadata' for provider_specific_fields in LiteLLMRouter. ([#45](https://github.com/langchain-ai/langchain-litellm/issues/45)) ([0ec4970](https://github.com/langchain-ai/langchain-litellm/commit/0ec4970cd46eee16ec2caedabaccccc46b983902))
+
+**Contributors:** [@Akshay-Dongare](https://github.com/Akshay-Dongare)
+
+## [0.3.3](https://github.com/langchain-ai/langchain-litellm/compare/v0.3.2...v0.3.3) (2025-12-11)
+
+
+### Features
+
+* Add "provider_specific_fields" support in chat models and router ([#43](https://github.com/langchain-ai/langchain-litellm/issues/43)) ([c56a352](https://github.com/langchain-ai/langchain-litellm/commit/c56a3527704613002bdf15eaa63fbec0ef8c7aa7))
+
+
+### Bug Fixes
+
+* Fix bug where reason content is not output in invoke ([#25](https://github.com/langchain-ai/langchain-litellm/issues/25)) ([dbe0134](https://github.com/langchain-ai/langchain-litellm/commit/dbe01341c2a184933e28bae2eca39067b99020f2))
+
+**Contributors:** [@TBice123123](https://github.com/TBice123123), [@Akshay-Dongare](https://github.com/Akshay-Dongare)
+
+## [0.3.2](https://github.com/langchain-ai/langchain-litellm/compare/v0.3.1...v0.3.2) (2025-11-20)
+
+
+### Features
+
+* Add logprobs to ChatResult for ChatLiteLLM ([#40](https://github.com/langchain-ai/langchain-litellm/issues/40)) ([c9e60c7](https://github.com/langchain-ai/langchain-litellm/commit/c9e60c7095142e86af1abdf45a2437b4d92ef22d))
+* add structured output support with schema validation in ChatLiteLLM ([#36](https://github.com/langchain-ai/langchain-litellm/issues/36)) ([3e6ef60](https://github.com/langchain-ai/langchain-litellm/commit/3e6ef609d57f403dc150b5209cb3109e25c796db))
+* add support for extra headers in ChatLiteLLM ([#35](https://github.com/langchain-ai/langchain-litellm/issues/35)) ([1846a85](https://github.com/langchain-ai/langchain-litellm/commit/1846a85f80ef5d174894a390c2dfe7229e47a7db))
+
+
+### Bug Fixes
+
+* filter out None values from params in ChatLiteLLMRouter methods ([#37](https://github.com/langchain-ai/langchain-litellm/issues/37)) ([6579a2b](https://github.com/langchain-ai/langchain-litellm/commit/6579a2b0137729b606c238535682d6c9226bec05))
+
+**Contributors:** [@allen-cook](https://github.com/allen-cook), [@SamMaggioli](https://github.com/SamMaggioli), [@k4han](https://github.com/k4han)
+
+## [0.3.1](https://github.com/langchain-ai/langchain-litellm/compare/v0.3.0...v0.3.1) (2025-11-20)
+
+
+### Features
+
+* Add support for LangChain version 1.0 ([#38](https://github.com/langchain-ai/langchain-litellm/issues/38)) ([03439b1](https://github.com/langchain-ai/langchain-litellm/commit/03439b1627971df24177569e91519a0398859912))
+
+**Contributors:** [@quinlanjager](https://github.com/quinlanjager)
+
+## [0.3.0](https://github.com/langchain-ai/langchain-litellm/compare/v0.2.3...v0.3.0) (2025-10-20)
+
+
+### Features
+
+* Add Usage Metadata in Streaming Responses ([#34](https://github.com/langchain-ai/langchain-litellm/issues/34)) ([a9abf29](https://github.com/langchain-ai/langchain-litellm/commit/a9abf297eb394880d2243a74e6a42735401fd0dc))
+
+**Contributors:** [@RheagalFire](https://github.com/RheagalFire)
+
+## [0.2.3](https://github.com/langchain-ai/langchain-litellm/compare/v0.2.2...v0.2.3) (2025-09-25)
+
+
+### Bug Fixes
+
+* ainvoke and astream openai completion api ([#24](https://github.com/langchain-ai/langchain-litellm/issues/24)) ([7675be8](https://github.com/langchain-ai/langchain-litellm/commit/7675be857da88c399b1f1dfc162eb7eb2f05fbc5))
+
+**Contributors:** [@maxence-oden](https://github.com/maxence-oden)
+
+## [0.2.2](https://github.com/langchain-ai/langchain-litellm/compare/v0.2.1...v0.2.2) (2025-07-11)
+
+
+### Bug Fixes
+
+* Fix for the Issue:_OPENAI_MODELS is out of date #7 ([#12](https://github.com/langchain-ai/langchain-litellm/issues/12)) ([64cbad1](https://github.com/langchain-ai/langchain-litellm/commit/64cbad1eda7b759866d6f9846994ef795090f6b6))
+* Fix tool message conversion ([#11](https://github.com/langchain-ai/langchain-litellm/issues/11)) ([9fefd6d](https://github.com/langchain-ai/langchain-litellm/commit/9fefd6d64e48558b5f3d81d71838a08150ba17af))
+* Solves issue #7 ([43b6adc](https://github.com/langchain-ai/langchain-litellm/commit/43b6adc71dffc2e6b8132563868ddc6d9700e744))
+* streaming delta conversion to handle dict types ([#14](https://github.com/langchain-ai/langchain-litellm/issues/14)) ([8073686](https://github.com/langchain-ai/langchain-litellm/commit/807368662f854fae27e9b8c927f9e1fd80ebf3fd))
+* Update temperature range ([846d3d2](https://github.com/langchain-ai/langchain-litellm/commit/846d3d2397cc1e844ffdc6c516c92d8e00761149))
+
+**Contributors:** [@Akshay-Dongare](https://github.com/Akshay-Dongare), [@AshutoshDongare](https://github.com/AshutoshDongare), [@jeonsworld](https://github.com/jeonsworld)
+
+## [0.2.1](https://github.com/langchain-ai/langchain-litellm/compare/v0.2.0...v0.2.1) (2025-05-12)
+
+
+### Bug Fixes
+
+* fixed streaming with tool calls ([#6](https://github.com/langchain-ai/langchain-litellm/issues/6)) ([0ddac98](https://github.com/langchain-ai/langchain-litellm/commit/0ddac986f3b489a62278571c9256eb9463c9778f))
+
+**Contributors:** [@florianchappaz](https://github.com/florianchappaz)
+
+## [0.2.0](https://github.com/langchain-ai/langchain-litellm/compare/v0.1.4...v0.2.0) (2025-04-26)
+
+
+### Features
+
+* added support for ChatLiteLLMRouter ([#2](https://github.com/langchain-ai/langchain-litellm/issues/2)) ([5cb4bb2](https://github.com/langchain-ai/langchain-litellm/commit/5cb4bb2489f86b8e3aab7412a96d826ae5343189))
+
+**Contributors:** [@florianchappaz](https://github.com/florianchappaz)
+
+## [0.1.4](https://github.com/langchain-ai/langchain-litellm/compare/0.1.3...v0.1.4) (2025-04-05)
+
+
+Release tooling and documentation only, with no functional changes.
+
+## [0.1.3](https://github.com/langchain-ai/langchain-litellm/compare/0.1.2...0.1.3) (2025-04-05)
+
+
+### Features
+
+* exporting ChatLiteLLM from \_\_init\_\_.py so you can do from langchain_litellm import ChatLiteLLM ([746e14c](https://github.com/langchain-ai/langchain-litellm/commit/746e14c82b54dc54f6135928a02e3afb7226992e))
+
+**Contributors:** [@Akshay-Dongare](https://github.com/Akshay-Dongare)
+
+## [0.1.2](https://github.com/langchain-ai/langchain-litellm/compare/bce995d...0.1.2) (2025-04-04)
+
+
+Release tooling and documentation only, with no functional changes.
+
+## [0.1.1](https://github.com/langchain-ai/langchain-litellm/compare/9ce92c0...bce995d) (2025-04-03)
+
+
+### Bug Fixes
+
+* solved poetry dependency issues and rewrote integration tests ([4e92b40](https://github.com/langchain-ai/langchain-litellm/commit/4e92b40d2c145bfd44e7a51de5cf7c2a3e425b51))
+
+**Contributors:** [@Akshay-Dongare](https://github.com/Akshay-Dongare)
+
+## [0.1.0](https://github.com/langchain-ai/langchain-litellm/tree/9ce92c0cd9e0a432f431e6a04aea11018e4e1729) (2025-04-03)
+
+
+### Features
+
+* added chat_model code and docs ([479fd92](https://github.com/langchain-ai/langchain-litellm/commit/479fd92ffa57b62372778bca25f69fd56ef82e46))
+
+**Contributors:** [@Akshay-Dongare](https://github.com/Akshay-Dongare)
