@@ -18,6 +18,7 @@ from typing import (
     cast,
     get_args,
 )
+from urllib.parse import urlsplit
 
 import litellm
 from langchain_core.callbacks import (
@@ -167,7 +168,10 @@ def _endpoint_name(
             or os.environ.get("ANTHROPIC_API_BASE")
             or os.environ.get("ANTHROPIC_BASE_URL")
         )
-    return f"{provider}|{(base or '').rstrip('/').lower()}|{name}"
+    # Neither credentials nor a query string changes which server signs a block.
+    url = urlsplit((base or "").lower())
+    where = url._replace(netloc=url.netloc.rpartition("@")[2], query="", fragment="")
+    return f"{provider}|{where.geturl().rstrip('/')}|{name}"
 
 
 def _signing_endpoint(
