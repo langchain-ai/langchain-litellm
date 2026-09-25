@@ -211,7 +211,11 @@ def _signed_thinking_blocks(blocks: Any) -> list[dict[str, Any]]:
 
 
 def _stored_thinking_blocks(blocks: Any, origin: str) -> list[dict[str, Any]]:
-    """The signed blocks of a response, each marked with the endpoint that signed it."""
+    """The signed blocks of a response, each marked with the endpoint that signed it.
+
+    The mark goes on every block, not once on the message: merging stream chunks
+    joins two strings end to end but keeps list items apart.
+    """
     return [{**block, _ORIGIN: origin} for block in _signed_thinking_blocks(blocks)]
 
 
@@ -221,7 +225,8 @@ class _ThinkingBlockAssembler:
     litellm streams a thinking block as unsigned text fragments and closes it with a
     signed block, which Anthropic fills with the whole text again and Bedrock
     converse leaves empty. A delta therefore contributes a block only once it is
-    complete, so the summed chunks equal what a non-streaming call stores.
+    complete, so the summed chunks equal what a non-streaming call stores. Each call
+    builds its own, so fragments from two streams never meet.
     """
 
     def __init__(self, origin: str) -> None:
@@ -234,25 +239,21 @@ class _ThinkingBlockAssembler:
             return completed
         for block in blocks:
             block_type = _get_field(block, "type")
-            if block_type == "thinking":
-                thinking = _get_field(block, "thinking")
-                signature = _get_field(block, "signature")
-                if isinstance(signature, str) and signature:
-                    text = thinking if isinstance(thinking, str) else ""
-                    completed.append(
-                        {
-                            "type": "thinking",
-                            "thinking": text or "".join(self._pending),
-                            "signature": signature,
-                            _ORIGIN: self._origin,
-                        }
-                    )
-                    self._pending = []
-                elif isinstance(thinking, str):
-                    self._pending.append(thinking)
-            elif block_type == "redacted_thinking":
+            if block_type == "redacted_thinking":
                 completed.extend(_stored_thinking_blocks([block], self._origin))
                 self._pending = []
+            elif block_type == "thinking":
+                closed = _stored_thinking_blocks([block], self._origin)
+                if closed:
+                    closed[0]["thinking"] = closed[0]["thinking"] or "".join(
+                        self._pending
+                    )
+                    completed.extend(closed)
+                    self._pending = []
+                else:
+                    thinking = _get_field(block, "thinking")
+                    if isinstance(thinking, str):
+                        self._pending.append(thinking)
         return completed
 
 
@@ -1093,7 +1094,6 @@ class ChatLiteLLM(BaseChatModel):
             )
         endpoint = self._thinking_endpoint(params)
         _attach_thinking_blocks(messages, message_dicts, endpoint)
-        # One per call: fragments from two streams must never meet.
         thinking = _ThinkingBlockAssembler(endpoint) if endpoint else None
         default_chunk_class = AIMessageChunk
         first_chunk_yielded = False
@@ -1190,7 +1190,6 @@ class ChatLiteLLM(BaseChatModel):
             )
         endpoint = self._thinking_endpoint(params)
         _attach_thinking_blocks(messages, message_dicts, endpoint)
-        # One per call: fragments from two streams must never meet.
         thinking = _ThinkingBlockAssembler(endpoint) if endpoint else None
         default_chunk_class = AIMessageChunk
         first_chunk_yielded = False

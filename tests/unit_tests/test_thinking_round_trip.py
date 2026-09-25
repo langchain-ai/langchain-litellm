@@ -920,12 +920,43 @@ def test_a_stored_block_keeps_only_well_formed_values() -> None:
         {"type": "redacted_thinking", "data": ""},
     ]
 
-    assert _ThinkingBlockAssembler(ANTHROPIC).feed(raw) == signed_at(
+    thinking = _ThinkingBlockAssembler(ANTHROPIC)
+    thinking.feed([{"type": "thinking", "thinking": None}])
+
+    assert thinking.feed(raw) == signed_at(
         ANTHROPIC, {"type": "thinking", "thinking": "", "signature": "s=="}
     )
     assert _attached(_turn(signed_at(ANTHROPIC, *raw)), ANTHROPIC)[
         "thinking_blocks"
     ] == [{"type": "thinking", "thinking": "", "signature": "s=="}]
+
+
+def test_a_fragment_that_completes_no_block_adds_no_key() -> None:
+    fragment = {
+        "role": "assistant",
+        "content": "",
+        "thinking_blocks": [{"type": "thinking", "thinking": "half a thought"}],
+    }
+
+    chunk = _convert_delta_to_message_chunk(
+        fragment, AIMessageChunk, _ThinkingBlockAssembler(ANTHROPIC)
+    )
+
+    assert "thinking_blocks" not in chunk.additional_kwargs
+
+
+def test_only_assistant_turns_that_hold_blocks_get_them() -> None:
+    blocks = signed_at(ANTHROPIC, SIGNED)
+    messages = [
+        AIMessage("no thinking here"),
+        HumanMessage("hi", additional_kwargs={"thinking_blocks": blocks}),
+        _turn(blocks),
+    ]
+    message_dicts = [_convert_message_to_dict(m) for m in messages]
+
+    _attach_thinking_blocks(messages, message_dicts, ANTHROPIC)
+
+    assert ["thinking_blocks" in d for d in message_dicts] == [False, False, True]
 
 
 def test_a_redacted_block_ends_the_text_buffered_before_it() -> None:

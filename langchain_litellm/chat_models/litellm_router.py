@@ -241,7 +241,6 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         self._prepare_params_for_router(params)
         endpoint = self._thinking_endpoint(params)
         _attach_thinking_blocks(messages, message_dicts, endpoint)
-        # One per call: fragments from two streams must never meet.
         thinking = _ThinkingBlockAssembler(endpoint) if endpoint else None
         first_chunk_yielded = False
         cost_named = False
@@ -339,7 +338,6 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         self._prepare_params_for_router(params)
         endpoint = self._thinking_endpoint(params)
         _attach_thinking_blocks(messages, message_dicts, endpoint)
-        # One per call: fragments from two streams must never meet.
         thinking = _ThinkingBlockAssembler(endpoint) if endpoint else None
         first_chunk_yielded = False
         cost_named = False
