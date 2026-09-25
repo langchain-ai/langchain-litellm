@@ -313,6 +313,32 @@ def test_non_streaming_response_stores_only_signed_blocks_with_their_origin() ->
     assert message.content == ""
 
 
+def test_only_the_choices_that_hold_blocks_keep_them() -> None:
+    response = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "a",
+                    "thinking_blocks": [SIGNED],
+                }
+            },
+            {"message": {"role": "assistant", "content": "b"}},
+        ]
+    }
+    llm = ChatLiteLLM(model=CLAUDE, api_key="fake")
+    result = llm._create_chat_result(response, n=2)
+
+    kept = _keep_thinking_blocks(result, response, (KIMI, NOTHING_BEFORE))
+
+    assert [
+        g.message.additional_kwargs.get("thinking_blocks") for g in kept.generations
+    ] == [
+        signed_at(KIMI, SIGNED),
+        None,
+    ]
+
+
 def test_response_without_signed_blocks_stores_no_key() -> None:
     message = _kept(
         {
@@ -2033,6 +2059,20 @@ def test_a_bedrock_converse_continuation_carries_the_signed_block(
         "text": SIGNED["thinking"],
         "signature": SIGNED["signature"],
     }
+
+
+@pytest.mark.parametrize("mode", ["invoke", "stream", "ainvoke", "astream"])
+@pytest.mark.parametrize("kind", ["base", "router"])
+def test_every_entry_point_holds_back_a_turn_signed_with_other_tools(
+    anthropic_wire: list[dict[str, Any]], kind: str, mode: str
+) -> None:
+    """The tools are part of the history a block follows, on every path."""
+    llm = _model(kind).bind_tools([WEATHER_TOOL])
+
+    _run(llm, mode, _history(KIMI))
+
+    turn = next(m for m in anthropic_wire[-1]["messages"] if m["role"] == "assistant")
+    assert "thinking" not in [block["type"] for block in turn["content"]]
 
 
 def _stream_fakes(
