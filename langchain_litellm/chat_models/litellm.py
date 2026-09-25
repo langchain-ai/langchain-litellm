@@ -129,6 +129,26 @@ def _cost_metadata(response: Any) -> dict[str, Any]:
     return {"response_cost": cost} if cost is not None else {}
 
 
+def _rejoin_split_reply(choices: Sequence[Any], n: int | None) -> Sequence[Any]:
+    """Rejoin one reply that litellm split across choices, unless ``n`` asked for several.
+
+    litellm's Responses API bridge gives each text part, and the tool calls, a choice
+    of their own. They are joined here as a stream joins them.
+    """
+    if len(choices) < 2 or (n or 1) > 1:
+        return choices
+    messages = [choice["message"] for choice in choices]
+    message = {
+        "role": messages[0]["role"],
+        "content": "".join(m.get("content") or "" for m in messages),
+        "tool_calls": [call for m in messages for call in m.get("tool_calls") or []],
+        "reasoning_content": "".join(
+            m.get("reasoning_content") or "" for m in messages
+        ),
+    }
+    return [{"message": message, "finish_reason": choices[-1].get("finish_reason")}]
+
+
 class ChatLiteLLMException(Exception):
     """Exception raised for errors in the LiteLLM integration."""
 
@@ -793,13 +813,15 @@ class ChatLiteLLM(BaseChatModel):
         response = self.completion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
         )
-        return self._create_chat_result(response)
+        return self._create_chat_result(response, **params)
 
-    def _create_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
+    def _create_chat_result(
+        self, response: Mapping[str, Any], **params: Any
+    ) -> ChatResult:
         generations = []
         token_usage = response.get("usage", {})
         usage_metadata = _create_usage_metadata(token_usage)
-        for res in response["choices"]:
+        for res in _rejoin_split_reply(response["choices"], params.get("n")):
             message = _convert_dict_to_message(res["message"])
             if isinstance(message, AIMessage):
                 message.response_metadata = {
@@ -1045,7 +1067,7 @@ class ChatLiteLLM(BaseChatModel):
         response = await self.acompletion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
         )
-        return self._create_chat_result(response)
+        return self._create_chat_result(response, **params)
 
     def bind_tools(
         self,

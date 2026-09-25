@@ -6,12 +6,19 @@ from unittest.mock import patch
 
 import litellm
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from langchain_litellm._version import __version__
 from langchain_litellm.chat_models import ChatLiteLLMRouter
 from langchain_litellm.chat_models.litellm_router import _deployment_metadata
-from tests.utils import make_router
+from tests.utils import (
+    chat_completion_reply,
+    function_call_item,
+    make_router,
+    message_item,
+    responses_api_reply,
+    serve_http,
+)
 
 
 def _completion_double(seen: list[dict[str, Any]]) -> Callable[..., Any]:
@@ -217,6 +224,54 @@ def test_router_create_chat_result_sets_usage_metadata() -> None:
     assert msg.usage_metadata["input_tokens"] == 12
     assert msg.usage_metadata["output_tokens"] == 8
     assert msg.usage_metadata["total_tokens"] == 20
+
+
+def _router_serving(model: str) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": model, "api_key": "k"},
+            }
+        ]
+    )
+
+
+@pytest.mark.parametrize("method", ["invoke", "ainvoke"])
+@pytest.mark.asyncio
+async def test_router_split_reply_keeps_its_tool_calls(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    """The Router builds its own result, so it must rejoin a split reply too."""
+    serve_http(
+        monkeypatch,
+        responses_api_reply(
+            message_item("Let me check."),
+            function_call_item("call_1", '{"city": "Paris"}'),
+        ),
+    )
+    llm = ChatLiteLLMRouter(router=_router_serving("openai/responses/gpt-4o-mini"))
+
+    if method == "invoke":
+        message = llm.invoke("weather?")
+    else:
+        message = await llm.ainvoke("weather?")
+
+    assert message.content == "Let me check."
+    assert [
+        (call["name"], call["args"], call["id"]) for call in message.tool_calls
+    ] == [("get_weather", {"city": "Paris"}, "call_1")]
+
+
+def test_router_n_above_one_keeps_each_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    serve_http(monkeypatch, chat_completion_reply("A", "B"))
+    llm = ChatLiteLLMRouter(router=_router_serving("openai/gpt-4o-mini"))
+
+    result = llm.generate([[HumanMessage("hi")]], n=2)
+
+    assert [generation.text for generation in result.generations[0]] == ["A", "B"]
 
 
 def test_router_stream_options_default_to_include_usage() -> None:

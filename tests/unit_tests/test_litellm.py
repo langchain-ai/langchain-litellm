@@ -14,7 +14,7 @@ import litellm
 import pytest
 from langchain.chat_models import init_chat_model
 from langchain_core.exceptions import OutputParserException
-from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableLambda
 from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function
 from pydantic import BaseModel, ValidationError
@@ -29,6 +29,14 @@ from langchain_litellm.chat_models.litellm import (
     _cost_metadata,
     _create_usage_metadata,
     _provider_api_key_field,
+)
+from tests.utils import (
+    chat_completion_reply,
+    function_call_item,
+    message_item,
+    reasoning_item,
+    responses_api_reply,
+    serve_http,
 )
 
 
@@ -726,6 +734,114 @@ def test_provider_specific_fields_in_chat_result() -> None:
         result.llm_output["provider_specific_fields"]["citations"][0]["source"]
         == "test"
     )
+
+
+# ── replies litellm splits across choices ──────────────────────────────────────
+
+# `<provider>/responses/<model>` makes litellm answer through its Responses API bridge.
+_BRIDGED_MODEL = "openai/responses/gpt-4o-mini"
+
+
+@pytest.mark.parametrize("method", ["invoke", "ainvoke"])
+@pytest.mark.asyncio
+async def test_a_split_reply_keeps_its_tool_calls(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    """litellm's Responses API bridge gives text and tool calls a choice each.
+
+    They are one reply, and a caller acting on it needs the calls.
+    """
+    requests = serve_http(
+        monkeypatch,
+        responses_api_reply(
+            message_item("Let me check."),
+            function_call_item("call_1", '{"city": "Paris"}'),
+        ),
+    )
+    llm = ChatLiteLLM(model=_BRIDGED_MODEL, api_key="k")
+
+    if method == "invoke":
+        message = llm.invoke("weather?")
+    else:
+        message = await llm.ainvoke("weather?")
+
+    assert requests[0].url.path.endswith("/responses")
+    assert message.content == "Let me check."
+    assert [
+        (call["name"], call["args"], call["id"]) for call in message.tool_calls
+    ] == [("get_weather", {"city": "Paris"}, "call_1")]
+    assert message.response_metadata["finish_reason"] == "tool_calls"
+
+
+def test_a_split_reply_keeps_every_text_part(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The bridge also gives each text part of one message a choice of its own."""
+    serve_http(
+        monkeypatch, responses_api_reply(message_item("Part one. ", "Part two."))
+    )
+
+    message = ChatLiteLLM(model=_BRIDGED_MODEL, api_key="k").invoke("hi")
+
+    assert message.content == "Part one. Part two."
+
+
+def test_a_split_reply_keeps_the_reasoning_before_each_part(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each choice carries the reasoning that preceded its part; a stream joins both."""
+    serve_http(
+        monkeypatch,
+        responses_api_reply(
+            reasoning_item("rs_1", "Think A."),
+            message_item("Checking."),
+            reasoning_item("rs_2", "Think B."),
+            function_call_item("call_1", '{"city": "Paris"}'),
+        ),
+    )
+
+    message = ChatLiteLLM(model=_BRIDGED_MODEL, api_key="k").invoke("weather?")
+
+    assert message.additional_kwargs["reasoning_content"] == "Think A.Think B."
+
+
+@pytest.mark.parametrize("method", ["generate", "agenerate"])
+@pytest.mark.asyncio
+async def test_n_above_one_keeps_each_completion(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    """With `n` above one, each choice is a separate completion."""
+    serve_http(monkeypatch, chat_completion_reply("A", "B"))
+    llm = ChatLiteLLM(model="openai/gpt-4o-mini", api_key="k")
+
+    if method == "generate":
+        result = llm.generate([[HumanMessage("hi")]], n=2)
+    else:
+        result = await llm.agenerate([[HumanMessage("hi")]], n=2)
+
+    assert [generation.text for generation in result.generations[0]] == ["A", "B"]
+
+
+def test_a_single_choice_reply_keeps_what_a_rejoin_would_drop() -> None:
+    """Only a split reply is rebuilt; one choice arrives with every field it carries."""
+    grounding = {"grounding_metadata": {"search_queries": ["Earth orbit"]}}
+    response = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "The Earth orbits the Sun",
+                    "provider_specific_fields": grounding,
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k")
+
+    with patch.object(llm.client, "completion", return_value=response):
+        message = llm.invoke("hi")
+
+    assert message.additional_kwargs["provider_specific_fields"] == grounding
 
 
 # ── usage metadata ─────────────────────────────────────────────────────────────

@@ -26,6 +26,7 @@ from langchain_litellm.chat_models.litellm import (
     _create_retry_decorator,
     _create_usage_metadata,
     _get_field,
+    _rejoin_split_reply,
 )
 
 token_usage_key_name = "token_usage"  # nosec # incorrectly flagged as password
@@ -428,7 +429,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         generations = []
         token_usage = response.get("usage", Usage(prompt_tokens=0, total_tokens=0))
         usage_metadata = _create_usage_metadata(token_usage)
-        for res in response["choices"]:
+        for res in _rejoin_split_reply(response["choices"], params.get("n")):
             message = _convert_dict_to_message(res["message"])
             if isinstance(message, AIMessage):
                 message.response_metadata = {
