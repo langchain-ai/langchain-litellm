@@ -46,7 +46,29 @@ def _deployment_metadata(response: Any) -> dict[str, Any]:
 
 
 class ChatLiteLLMRouter(ChatLiteLLM):
-    """LiteLLM Router-backed chat model."""
+    """LiteLLM Router-backed chat model.
+
+    The deployment the Router picks decides which API a call reaches. OpenAI's
+    built-in tools, such as ``{"type": "web_search"}``, need its Responses API, so
+    name the deployment's model ``<provider>/responses/<model>``.
+
+    Example:
+        .. code-block:: python
+
+            from litellm import Router
+            from langchain_litellm import ChatLiteLLMRouter
+
+            router = Router(
+                model_list=[
+                    {
+                        "model_name": "gpt-4o-mini",
+                        "litellm_params": {"model": "openai/responses/gpt-4o-mini"},
+                    }
+                ]
+            )
+            llm = ChatLiteLLMRouter(router=router)
+            llm.bind_tools([{"type": "web_search"}]).invoke("Today's top headline?")
+    """
 
     router: Any
 
