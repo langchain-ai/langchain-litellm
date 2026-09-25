@@ -708,6 +708,12 @@ def _router(deployments: list[tuple[str, str]], **settings: Any) -> litellm.Rout
             {"context_window_fallbacks": [{"main": ["gem"]}]},
             False,
         ),
+        (
+            [("main", CLAUDE), ("gem", "gemini/gemini-2.5-pro")],
+            {"context_window_fallbacks": [{"main": ["gem"]}]},
+            {},
+            False,
+        ),
         ([("main", CLAUDE)], {}, {"api_base": "https://api.kimi.com/coding/"}, False),
         (
             [("main", CLAUDE), ("gpt", "openai/gpt-4o")],
@@ -726,6 +732,7 @@ def _router(deployments: list[tuple[str, str]], **settings: Any) -> litellm.Rout
         "falls-back-to-a-wildcard",
         "default-fallback",
         "per-call-context-window-fallback",
+        "router-context-window-fallback",
         "per-call-api-base",
         "alias-shadows-the-group",
     ],
