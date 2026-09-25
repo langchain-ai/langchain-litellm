@@ -822,6 +822,20 @@ def test_router_set_default_model_changes_the_model_sent() -> None:
     assert second.call_args.kwargs["model"] == "gpt-3.5-turbo"
 
 
+def test_router_refuses_use_responses_api() -> None:
+    """The Router picks the deployment, so only a deployment can name the route."""
+    with pytest.raises(ValueError, match="<provider>/responses/<model>"):
+        ChatLiteLLMRouter(router=make_router(), use_responses_api=True)
+
+
+@pytest.mark.parametrize("value", [False, None])
+def test_router_accepts_use_responses_api_left_off(value: bool | None) -> None:
+    """A config that spells the flag out as off must still build a Router."""
+    assert not ChatLiteLLMRouter(
+        router=make_router(), use_responses_api=value
+    ).use_responses_api
+
+
 def test_router_is_claude_model_reads_the_deployment() -> None:
     """The Router alias need not contain the provider's model name at all."""
     import litellm

@@ -1,6 +1,7 @@
 """Test chat model integration."""
 
 # stdlib
+import json
 import logging
 import subprocess
 import sys
@@ -10,6 +11,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 # third-party
+import httpx
 import litellm
 import pytest
 from langchain.chat_models import init_chat_model
@@ -1942,3 +1944,202 @@ async def test_astream_sets_finish_reason_in_response_metadata() -> None:
 
     assert chunks[0].message.response_metadata.get("finish_reason") is None
     assert chunks[1].message.response_metadata.get("finish_reason") == "stop"
+
+
+# ── Responses API routing ──────────────────────────────────────────────────────
+
+# A minimal Responses API reply, shaped by the openai SDK's `Response` type.
+_RESPONSES_API_REPLY = {
+    "id": "resp_1",
+    "object": "response",
+    "created_at": 0,
+    "status": "completed",
+    "model": "gpt-4o-mini",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+        }
+    ],
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.fixture
+def _responses_endpoint(monkeypatch: pytest.MonkeyPatch) -> list[httpx.Request]:
+    """Answer each synchronous request litellm sends, in-process, as Responses would.
+
+    Endpoint overrides in the developer's environment would redirect the requests.
+    """
+    for name in ("OPENAI_BASE_URL", "OPENAI_API_BASE", "OPENROUTER_API_BASE"):
+        monkeypatch.delenv(name, raising=False)
+    requests: list[httpx.Request] = []
+
+    def _reply(_: httpx.HTTPTransport, request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=_RESPONSES_API_REPLY)
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", _reply)
+    return requests
+
+
+@pytest.mark.parametrize(
+    ("model", "config", "endpoint", "provider_model"),
+    [
+        ("gpt-4o-mini", {}, "https://api.openai.com/v1/responses", "gpt-4o-mini"),
+        (
+            "openai/gpt-4o-mini",
+            {},
+            "https://api.openai.com/v1/responses",
+            "gpt-4o-mini",
+        ),
+        (
+            "fake-model",
+            {"custom_llm_provider": "openai"},
+            "https://api.openai.com/v1/responses",
+            "fake-model",
+        ),
+        (
+            "fake-model",
+            {"api_base": "https://api.perplexity.ai"},
+            "https://api.perplexity.ai/v1/responses",
+            "fake-model",
+        ),
+        (
+            "openrouter/openai/gpt-4o-mini",
+            {},
+            "https://openrouter.ai/api/v1/responses",
+            "openai/gpt-4o-mini",
+        ),
+        (
+            "fake-deployment",
+            {
+                "custom_llm_provider": "azure",
+                "api_base": "https://fake.openai.azure.com",
+                "model_kwargs": {"api_version": "preview"},
+            },
+            "https://fake.openai.azure.com/openai/v1/responses?api-version=preview",
+            "fake-deployment",
+        ),
+    ],
+)
+def test_use_responses_api_sends_the_call_to_the_responses_endpoint(
+    _responses_endpoint: list[httpx.Request],
+    model: str,
+    config: dict[str, Any],
+    endpoint: str,
+    provider_model: str,
+) -> None:
+    """litellm's own bridge decides the route, so the wire is where to look.
+
+    The routing name stays out of the reply, which tracing reads.
+    """
+    llm = ChatLiteLLM(model=model, api_key="k", use_responses_api=True, **config)
+
+    message = llm.invoke("hi")
+
+    assert [str(request.url) for request in _responses_endpoint] == [endpoint]
+    assert json.loads(_responses_endpoint[0].content)["model"] == provider_model
+    assert message.content == "ok"
+    assert message.response_metadata["model_name"] == model
+
+
+class _Sent(Exception):
+    """Stops a call once litellm has received it."""
+
+
+async def test_use_responses_api_routes_every_entry_point() -> None:
+    """A route applied in one entry point leaves the others on Chat Completions."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_responses_api=True)
+
+    with (
+        patch.object(llm.client, "completion", side_effect=_Sent) as completion,
+        patch.object(llm.client, "acompletion", side_effect=_Sent) as acompletion,
+    ):
+        with pytest.raises(_Sent):
+            llm.invoke("hi")
+        with pytest.raises(_Sent):
+            list(llm.stream("hi"))
+        with pytest.raises(_Sent):
+            await llm.ainvoke("hi")
+        with pytest.raises(_Sent):
+            [chunk async for chunk in llm.astream("hi")]
+
+    calls = completion.call_args_list + acompletion.call_args_list
+    assert [call.kwargs["model"] for call in calls] == [
+        "openai/responses/gpt-4o-mini"
+    ] * 4
+
+
+@pytest.mark.parametrize(
+    ("override", "routed"),
+    [
+        (
+            {"model": "openrouter/openai/gpt-4o-mini"},
+            "openrouter/responses/openai/gpt-4o-mini",
+        ),
+        (
+            {"model": "fake-deployment", "custom_llm_provider": "azure"},
+            "azure/responses/fake-deployment",
+        ),
+        ({"model": None}, "openai/responses/gpt-4o-mini"),
+    ],
+)
+def test_use_responses_api_routes_the_destination_a_call_settles_on(
+    override: dict[str, Any], routed: str
+) -> None:
+    """A per-call destination is routed, and a None override keeps the configured one."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_responses_api=True)
+
+    with patch.object(llm.client, "completion", return_value=_MOCK_OK) as completion:
+        llm.invoke("hi", **override)
+
+    assert completion.call_args.kwargs["model"] == routed
+
+
+def test_use_responses_api_refuses_a_provider_without_one() -> None:
+    """litellm would answer over Anthropic's chat API, never reaching a Responses API."""
+    llm = ChatLiteLLM(
+        model="anthropic/claude-3-5-sonnet-20241022",
+        api_key="k",
+        use_responses_api=True,
+    )
+
+    with (
+        patch.object(llm.client, "completion") as completion,
+        pytest.raises(ValueError, match="cannot send"),
+    ):
+        llm.invoke("hi")
+
+    completion.assert_not_called()
+
+
+def test_use_responses_api_refuses_a_name_litellm_would_not_bridge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """litellm bridges only a routed name its model map leaves unresolved.
+
+    Resolved to a chat model, the name would go to Chat Completions as the model id.
+    """
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openrouter/responses/fake-model",
+        {"mode": "chat", "litellm_provider": "openrouter"},
+    )
+    llm = ChatLiteLLM(
+        model="openrouter/fake-model", api_key="k", use_responses_api=True
+    )
+
+    with (
+        patch.object(llm.client, "completion") as completion,
+        pytest.raises(ValueError, match="cannot send"),
+    ):
+        llm.invoke("hi")
+
+    completion.assert_not_called()
