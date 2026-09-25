@@ -11,6 +11,8 @@ SSE parser and its clients all run.
 
 # stdlib
 import asyncio
+import copy
+import hashlib
 import json
 import logging
 from collections.abc import Callable, Mapping
@@ -26,6 +28,7 @@ from langchain_core.messages import (
     AIMessageChunk,
     BaseMessage,
     HumanMessage,
+    SystemMessage,
     ToolMessage,
 )
 from langchain_core.outputs import ChatResult
@@ -68,9 +71,50 @@ ANTHROPIC = endpoint(CLAUDE)
 KIMI = endpoint("anthropic/kimi-for-coding", "https://api.kimi.com/coding/")
 
 
-def signed_at(endpoint: str, *blocks: dict[str, Any]) -> list[dict[str, Any]]:
-    """Blocks as stored after a response: each marked with the endpoint that signed it."""
-    return [{**block, _ORIGIN: endpoint} for block in blocks]
+def _as_sent(value: Any) -> bytes:
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), default=str
+    ).encode()
+
+
+def prefix_of(
+    before: list[dict[str, Any]],
+    tools: Any = None,
+    system: list[dict[str, Any]] | None = None,
+) -> str:
+    """The stored digest of what a turn followed: its tools, every system message,
+    then the other messages before it, each as sent."""
+    if system is None:
+        system = [m for m in before if m["role"] == "system"]
+    running = hashlib.sha256(_as_sent([tools, system]))
+    for message in before:
+        if message["role"] != "system":
+            running.update(_as_sent(message))
+    return running.hexdigest()[:16]
+
+
+NOTHING_BEFORE = prefix_of([])
+
+
+def signed_at(
+    endpoint: str, *blocks: dict[str, Any], before: str = NOTHING_BEFORE
+) -> list[dict[str, Any]]:
+    """Blocks as stored after a response: marked with the endpoint that signed them
+    and the history they followed."""
+    return [{**block, _ORIGIN: endpoint, "prefix": before} for block in blocks]
+
+
+QUESTION = HumanMessage("What's the weather in Paris?")
+SUNNY = ToolMessage("Sunny", tool_call_id="toolu_01")
+ASKED = prefix_of([_convert_message_to_dict(QUESTION)])
+MONDAY = SystemMessage("Today is Monday.")
+TUESDAY = SystemMessage("Today is Tuesday.")
+
+
+def _asked_after(*earlier: Any, tools: Any = None) -> str:
+    """What a turn answering QUESTION followed, after ``earlier`` messages."""
+    sent = [_convert_message_to_dict(m) for m in (*earlier, QUESTION)]
+    return prefix_of(sent, tools=tools)
 
 
 WEATHER_TOOL = {
@@ -244,7 +288,8 @@ def _kept(message: Any, origin: str | None) -> Any:
     """What a non-streaming call stores from a response holding ``message``."""
     response = {"choices": [{"message": message, "finish_reason": "stop"}]}
     result = ChatLiteLLM(model=CLAUDE, api_key="fake")._create_chat_result(response)
-    return _keep_thinking_blocks(result, response, origin).generations[0].message
+    binding = (origin, NOTHING_BEFORE) if origin else None
+    return _keep_thinking_blocks(result, response, binding).generations[0].message
 
 
 def test_non_streaming_response_stores_only_signed_blocks_with_their_origin() -> None:
@@ -385,7 +430,7 @@ def _bedrock_converse_deltas() -> list[Any]:
 def test_streamed_chunks_sum_to_the_non_streaming_blocks(
     deltas: Callable[[], list[Any]], expected: list[dict[str, Any]], dumped: bool
 ) -> None:
-    thinking = _ThinkingBlockAssembler(ANTHROPIC)
+    thinking = _ThinkingBlockAssembler(ANTHROPIC, NOTHING_BEFORE)
     total = None
     for delta in deltas():
         chunk = _convert_delta_to_message_chunk(
@@ -410,7 +455,7 @@ def _turn(blocks: list[dict[str, Any]], content: Any = "") -> AIMessage:
 
 def _attached(message: AIMessage, endpoint: str | None) -> dict[str, Any]:
     message_dicts = [_convert_message_to_dict(message)]
-    _attach_thinking_blocks([message], message_dicts, endpoint)
+    _attach_thinking_blocks([message], message_dicts, endpoint, None)
     return message_dicts[0]
 
 
@@ -424,16 +469,11 @@ def test_converting_a_message_alone_never_sends_thinking_blocks() -> None:
 def test_blocks_go_back_to_their_endpoint_with_only_provider_keys() -> None:
     """Inline thinking stays stripped from content; the key is what litellm reads."""
     message = _turn(
-        [
-            {
-                **SIGNED,
-                "index": 0,
-                "cache_control": {"type": "ephemeral"},
-                _ORIGIN: KIMI,
-            },
-            {"type": "thinking", "thinking": "unsigned", _ORIGIN: KIMI},
-            {**REDACTED, _ORIGIN: KIMI},
-        ],
+        signed_at(
+            KIMI,
+            {**SIGNED, "index": 0, "cache_control": {"type": "ephemeral"}},
+            {"type": "thinking", "thinking": "unsigned"},
+        ),
         content=[
             {"type": "thinking", "thinking": "inline"},
             {"type": "redacted_thinking", "data": "inline"},
@@ -444,7 +484,7 @@ def test_blocks_go_back_to_their_endpoint_with_only_provider_keys() -> None:
     sent = _attached(message, KIMI)
 
     assert sent["content"] == [{"type": "text", "text": "hello"}]
-    assert sent["thinking_blocks"] == [SIGNED, REDACTED]
+    assert sent["thinking_blocks"] == [SIGNED]
     sent["thinking_blocks"][0]["thinking"] = "changed"
     assert (
         message.additional_kwargs["thinking_blocks"][0]["thinking"]
@@ -464,20 +504,23 @@ def test_blocks_never_go_to_an_endpoint_that_did_not_sign_them() -> None:
     "blocks",
     [
         [SIGNED],
-        [{**SIGNED, _ORIGIN: ANTHROPIC}, {**SECOND, _ORIGIN: KIMI}],
+        [*signed_at(ANTHROPIC, SIGNED), *signed_at(KIMI, SECOND)],
     ],
     ids=["no-origin", "mixed-origins"],
 )
 def test_a_turn_goes_back_only_when_every_block_names_the_endpoint(
     blocks: list[dict[str, Any]],
 ) -> None:
-    assert "thinking_blocks" not in _attached(_turn(blocks), ANTHROPIC)
+    """A turn with nothing to reorder, so only the endpoint decides."""
+    message = AIMessage("", additional_kwargs={"thinking_blocks": blocks})
+
+    assert "thinking_blocks" not in _attached(message, ANTHROPIC)
 
 
 def test_request_omits_the_key_when_nothing_is_signed() -> None:
     """litellm treats a present key as "has thinking", so an unsigned-only key would
     keep thinking enabled while every block is dropped before the request."""
-    unsigned = [{"type": "thinking", "thinking": "x", _ORIGIN: ANTHROPIC}]
+    unsigned = signed_at(ANTHROPIC, {"type": "thinking", "thinking": "x"})
 
     assert "thinking_blocks" not in _attached(_turn(unsigned), ANTHROPIC)
 
@@ -500,12 +543,8 @@ def test_a_destination_that_does_not_check_gets_the_turn_unchanged() -> None:
 # ── the entry points decide per request ──────────────────────────────────────
 
 
-def _history(endpoint: str = ANTHROPIC) -> list[Any]:
-    return [
-        HumanMessage("What's the weather in Paris?"),
-        _turn(signed_at(endpoint, SIGNED)),
-        ToolMessage("Sunny", tool_call_id="toolu_01"),
-    ]
+def _history(endpoint: str = ANTHROPIC, before: str = ASKED) -> list[Any]:
+    return [QUESTION, _turn(signed_at(endpoint, SIGNED, before=before)), SUNNY]
 
 
 def _assistant_sent(captured: dict[str, Any]) -> dict[str, Any]:
@@ -625,7 +664,7 @@ def test_a_per_call_setting_decides_for_the_call(
 @pytest.mark.parametrize(
     ("kwargs", "stored"),
     [
-        ({"model": CLAUDE}, signed_at(ANTHROPIC, SIGNED)),
+        ({"model": CLAUDE}, ANTHROPIC),
         ({"model": "gemini/gemini-2.5-pro"}, None),
         (
             {
@@ -640,11 +679,235 @@ def test_a_per_call_setting_decides_for_the_call(
 def test_blocks_are_captured_only_when_the_signer_is_known(
     monkeypatch: pytest.MonkeyPatch, kwargs: dict[str, Any], stored: Any
 ) -> None:
-    _capture_calls(monkeypatch, ChatLiteLLM)
+    captured = _capture_calls(monkeypatch, ChatLiteLLM)
 
     message = ChatLiteLLM(api_key="fake", **kwargs).invoke("hi")
 
-    assert message.additional_kwargs.get("thinking_blocks") == stored
+    expected = stored and signed_at(
+        stored, SIGNED, before=prefix_of(captured["messages"])
+    )
+    assert message.additional_kwargs.get("thinking_blocks") == expected
+
+
+@pytest.mark.parametrize(
+    ("history", "forwarded"),
+    [
+        ([QUESTION, _turn(signed_at(ANTHROPIC, SIGNED, before=ASKED)), SUNNY], True),
+        (
+            [
+                TUESDAY,
+                QUESTION,
+                _turn(signed_at(ANTHROPIC, SIGNED, before=_asked_after(MONDAY))),
+                SUNNY,
+            ],
+            False,
+        ),
+        (
+            [
+                QUESTION,
+                _turn(signed_at(ANTHROPIC, SIGNED, before=ASKED)),
+                SUNNY,
+                SystemMessage("Be brief."),
+            ],
+            False,
+        ),
+        (
+            [
+                QUESTION,
+                _turn(
+                    signed_at(
+                        ANTHROPIC,
+                        SIGNED,
+                        before=_asked_after(HumanMessage("Hello"), AIMessage("Hi!")),
+                    )
+                ),
+                SUNNY,
+            ],
+            False,
+        ),
+    ],
+    ids=[
+        "appended-only",
+        "system-prompt-changed",
+        "system-message-added-later",
+        "earlier-turns-trimmed",
+    ],
+)
+def test_a_turn_goes_back_only_after_the_history_it_followed(
+    monkeypatch: pytest.MonkeyPatch, history: list[Any], forwarded: bool
+) -> None:
+    """Anthropic rejects a replayed block once anything sent before it changes, and
+    litellm lifts every system message to the top, wherever it sits."""
+    captured = _capture_calls(monkeypatch, ChatLiteLLM)
+
+    ChatLiteLLM(model=CLAUDE, api_key="fake").invoke(history)
+
+    assert ("thinking_blocks" in _assistant_sent(captured)) is forwarded
+
+
+def test_a_turn_goes_back_only_with_the_tools_it_was_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _capture_calls(monkeypatch, ChatLiteLLM)
+
+    ChatLiteLLM(model=CLAUDE, api_key="fake").bind_tools([WEATHER_TOOL]).invoke(
+        _history()
+    )
+
+    assert "thinking_blocks" not in _assistant_sent(captured)
+
+
+def test_a_reply_is_stored_with_the_history_it_followed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _capture_calls(monkeypatch, ChatLiteLLM)
+    llm = ChatLiteLLM(model=CLAUDE, api_key="fake").bind_tools([WEATHER_TOOL])
+
+    message = llm.invoke([MONDAY, QUESTION])
+
+    assert message.additional_kwargs["thinking_blocks"] == signed_at(
+        ANTHROPIC, SIGNED, before=_asked_after(MONDAY, tools=llm.kwargs["tools"])
+    )
+
+
+def test_a_later_turn_follows_the_earlier_one_as_it_was_sent() -> None:
+    """An earlier replayed turn is part of every later turn's history, blocks and all."""
+    first = _turn(signed_at(ANTHROPIC, SIGNED, before=ASKED))
+    as_sent = [
+        _convert_message_to_dict(QUESTION),
+        {
+            **_convert_message_to_dict(first),
+            "thinking_blocks": [SIGNED],
+            "content": None,
+        },
+        _convert_message_to_dict(SUNNY),
+    ]
+    second = AIMessage(
+        "",
+        tool_calls=[{**TOOL_CALL, "id": "toolu_02"}],
+        additional_kwargs={
+            "thinking_blocks": signed_at(ANTHROPIC, SECOND, before=prefix_of(as_sent))
+        },
+    )
+    messages = [
+        QUESTION,
+        first,
+        SUNNY,
+        second,
+        ToolMessage("Mild", tool_call_id="toolu_02"),
+    ]
+    message_dicts = [_convert_message_to_dict(m) for m in messages]
+
+    binding = _attach_thinking_blocks(messages, message_dicts, ANTHROPIC, None)
+
+    assert [d.get("thinking_blocks") for d in message_dicts] == [
+        None,
+        [SIGNED],
+        None,
+        [SECOND],
+        None,
+    ]
+    assert binding == (ANTHROPIC, prefix_of(message_dicts))
+
+
+def test_nothing_goes_back_when_the_last_tool_call_turn_cannot() -> None:
+    """litellm drops thinking for a loop whose last tool-call turn has none only when
+    no turn carries any, so a partial replay would do worse than none."""
+    later = AIMessage("", tool_calls=[{**TOOL_CALL, "id": "toolu_02"}])
+    messages = [*_history(), later, ToolMessage("Mild", tool_call_id="toolu_02")]
+    message_dicts = [_convert_message_to_dict(m) for m in messages]
+    unchanged = copy.deepcopy(message_dicts)
+
+    binding = _attach_thinking_blocks(messages, message_dicts, ANTHROPIC, None)
+
+    assert message_dicts == unchanged
+    assert binding == (ANTHROPIC, prefix_of(unchanged))
+
+
+@pytest.mark.parametrize(
+    ("message", "replayed"),
+    [
+        (_turn(signed_at(ANTHROPIC, SIGNED, SECOND)), False),
+        (
+            AIMessage(
+                "Checking.",
+                additional_kwargs={
+                    "thinking_blocks": signed_at(ANTHROPIC, SIGNED, SECOND)
+                },
+            ),
+            False,
+        ),
+        (
+            AIMessage(
+                "",
+                additional_kwargs={
+                    "thinking_blocks": signed_at(ANTHROPIC, SIGNED, SECOND)
+                },
+            ),
+            True,
+        ),
+    ],
+    ids=["with-tool-calls", "with-text", "thinking-only"],
+)
+def test_a_turn_litellm_would_reorder_stays_behind(
+    caplog: pytest.LogCaptureFixture, message: AIMessage, replayed: bool
+) -> None:
+    """litellm rebuilds a turn as its thinking, then its text, then its tool calls,
+    so several blocks around text or tool calls may not go back as they came."""
+    with caplog.at_level(logging.DEBUG, logger="langchain_litellm.chat_models.litellm"):
+        sent = _attached(message, ANTHROPIC)
+
+    assert ("thinking_blocks" in sent) is replayed
+    assert ("litellm would reorder them" in caplog.text) is not replayed
+
+
+def test_a_changed_history_is_named_when_it_holds_blocks_back(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _capture_calls(monkeypatch, ChatLiteLLM)
+
+    with caplog.at_level(logging.DEBUG, logger="langchain_litellm.chat_models.litellm"):
+        ChatLiteLLM(model=CLAUDE, api_key="fake").invoke([TUESDAY, *_history()])
+
+    assert "the history before them changed" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("model", "logged"),
+    [(CLAUDE, True), ("openai/gpt-4o", False)],
+    ids=["anthropic-route", "route-that-never-replays"],
+)
+def test_a_setting_outside_the_list_is_named_where_it_turns_replay_off(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    model: str,
+    logged: bool,
+) -> None:
+    _capture_calls(monkeypatch, ChatLiteLLM)
+    llm = ChatLiteLLM(
+        model=model, api_key="fake", model_kwargs={"a_setting_this_does_not_know": 1}
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="langchain_litellm.chat_models.litellm"):
+        llm.invoke("hi")
+
+    assert ("a_setting_this_does_not_know" in caplog.text) is logged
+
+
+@pytest.mark.parametrize("where", ["call", "router-default"])
+def test_a_team_call_on_a_router_replays_nothing(
+    monkeypatch: pytest.MonkeyPatch, where: str
+) -> None:
+    """The Router swaps in a team's own deployments, which this cannot see."""
+    captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
+    team = {"metadata": {"user_api_key_team_id": "team-a"}}
+    defaults = team if where == "router-default" else None
+    router = _router_of([_entry("main", CLAUDE)], default_litellm_params=defaults)
+    call = team if where == "call" else {}
+
+    ChatLiteLLMRouter(router=router, model_name="main").invoke(_history(), **call)
+
+    assert "thinking_blocks" not in _assistant_sent(captured)
 
 
 def _router_of(entries: list[dict[str, Any]], **settings: Any) -> litellm.Router:
@@ -766,11 +1029,13 @@ def test_a_subclass_overriding_create_chat_result_still_captures(
         ) -> ChatResult:
             return super()._create_chat_result(response, **params)
 
-    _capture_calls(monkeypatch, Sub)
+    captured = _capture_calls(monkeypatch, Sub)
 
     message = Sub(model=CLAUDE, api_key="fake").invoke("hi")
 
-    assert message.additional_kwargs["thinking_blocks"] == signed_at(ANTHROPIC, SIGNED)
+    assert message.additional_kwargs["thinking_blocks"] == signed_at(
+        ANTHROPIC, SIGNED, before=prefix_of(captured["messages"])
+    )
 
 
 class _ExtraSystemDict(ChatLiteLLM):
@@ -823,31 +1088,52 @@ def test_withheld_blocks_are_logged(
     assert "thinking_blocks" not in _assistant_sent(captured)
 
 
+@pytest.mark.parametrize(
+    "history",
+    [
+        [HumanMessage("hi")],
+        [
+            HumanMessage(
+                "hi",
+                additional_kwargs={"thinking_blocks": signed_at(ANTHROPIC, SIGNED)},
+            )
+        ],
+    ],
+    ids=["plain", "blocks-on-a-human-turn"],
+)
 def test_a_history_without_thinking_blocks_logs_nothing(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    history: list[Any],
 ) -> None:
     _capture_calls(monkeypatch, ChatLiteLLM)
 
     with caplog.at_level(logging.DEBUG, logger="langchain_litellm.chat_models.litellm"):
-        ChatLiteLLM(model="openai/gpt-4o", api_key="fake").invoke("hi")
+        ChatLiteLLM(model="openai/gpt-4o", api_key="fake").invoke(history)
 
     assert "thinking" not in caplog.text
 
 
+@pytest.mark.parametrize(
+    ("response", "warnings"),
+    [(_reply(thinking_blocks=[SIGNED]), [logging.WARNING]), (_reply(), [])],
+    ids=["blocks-to-keep", "nothing-to-keep"],
+)
 def test_a_result_that_does_not_pair_with_its_choices_keeps_nothing(
-    caplog: pytest.LogCaptureFixture,
+    caplog: pytest.LogCaptureFixture, response: dict[str, Any], warnings: list[int]
 ) -> None:
-    response = _reply(thinking_blocks=[SIGNED])
-
+    """A subclass that reshapes its result is told only when blocks are lost."""
     with caplog.at_level(logging.DEBUG, logger="langchain_litellm.chat_models.litellm"):
-        result = _keep_thinking_blocks(ChatResult(generations=[]), response, ANTHROPIC)
+        result = _keep_thinking_blocks(
+            ChatResult(generations=[]), response, (ANTHROPIC, NOTHING_BEFORE)
+        )
 
     assert result.generations == []
     assert [
         r.levelno
         for r in caplog.records
         if "generations and choices differ" in r.getMessage()
-    ] == [logging.WARNING]
+    ] == warnings
 
 
 @pytest.mark.parametrize(
@@ -950,6 +1236,21 @@ def test_base_neither_replays_nor_keeps_under_a_litellm_wide_redirect(
                 "metadata": {"run": "r1"},
                 "extra_body": {"k": 1},
                 "num_retries": 2,
+                "context_management": {"edits": []},
+                "cache_control": {"type": "ephemeral"},
+                "cache_control_injection_points": [
+                    {"location": "message", "role": "system"}
+                ],
+                "speed": "fast",
+                "output_config": {"effort": "high"},
+                "stream_timeout": 30,
+                "tags": ["agent"],
+                "litellm_session_id": "s",
+                "litellm_trace_id": "t",
+                "input_cost_per_token": 0.1,
+                "output_cost_per_token": 0.2,
+                "cache_read_input_token_cost": 0.01,
+                "cache_creation_input_token_cost": 0.02,
             },
         ),
         (
@@ -962,6 +1263,12 @@ def test_base_neither_replays_nor_keeps_under_a_litellm_wide_redirect(
                 "aws_profile_name": "p",
                 "aws_role_name": "r",
                 "aws_session_name": "s",
+                "aws_web_identity_token": "t",
+                "aws_sts_endpoint": "https://sts.example",
+                "aws_external_id": "e",
+                "guardrailConfig": {"guardrailIdentifier": "g"},
+                "performanceConfig": {"latency": "optimized"},
+                "requestMetadata": {"k": "v"},
             },
         ),
         (
@@ -970,10 +1277,27 @@ def test_base_neither_replays_nor_keeps_under_a_litellm_wide_redirect(
                 "vertex_project": "p",
                 "vertex_location": "us-east5",
                 "vertex_credentials": "{}",
+                "vertex_ai_project": "p",
+                "vertex_ai_location": "us-east5",
+                "vertex_ai_credentials": "{}",
+            },
+        ),
+        (
+            "azure_ai/claude-sonnet-4",
+            {
+                "azure_ad_token": "t",
+                "tenant_id": "t",
+                "client_id": "c",
+                "client_secret": "s",
             },
         ),
     ],
-    ids=["anthropic-call-settings", "bedrock-credentials", "vertex-credentials"],
+    ids=[
+        "anthropic-call-settings",
+        "bedrock-credentials",
+        "vertex-credentials",
+        "azure-ai-credentials",
+    ],
 )
 def test_settings_that_never_route_keep_replay_on(
     monkeypatch: pytest.MonkeyPatch, model: str, model_kwargs: dict[str, Any]
@@ -1101,7 +1425,7 @@ def test_a_stored_block_keeps_only_well_formed_values() -> None:
         {"type": "redacted_thinking", "data": ""},
     ]
 
-    thinking = _ThinkingBlockAssembler(ANTHROPIC)
+    thinking = _ThinkingBlockAssembler(ANTHROPIC, NOTHING_BEFORE)
     thinking.feed([{"type": "thinking", "thinking": None}])
 
     assert thinking.feed(raw) == signed_at(
@@ -1120,22 +1444,24 @@ def test_a_fragment_that_completes_no_block_adds_no_key() -> None:
     }
 
     chunk = _convert_delta_to_message_chunk(
-        fragment, AIMessageChunk, _ThinkingBlockAssembler(ANTHROPIC)
+        fragment, AIMessageChunk, _ThinkingBlockAssembler(ANTHROPIC, NOTHING_BEFORE)
     )
 
     assert "thinking_blocks" not in chunk.additional_kwargs
 
 
 def test_only_assistant_turns_that_hold_blocks_get_them() -> None:
-    blocks = signed_at(ANTHROPIC, SIGNED)
-    messages = [
+    earlier = [
         AIMessage("no thinking here"),
-        HumanMessage("hi", additional_kwargs={"thinking_blocks": blocks}),
-        _turn(blocks),
+        HumanMessage(
+            "hi", additional_kwargs={"thinking_blocks": signed_at(ANTHROPIC, SIGNED)}
+        ),
     ]
+    before = prefix_of([_convert_message_to_dict(m) for m in earlier])
+    messages = [*earlier, _turn(signed_at(ANTHROPIC, SIGNED, before=before))]
     message_dicts = [_convert_message_to_dict(m) for m in messages]
 
-    _attach_thinking_blocks(messages, message_dicts, ANTHROPIC)
+    _attach_thinking_blocks(messages, message_dicts, ANTHROPIC, None)
 
     assert ["thinking_blocks" in d for d in message_dicts] == [False, False, True]
 
@@ -1161,12 +1487,13 @@ def test_a_stored_block_keeps_the_keys_saved_histories_hold() -> None:
             "thinking": SIGNED["thinking"],
             "signature": SIGNED["signature"],
             "origin": KIMI,
+            "prefix": NOTHING_BEFORE,
         }
     ]
 
 
 def test_a_closing_block_keeps_the_text_it_was_signed_with() -> None:
-    thinking = _ThinkingBlockAssembler(ANTHROPIC)
+    thinking = _ThinkingBlockAssembler(ANTHROPIC, NOTHING_BEFORE)
     thinking.feed([{"type": "thinking", "thinking": "draft "}])
 
     closed = thinking.feed(
@@ -1180,7 +1507,7 @@ def test_a_closing_block_keeps_the_text_it_was_signed_with() -> None:
 
 def test_a_redacted_block_ends_the_text_buffered_before_it() -> None:
     """Bedrock closes a block with no text, so leftover fragments must not carry over."""
-    thinking = _ThinkingBlockAssembler(ANTHROPIC)
+    thinking = _ThinkingBlockAssembler(ANTHROPIC, NOTHING_BEFORE)
     thinking.feed([{"type": "thinking", "thinking": "stale "}])
     thinking.feed([REDACTED])
 
@@ -1312,6 +1639,9 @@ def test_a_captured_origin_carries_nothing_of_the_api_base(
                     weight=2,
                     order=1,
                     max_parallel_requests=4,
+                    itpm=1000,
+                    otpm=1000,
+                    stream_timeout=30,
                 )
             ],
             {},
@@ -1683,7 +2013,7 @@ def test_a_bedrock_converse_continuation_carries_the_signed_block(
 
     llm = ChatLiteLLM(model=model, max_retries=1).bind_tools([WEATHER_TOOL])
 
-    llm.invoke(_history(endpoint(model)))
+    llm.invoke(_history(endpoint(model), _asked_after(tools=llm.kwargs["tools"])))
 
     turn = next(m for m in bodies[-1]["messages"] if m["role"] == "assistant")
     assert [list(block) for block in turn["content"]] == [
@@ -1740,7 +2070,10 @@ def test_each_stream_loop_assembles_across_chunks(
 
     total = _run(llm, mode, [HumanMessage("hi")])
 
-    assert total.additional_kwargs["thinking_blocks"] == signed_at(KIMI, SIGNED, SECOND)
+    hi = prefix_of([_convert_message_to_dict(HumanMessage("hi"))])
+    assert total.additional_kwargs["thinking_blocks"] == signed_at(
+        KIMI, SIGNED, SECOND, before=hi
+    )
 
 
 @pytest.mark.parametrize("kind", ["base", "router"])
@@ -1770,8 +2103,12 @@ def test_concurrent_streams_keep_their_own_thinking(
     first, second = asyncio.run(both())
 
     assert first.additional_kwargs["thinking_blocks"] == signed_at(
-        KIMI, {"type": "thinking", "thinking": "alpha one", "signature": "sig-a=="}
+        KIMI,
+        {"type": "thinking", "thinking": "alpha one", "signature": "sig-a=="},
+        before=prefix_of([_convert_message_to_dict(HumanMessage("a"))]),
     )
     assert second.additional_kwargs["thinking_blocks"] == signed_at(
-        KIMI, {"type": "thinking", "thinking": "beta two", "signature": "sig-b=="}
+        KIMI,
+        {"type": "thinking", "thinking": "beta two", "signature": "sig-b=="},
+        before=prefix_of([_convert_message_to_dict(HumanMessage("b"))]),
     )
