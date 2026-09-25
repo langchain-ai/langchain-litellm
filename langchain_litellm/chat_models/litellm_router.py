@@ -31,7 +31,7 @@ from langchain_litellm.chat_models.litellm import (
     _ThinkingBlockAssembler,
 )
 
-# Router settings, and per-call keys, that re-send a request to another group.
+# Router settings that re-send a request to another group.
 _FALLBACK_SETTINGS = (
     "fallbacks",
     "context_window_fallbacks",
@@ -129,8 +129,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         """
         group = params.get("model")
         router = self.router
-        if group in (getattr(router, "model_group_alias", None) or {}) or any(
-            params.get(key) or getattr(router, key, None) for key in _FALLBACK_SETTINGS
+        if any(getattr(router, key, None) for key in _FALLBACK_SETTINGS) or group in (
+            getattr(router, "model_group_alias", None) or {}
         ):
             return None
         defaults = getattr(router, "default_litellm_params", None) or {}

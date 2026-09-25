@@ -77,6 +77,7 @@ from langchain_core.runnables import Runnable, RunnablePassthrough
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import TypeBaseModel, is_basemodel_subclass
+from litellm.secret_managers.main import get_secret_bool
 from litellm.types.utils import Delta
 from pydantic import BaseModel, Field, model_validator
 from typing_extensions import is_typeddict
@@ -126,6 +127,41 @@ def _get_field(source: Any, name: str) -> Any:
 _CLAUDE_HOSTS = frozenset({"bedrock", "vertex_ai", "azure_ai"})
 # Where a stored thinking block records the endpoint that signed it.
 _ORIGIN = "origin"
+# Settings that never move a call elsewhere; deployment_id sends it to Azure. Any
+# other setting with a value turns replay off, so an unknown one fails closed.
+_NON_ROUTING_PARAMS = (
+    frozenset(litellm.OPENAI_CHAT_COMPLETION_PARAMS) - {"deployment_id"}
+) | {
+    # Read by _endpoint_name.
+    "model",
+    "custom_llm_provider",
+    "base_model",
+    # Sampling, parameter filtering, retries and bookkeeping.
+    "top_k",
+    "allowed_openai_params",
+    "drop_params",
+    "additional_drop_params",
+    "num_retries",
+    "metadata",
+    "extra_body",
+    # Load balancing between the deployments of one Router group.
+    "rpm",
+    "tpm",
+    "weight",
+    "order",
+    "max_parallel_requests",
+    # Credentials and regions of the Claude hosts, which never change the signer.
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "aws_region_name",
+    "aws_profile_name",
+    "aws_role_name",
+    "aws_session_name",
+    "vertex_project",
+    "vertex_location",
+    "vertex_credentials",
+}
 
 
 # A bare Bedrock model id, which litellm routes to Bedrock, optionally region-prefixed.
@@ -904,23 +940,27 @@ class ChatLiteLLM(BaseChatModel):
         """The one endpoint this request reaches, when it checks replayed thinking.
 
         ``params`` must be the merged per-call params, since a call may redirect.
-        litellm re-sends the same messages to any fallback, sends a model_list to
-        every deployment in it, and hands deployment_id or the azure flag to Azure,
-        so any of those replays nothing. An alias is named by the model it maps to.
+        A setting outside ``_NON_ROUTING_PARAMS``, or a litellm-wide fallback,
+        response cache or proxy switch, can answer from another endpoint, so it
+        replays nothing. An alias is named by the model it maps to, as litellm does.
         """
         if (
-            params.get("fallbacks")
-            or params.get("context_window_fallback_dict")
-            or params.get("model_list")
-            or params.get("deployment_id")
-            or params.get("azure")
-            or getattr(litellm, "model_fallbacks", None)
+            any(
+                value and key not in _NON_ROUTING_PARAMS
+                for key, value in params.items()
+            )
+            or litellm.model_fallbacks
+            or litellm.cache is not None
+            or litellm.use_litellm_proxy is True
+            or get_secret_bool("USE_LITELLM_PROXY") is True
         ):
             return None
         model = params.get("model")
-        aliases = getattr(litellm, "model_alias_map", None) or {}
+        aliases = litellm.model_alias_map
+        if aliases and model in aliases:
+            model = aliases[model]
         return _signing_endpoint(
-            aliases.get(model, model),
+            model,
             params.get("custom_llm_provider"),
             # litellm sends to base_url over api_base when a caller sets both.
             params.get("base_url") or params.get("api_base"),
