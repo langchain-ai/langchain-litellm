@@ -157,7 +157,7 @@ def _endpoint_name(
         provider = "anthropic"
     elif not provider and _BEDROCK_CLAUDE_ID.match(name):
         provider = "bedrock"
-    claude = "claude" in name or "claude" in (base_model or "").lower()
+    claude = "claude" in name or "claude" in (base_model or "")
     if provider != "anthropic" and not (provider in _CLAUDE_HOSTS and claude):
         return None
     base = api_base
@@ -399,7 +399,7 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
     elif role == "assistant":
         content = _dict.get("content", "") or ""
 
-        additional_kwargs: dict[str, Any] = {}
+        additional_kwargs = {}
         tool_calls = []
         invalid_tool_calls: list[InvalidToolCall] = []
 
