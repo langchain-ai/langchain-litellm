@@ -20,7 +20,13 @@ from typing import Any
 import httpx
 import litellm
 import pytest
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    ToolMessage,
+)
 from langchain_core.outputs import ChatResult
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
@@ -733,27 +739,51 @@ def test_a_subclass_overriding_create_chat_result_still_captures(
     assert message.additional_kwargs["thinking_blocks"] == signed_at(ANTHROPIC, SIGNED)
 
 
+class _ExtraSystemDict(ChatLiteLLM):
+    """A subclass that sends one more dict than it was given messages."""
+
+    def _create_message_dicts(
+        self, messages: list[BaseMessage], stop: list[str] | None
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        message_dicts, params = super()._create_message_dicts(messages, stop)
+        return [{"role": "system", "content": "be brief"}, *message_dicts], params
+
+
 @pytest.mark.parametrize(
-    ("model", "history", "reason"),
+    ("cls", "model", "history", "reason"),
     [
-        ("openai/gpt-4o", ANTHROPIC, "no single signing endpoint"),
-        (CLAUDE, KIMI, "another endpoint signed them"),
+        (ChatLiteLLM, "openai/gpt-4o", ANTHROPIC, "no single signing endpoint"),
+        (ChatLiteLLM, CLAUDE, KIMI, "another endpoint signed them"),
+        (_ExtraSystemDict, CLAUDE, ANTHROPIC, "messages and dicts differ"),
     ],
-    ids=["no-endpoint", "other-signer"],
+    ids=["no-endpoint", "other-signer", "unpaired-dicts"],
 )
 def test_withheld_blocks_are_logged(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    cls: type[ChatLiteLLM],
     model: str,
     history: str,
     reason: str,
 ) -> None:
+    captured = _capture_calls(monkeypatch, cls)
+
+    with caplog.at_level(logging.DEBUG, logger="langchain_litellm.chat_models.litellm"):
+        cls(model=model, api_key="fake").invoke(_history(history))
+
+    assert reason in caplog.text
+    assert "thinking_blocks" not in _assistant_sent(captured)
+
+
+def test_a_history_without_thinking_blocks_logs_nothing(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     _capture_calls(monkeypatch, ChatLiteLLM)
 
     with caplog.at_level(logging.DEBUG, logger="langchain_litellm.chat_models.litellm"):
-        ChatLiteLLM(model=model, api_key="fake").invoke(_history(history))
+        ChatLiteLLM(model="openai/gpt-4o", api_key="fake").invoke("hi")
 
-    assert reason in caplog.text
+    assert "thinking" not in caplog.text
 
 
 def test_a_result_that_does_not_pair_with_its_choices_keeps_nothing(

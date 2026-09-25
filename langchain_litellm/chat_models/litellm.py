@@ -297,8 +297,17 @@ def _attach_thinking_blocks(
     Its empty tool-call content then goes out as ``None``: litellm writes placeholder
     text into an empty string, which would edit the turn the signature covers.
     """
-    # A subclass that reshapes the dicts leaves no safe pairing: send nothing extra.
-    if endpoint is None or len(messages) != len(message_dicts):
+    if not any(
+        isinstance(message, AIMessage)
+        and message.additional_kwargs.get("thinking_blocks")
+        for message in messages
+    ):
+        return
+    if endpoint is None:
+        logger.debug("Not replaying thinking blocks: no single signing endpoint.")
+        return
+    if len(messages) != len(message_dicts):
+        logger.debug("Not replaying thinking blocks: messages and dicts differ.")
         return
     for message, message_dict in zip(messages, message_dicts, strict=True):
         if not isinstance(message, AIMessage):
@@ -307,6 +316,9 @@ def _attach_thinking_blocks(
         if not isinstance(stored, list | tuple) or not stored:
             continue
         if any(_get_field(block, _ORIGIN) != endpoint for block in stored):
+            logger.debug(
+                "Not replaying a turn's thinking blocks: another endpoint signed them."
+            )
             continue
         blocks = _signed_thinking_blocks(stored)
         if not blocks:
