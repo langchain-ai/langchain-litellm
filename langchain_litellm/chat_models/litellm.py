@@ -168,10 +168,14 @@ def _endpoint_name(
             or os.environ.get("ANTHROPIC_API_BASE")
             or os.environ.get("ANTHROPIC_BASE_URL")
         )
+    try:
+        url = urlsplit(base or "")
+    except ValueError:
+        return None  # litellm rejects a base it cannot parse, and says why.
     # Neither credentials nor a query string changes which server signs a block.
-    url = urlsplit((base or "").lower())
-    where = url._replace(netloc=url.netloc.rpartition("@")[2], query="", fragment="")
-    return f"{provider}|{where.geturl().rstrip('/')}|{name}"
+    host = url.netloc.rpartition("@")[2].lower()
+    where = url._replace(netloc=host, query="", fragment="").geturl()
+    return f"{provider}|{where.rstrip('/')}|{name}"
 
 
 def _signing_endpoint(
@@ -180,7 +184,10 @@ def _signing_endpoint(
     api_base: str | None,
     base_model: str | None = None,
 ) -> str | None:
-    """A digest of ``_endpoint_name``, so a stored block never carries an api_base."""
+    """A digest of ``_endpoint_name``, so a stored block never carries an api_base.
+
+    Saved histories keep it, so changing what goes into the name strands their blocks.
+    """
     name = _endpoint_name(model, custom_llm_provider, api_base, base_model)
     return None if name is None else hashlib.sha256(name.encode()).hexdigest()[:16]
 
@@ -897,17 +904,23 @@ class ChatLiteLLM(BaseChatModel):
         """The one endpoint this request reaches, when it checks replayed thinking.
 
         ``params`` must be the merged per-call params, since a call may redirect.
-        litellm re-sends the same messages to any fallback, so a request with one
-        reaches more than one endpoint and replays nothing.
+        litellm re-sends the same messages to any fallback, sends a model_list to
+        every deployment in it, and hands deployment_id or the azure flag to Azure,
+        so any of those replays nothing. An alias is named by the model it maps to.
         """
         if (
             params.get("fallbacks")
             or params.get("context_window_fallback_dict")
+            or params.get("model_list")
+            or params.get("deployment_id")
+            or params.get("azure")
             or getattr(litellm, "model_fallbacks", None)
         ):
             return None
+        model = params.get("model")
+        aliases = getattr(litellm, "model_alias_map", None) or {}
         return _signing_endpoint(
-            params.get("model"),
+            aliases.get(model, model),
             params.get("custom_llm_provider"),
             # litellm sends to base_url over api_base when a caller sets both.
             params.get("base_url") or params.get("api_base"),

@@ -122,9 +122,10 @@ class ChatLiteLLMRouter(ChatLiteLLM):
     def _thinking_endpoint(self, params: dict[str, Any]) -> str | None:
         """The one signing endpoint every deployment this request can reach shares.
 
-        The Router re-sends the same messages to any fallback, and an alias points
-        the group elsewhere, so a router with either replays nothing. Each deployment
-        of the group resolves as a direct call would, the call's keys over its own.
+        The Router re-sends the same messages to any fallback, and an alias of the
+        group points it elsewhere, so either replays nothing. Each deployment then
+        resolves as a direct call would, layered as the Router layers it: the call's
+        keys over the router's defaults over the deployment's own.
         """
         group = params.get("model")
         router = self.router
@@ -132,12 +133,14 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             params.get(key) or getattr(router, key, None) for key in _FALLBACK_SETTINGS
         ):
             return None
+        defaults = getattr(router, "default_litellm_params", None) or {}
         call = {key: value for key, value in params.items() if key != "model"}
+        layered = {**{k: v for k, v in defaults.items() if v is not None}, **call}
         endpoints = set()
-        for entry in router.model_list or []:
+        for entry in getattr(router, "model_list", None) or []:
             if entry.get("model_name") != group:
                 continue
-            deployment = {**(entry.get("litellm_params") or {}), **call}
+            deployment = {**(entry.get("litellm_params") or {}), **layered}
             if not deployment.get("base_model"):
                 deployment["base_model"] = (entry.get("model_info") or {}).get(
                     "base_model"
