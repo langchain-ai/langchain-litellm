@@ -12,7 +12,8 @@ SSE parser and its clients all run.
 # stdlib
 import asyncio
 import json
-from collections.abc import Callable
+import logging
+from collections.abc import Callable, Mapping
 from typing import Any
 
 # third-party
@@ -20,6 +21,7 @@ import httpx
 import litellm
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
+from langchain_core.outputs import ChatResult
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
@@ -43,6 +45,7 @@ SECOND = {"type": "thinking", "thinking": "Second.", "signature": "sig-2=="}
 REDACTED = {"type": "redacted_thinking", "data": "opaque=="}
 TOOL_CALL = {"name": "get_weather", "args": {"city": "Paris"}, "id": "toolu_01"}
 GATEWAY = "http://gateway.internal:4000"
+KIMI_BASE = "https://api.kimi.com/coding/"
 
 
 def endpoint(model: str, api_base: str | None = None) -> str:
@@ -82,6 +85,7 @@ def _no_anthropic_base(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 ARN = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc"
+CLAUDE_ON_BEDROCK = "anthropic.claude-sonnet-4-20250514-v1:0"
 
 
 @pytest.mark.usefixtures("_no_anthropic_base")
@@ -703,6 +707,313 @@ def test_router_counts_a_fallback_keyed_by_the_group_without_its_provider(
     ChatLiteLLMRouter(router=router, model_name=CLAUDE).invoke(_history())
 
     assert "thinking_blocks" not in _assistant_sent(captured)
+
+
+# ── every guard, at the entry points ─────────────────────────────────────────
+
+
+def test_a_subclass_overriding_create_chat_result_still_captures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_create_chat_result`` is an extension point, so its signature stays as is."""
+
+    class Sub(ChatLiteLLM):
+        def _create_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
+            return super()._create_chat_result(response)
+
+    _capture_calls(monkeypatch, Sub)
+
+    message = Sub(model=CLAUDE, api_key="fake").invoke("hi")
+
+    assert message.additional_kwargs["thinking_blocks"] == signed_at(ANTHROPIC, SIGNED)
+
+
+@pytest.mark.parametrize(
+    ("model", "history", "reason"),
+    [
+        ("openai/gpt-4o", ANTHROPIC, "no single signing endpoint"),
+        (CLAUDE, KIMI, "another endpoint signed them"),
+    ],
+    ids=["no-endpoint", "other-signer"],
+)
+def test_withheld_blocks_are_logged(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    model: str,
+    history: str,
+    reason: str,
+) -> None:
+    _capture_calls(monkeypatch, ChatLiteLLM)
+
+    with caplog.at_level(logging.DEBUG, logger="langchain_litellm.chat_models.litellm"):
+        ChatLiteLLM(model=model, api_key="fake").invoke(_history(history))
+
+    assert reason in caplog.text
+
+
+@pytest.mark.parametrize(
+    "model_kwargs",
+    [
+        {"fallbacks": ["gemini/gemini-2.5-pro"]},
+        {"context_window_fallback_dict": {CLAUDE: "gemini/gemini-2.5-pro"}},
+    ],
+    ids=["fallbacks", "context-window-fallback"],
+)
+def test_base_neither_replays_nor_keeps_when_litellm_can_fall_back(
+    monkeypatch: pytest.MonkeyPatch, model_kwargs: dict[str, Any]
+) -> None:
+    captured = _capture_calls(monkeypatch, ChatLiteLLM)
+
+    message = ChatLiteLLM(
+        model=CLAUDE, api_key="fake", model_kwargs=model_kwargs
+    ).invoke(_history())
+
+    assert "thinking_blocks" not in _assistant_sent(captured)
+    assert "thinking_blocks" not in message.additional_kwargs
+
+
+def test_base_replays_nothing_under_global_model_fallbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "model_fallbacks", ["gemini/gemini-2.5-pro"])
+    captured = _capture_calls(monkeypatch, ChatLiteLLM)
+
+    ChatLiteLLM(model=CLAUDE, api_key="fake").invoke(_history())
+
+    assert "thinking_blocks" not in _assistant_sent(captured)
+
+
+@pytest.mark.usefixtures("_no_anthropic_base")
+@pytest.mark.parametrize(
+    "setting", ["litellm.api_base", "ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"]
+)
+def test_base_names_the_base_litellm_falls_back_to(
+    monkeypatch: pytest.MonkeyPatch, setting: str
+) -> None:
+    unset = endpoint(CLAUDE)
+    if setting == "litellm.api_base":
+        monkeypatch.setattr(litellm, "api_base", GATEWAY)
+    else:
+        monkeypatch.setenv(setting, GATEWAY)
+    captured = _capture_calls(monkeypatch, ChatLiteLLM)
+    llm = ChatLiteLLM(model=CLAUDE, api_key="fake")
+
+    llm.invoke(_history(unset))
+    assert "thinking_blocks" not in _assistant_sent(captured)
+    llm.invoke(_history(endpoint(CLAUDE, GATEWAY)))
+    assert "thinking_blocks" in _assistant_sent(captured)
+
+
+@pytest.mark.parametrize(
+    ("model", "llm_kwargs", "call", "signed_by"),
+    [
+        (
+            CLAUDE,
+            {"api_base": KIMI_BASE},
+            {"base_url": GATEWAY},
+            (CLAUDE, GATEWAY, None),
+        ),
+        (
+            "kimi-for-coding",
+            {"custom_llm_provider": "anthropic", "api_base": KIMI_BASE},
+            {},
+            ("anthropic/kimi-for-coding", KIMI_BASE, None),
+        ),
+        (
+            f"bedrock/converse/{ARN}",
+            {"model_kwargs": {"base_model": CLAUDE_ON_BEDROCK}},
+            {},
+            (f"bedrock/converse/{ARN}", None, CLAUDE_ON_BEDROCK),
+        ),
+    ],
+    ids=["base-url-beats-api-base", "provider-apart-from-model", "arn-with-base-model"],
+)
+def test_base_names_the_endpoint_litellm_actually_uses(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    llm_kwargs: dict[str, Any],
+    call: dict[str, Any],
+    signed_by: tuple[str, str | None, str | None],
+) -> None:
+    captured = _capture_calls(monkeypatch, ChatLiteLLM)
+    origin = _signing_endpoint(signed_by[0], None, signed_by[1], signed_by[2])
+    assert origin is not None
+
+    ChatLiteLLM(model=model, api_key="fake", **llm_kwargs).invoke(
+        _history(origin), **call
+    )
+
+    assert "thinking_blocks" in _assistant_sent(captured)
+
+
+def test_a_turn_without_tool_calls_keeps_its_content() -> None:
+    message = AIMessage(
+        content="", additional_kwargs={"thinking_blocks": signed_at(ANTHROPIC, SIGNED)}
+    )
+
+    sent = _attached(message, ANTHROPIC)
+
+    assert sent["thinking_blocks"] == [SIGNED]
+    assert sent["content"] == ""
+
+
+def test_a_stored_block_keeps_only_well_formed_values() -> None:
+    raw: list[dict[str, Any]] = [
+        {"type": "thinking", "thinking": None, "signature": "s=="},
+        {"type": "redacted_thinking", "data": ""},
+    ]
+
+    assert _ThinkingBlockAssembler(ANTHROPIC).feed(raw) == signed_at(
+        ANTHROPIC, {"type": "thinking", "thinking": "", "signature": "s=="}
+    )
+    assert _attached(_turn(signed_at(ANTHROPIC, *raw)), ANTHROPIC)[
+        "thinking_blocks"
+    ] == [{"type": "thinking", "thinking": "", "signature": "s=="}]
+
+
+def test_a_redacted_block_ends_the_text_buffered_before_it() -> None:
+    """Bedrock closes a block with no text, so leftover fragments must not carry over."""
+    thinking = _ThinkingBlockAssembler(ANTHROPIC)
+    thinking.feed([{"type": "thinking", "thinking": "stale "}])
+    thinking.feed([REDACTED])
+
+    closed = thinking.feed([{"type": "thinking", "thinking": "", "signature": "s=="}])
+
+    assert closed == signed_at(
+        ANTHROPIC, {"type": "thinking", "thinking": "", "signature": "s=="}
+    )
+
+
+def test_a_captured_origin_carries_nothing_of_the_api_base(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Traces and checkpoints keep additional_kwargs, so the origin is a digest."""
+    _capture_calls(monkeypatch, ChatLiteLLM)
+    base = "https://user:secret@gw.example.com/v1?key=ABC"
+
+    message = ChatLiteLLM(model=CLAUDE, api_key="fake", api_base=base).invoke("hi")
+
+    stored = repr(message.additional_kwargs)
+    assert message.additional_kwargs["thinking_blocks"]
+    assert not any(part in stored for part in ("secret", "gw.example", "key=", "user:"))
+
+
+def _router_of(entries: list[dict[str, Any]], **settings: Any) -> litellm.Router:
+    return litellm.Router(model_list=entries, num_retries=0, **settings)
+
+
+def _entry(group: str, model: str, **extra: Any) -> dict[str, Any]:
+    info = extra.pop("model_info", None)
+    entry: dict[str, Any] = {
+        "model_name": group,
+        "litellm_params": {"model": model, "api_key": "k", **extra},
+    }
+    if info is not None:
+        entry["model_info"] = info
+    return entry
+
+
+@pytest.mark.parametrize(
+    ("entries", "settings", "history", "forwarded"),
+    [
+        (
+            [_entry("main", CLAUDE), _entry("safe", CLAUDE)],
+            {"content_policy_fallbacks": [{"main": ["safe"]}]},
+            ANTHROPIC,
+            False,
+        ),
+        (
+            [_entry("main", CLAUDE, fallbacks=["gemini/gemini-2.5-pro"])],
+            {},
+            ANTHROPIC,
+            False,
+        ),
+        (
+            [_entry("main", CLAUDE), _entry("other", CLAUDE), _entry("x", CLAUDE)],
+            {"fallbacks": [{"other": ["x"]}]},
+            ANTHROPIC,
+            False,
+        ),
+        (
+            [
+                _entry(
+                    "main",
+                    "anthropic/kimi-for-coding",
+                    base_url="https://api.kimi.com/coding/",
+                )
+            ],
+            {},
+            KIMI,
+            True,
+        ),
+        (
+            [
+                _entry(
+                    "main",
+                    "kimi-for-coding",
+                    custom_llm_provider="anthropic",
+                    api_base="https://api.kimi.com/coding/",
+                )
+            ],
+            {},
+            KIMI,
+            True,
+        ),
+        (
+            [
+                _entry(
+                    "main",
+                    f"bedrock/converse/{ARN}",
+                    model_info={"base_model": CLAUDE_ON_BEDROCK},
+                )
+            ],
+            {},
+            "arn",
+            True,
+        ),
+    ],
+    ids=[
+        "content-policy-fallback",
+        "deployment-level-fallback",
+        "any-router-fallback",
+        "deployment-base-url",
+        "deployment-provider",
+        "model-info-base-model",
+    ],
+)
+def test_router_resolves_each_deployment_like_the_base(
+    monkeypatch: pytest.MonkeyPatch,
+    entries: list[dict[str, Any]],
+    settings: dict[str, Any],
+    history: str,
+    forwarded: bool,
+) -> None:
+    if history == "arn":
+        arn_origin = _signing_endpoint(
+            f"bedrock/converse/{ARN}", None, None, CLAUDE_ON_BEDROCK
+        )
+        assert arn_origin is not None
+        history = arn_origin
+    captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
+    llm = ChatLiteLLMRouter(router=_router_of(entries, **settings), model_name="main")
+
+    llm.invoke(_history(history))
+
+    assert ("thinking_blocks" in _assistant_sent(captured)) is forwarded
+
+
+def test_a_group_whose_deployments_differ_has_no_endpoint() -> None:
+    """Deterministic, whichever deployment a set would hand back first."""
+    router = _router_of(
+        [
+            _entry("main", CLAUDE),
+            _entry("main", "bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0"),
+        ]
+    )
+
+    llm = ChatLiteLLMRouter(router=router, model_name="main")
+
+    assert llm._thinking_endpoint({"model": "main"}) is None
 
 
 # ── end to end: the continuation's HTTP body ─────────────────────────────────
