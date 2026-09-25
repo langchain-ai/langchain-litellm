@@ -57,6 +57,15 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         super().__init__(router=router, **kwargs)  # type: ignore[call-arg]
         self.router = router
 
+    def _route_to_responses_api(
+        self, model: str, custom_llm_provider: str | None, api_base: str | None
+    ) -> str:
+        raise ValueError(
+            "ChatLiteLLMRouter sends each call to the deployment the Router picks, "
+            "so use_responses_api cannot route it; name the deployment's model "
+            "'<provider>/responses/<model>' instead."
+        )
+
     @property
     def _llm_type(self) -> str:
         return "LiteLLMRouter"

@@ -877,6 +877,42 @@ def test_router_set_default_model_changes_the_model_sent() -> None:
     assert second.call_args.kwargs["model"] == "gpt-3.5-turbo"
 
 
+@pytest.mark.parametrize(
+    ("config", "call"),
+    [
+        ({"use_responses_api": True}, {}),
+        ({"model_kwargs": {"use_responses_api": True}}, {}),
+        ({}, {"use_responses_api": True}),
+    ],
+)
+def test_router_refuses_use_responses_api(
+    config: dict[str, Any], call: dict[str, Any]
+) -> None:
+    """The Router picks the deployment, so only a deployment can name the route."""
+    llm = ChatLiteLLMRouter(router=make_router(), **config)
+
+    with (
+        patch.object(llm.router, "completion") as completion,
+        pytest.raises(ValueError, match="<provider>/responses/<model>"),
+    ):
+        llm.invoke("hi", **call)
+
+    completion.assert_not_called()
+
+
+@pytest.mark.parametrize("value", [False, None])
+def test_router_calls_with_use_responses_api_left_off(value: bool | None) -> None:
+    """A config that spells the flag out as off must still reach the Router."""
+    llm = ChatLiteLLMRouter(router=make_router(), use_responses_api=value)
+
+    with patch.object(
+        llm.router, "completion", return_value=_router_usage()
+    ) as completion:
+        llm.invoke("hi")
+
+    assert completion.call_args.kwargs["model"] == "gpt-4"
+
+
 def test_router_is_claude_model_reads_the_deployment() -> None:
     """The Router alias need not contain the provider's model name at all."""
     import litellm

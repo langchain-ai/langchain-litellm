@@ -1,6 +1,7 @@
 """Test chat model integration."""
 
 # stdlib
+import json
 import logging
 import subprocess
 import sys
@@ -10,9 +11,11 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 # third-party
+import httpx
 import litellm
 import pytest
 from langchain.chat_models import init_chat_model
+from langchain_core.caches import InMemoryCache
 from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableLambda
@@ -2058,3 +2061,275 @@ async def test_astream_sets_finish_reason_in_response_metadata() -> None:
 
     assert chunks[0].message.response_metadata.get("finish_reason") is None
     assert chunks[1].message.response_metadata.get("finish_reason") == "stop"
+
+
+# ── Responses API routing ──────────────────────────────────────────────────────
+
+# A minimal Responses API reply, shaped by the openai SDK's `Response` type.
+_RESPONSES_API_REPLY = {
+    "id": "resp_1",
+    "object": "response",
+    "created_at": 0,
+    "status": "completed",
+    "model": "gpt-4o-mini",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+        }
+    ],
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
+
+
+# Only newer litellm releases serve Bedrock Mantle over the Responses API.
+_MANTLE_SERVES_RESPONSES = (
+    litellm.utils.ProviderConfigManager.get_provider_responses_api_config(
+        provider="bedrock_mantle", model="openai.gpt-oss-120b"
+    )
+    is not None
+)
+
+
+@pytest.fixture
+def _responses_endpoint(monkeypatch: pytest.MonkeyPatch) -> list[httpx.Request]:
+    """Answer each synchronous request litellm sends, in-process, as Responses would.
+
+    Endpoint overrides in the developer's environment would redirect the requests.
+    """
+    for name in ("OPENAI_BASE_URL", "OPENAI_API_BASE", "OPENROUTER_API_BASE"):
+        monkeypatch.delenv(name, raising=False)
+    requests: list[httpx.Request] = []
+
+    def _reply(_: httpx.HTTPTransport, request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=_RESPONSES_API_REPLY)
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", _reply)
+    return requests
+
+
+@pytest.mark.parametrize(
+    ("model", "config", "endpoint", "provider_model"),
+    [
+        ("gpt-4o-mini", {}, "https://api.openai.com/v1/responses", "gpt-4o-mini"),
+        (
+            "openai/gpt-4o-mini",
+            {},
+            "https://api.openai.com/v1/responses",
+            "gpt-4o-mini",
+        ),
+        (
+            "fake-model",
+            {"custom_llm_provider": "openai"},
+            "https://api.openai.com/v1/responses",
+            "fake-model",
+        ),
+        (
+            "fake-model",
+            {"api_base": "https://api.perplexity.ai"},
+            "https://api.perplexity.ai/v1/responses",
+            "fake-model",
+        ),
+        (
+            "openrouter/openai/gpt-4o-mini",
+            {},
+            "https://openrouter.ai/api/v1/responses",
+            "openai/gpt-4o-mini",
+        ),
+        (
+            "fake-deployment",
+            {
+                "custom_llm_provider": "azure",
+                "api_base": "https://fake.openai.azure.com",
+                "model_kwargs": {"api_version": "preview"},
+            },
+            "https://fake.openai.azure.com/openai/v1/responses?api-version=preview",
+            "fake-deployment",
+        ),
+        pytest.param(
+            "bedrock_mantle/openai.gpt-oss-120b",
+            {"model_kwargs": {"aws_region_name": "us-east-1"}},
+            "https://bedrock-mantle.us-east-1.api.aws/v1/responses",
+            "openai.gpt-oss-120b",
+            marks=pytest.mark.skipif(
+                not _MANTLE_SERVES_RESPONSES,
+                reason="this litellm serves no Responses API for Bedrock Mantle",
+            ),
+        ),
+    ],
+)
+def test_use_responses_api_sends_the_call_to_the_responses_endpoint(
+    _responses_endpoint: list[httpx.Request],
+    model: str,
+    config: dict[str, Any],
+    endpoint: str,
+    provider_model: str,
+) -> None:
+    """litellm's own bridge decides the route, so the wire is where to look.
+
+    The routing name stays out of the reply, which tracing reads.
+    """
+    llm = ChatLiteLLM(model=model, api_key="k", use_responses_api=True, **config)
+
+    message = llm.invoke("hi")
+
+    assert [str(request.url) for request in _responses_endpoint] == [endpoint]
+    assert json.loads(_responses_endpoint[0].content)["model"] == provider_model
+    assert message.content == "ok"
+    assert message.response_metadata["model_name"] == model
+
+
+class _Sent(Exception):
+    """Stops a call once litellm has received it."""
+
+
+async def test_use_responses_api_routes_every_entry_point() -> None:
+    """A route applied in one entry point leaves the others on Chat Completions."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_responses_api=True)
+
+    with (
+        patch.object(llm.client, "completion", side_effect=_Sent) as completion,
+        patch.object(llm.client, "acompletion", side_effect=_Sent) as acompletion,
+    ):
+        with pytest.raises(_Sent):
+            llm.invoke("hi")
+        with pytest.raises(_Sent):
+            list(llm.stream("hi"))
+        with pytest.raises(_Sent):
+            await llm.ainvoke("hi")
+        with pytest.raises(_Sent):
+            [chunk async for chunk in llm.astream("hi")]
+
+    calls = completion.call_args_list + acompletion.call_args_list
+    assert [call.kwargs["model"] for call in calls] == [
+        "openai/responses/gpt-4o-mini"
+    ] * 4
+
+
+@pytest.mark.parametrize(
+    ("override", "routed"),
+    [
+        (
+            {"model": "openrouter/openai/gpt-4o-mini"},
+            "openrouter/responses/openai/gpt-4o-mini",
+        ),
+        (
+            {"model": "fake-deployment", "custom_llm_provider": "azure"},
+            "azure/responses/fake-deployment",
+        ),
+        ({"model": None}, "openai/responses/gpt-4o-mini"),
+        ({"model": "openai/responses/gpt-4o-mini"}, "openai/responses/gpt-4o-mini"),
+    ],
+)
+def test_use_responses_api_routes_the_destination_a_call_settles_on(
+    override: dict[str, Any], routed: str
+) -> None:
+    """A per-call destination is routed, and a None override keeps the configured one."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_responses_api=True)
+
+    with patch.object(llm.client, "completion", return_value=_MOCK_OK) as completion:
+        llm.invoke("hi", **override)
+
+    assert completion.call_args.kwargs["model"] == routed
+
+
+@pytest.mark.parametrize(
+    ("config", "call", "sent"),
+    [
+        ({}, {"use_responses_api": True}, "openai/responses/gpt-4o-mini"),
+        ({"use_responses_api": True}, {"use_responses_api": False}, "gpt-4o-mini"),
+        (
+            {"use_responses_api": True},
+            {"use_responses_api": None},
+            "openai/responses/gpt-4o-mini",
+        ),
+        (
+            {"model_kwargs": {"use_responses_api": True}},
+            {},
+            "openai/responses/gpt-4o-mini",
+        ),
+        (
+            {"model_kwargs": {"use_responses_api": True}},
+            {"use_responses_api": None},
+            "openai/responses/gpt-4o-mini",
+        ),
+    ],
+)
+def test_use_responses_api_is_read_like_a_destination_and_never_sent(
+    config: dict[str, Any], call: dict[str, Any], sent: str
+) -> None:
+    """The flag picks the route the way ``model`` does, so it is no litellm param."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", **config)
+
+    with patch.object(llm.client, "completion", return_value=_MOCK_OK) as completion:
+        llm.invoke("hi", **call)
+
+    assert completion.call_args.kwargs["model"] == sent
+    assert "use_responses_api" not in completion.call_args.kwargs
+
+
+def test_use_responses_api_keeps_its_own_cache_entries() -> None:
+    """A cached Chat Completions reply must not answer a call meant for Responses."""
+    cache = InMemoryCache()
+    plain = ChatLiteLLM(model="gpt-4o-mini", api_key="k", cache=cache)
+    routed = ChatLiteLLM(
+        model="gpt-4o-mini", api_key="k", cache=cache, use_responses_api=True
+    )
+
+    with patch.object(plain.client, "completion", return_value=_MOCK_OK) as completion:
+        plain.invoke("hi")
+        routed.invoke("hi")
+
+    assert [call.kwargs["model"] for call in completion.call_args_list] == [
+        "gpt-4o-mini",
+        "openai/responses/gpt-4o-mini",
+    ]
+
+
+def test_use_responses_api_refuses_a_provider_without_one() -> None:
+    """litellm would answer over Anthropic's chat API, never reaching a Responses API."""
+    llm = ChatLiteLLM(
+        model="anthropic/claude-3-5-sonnet-20241022",
+        api_key="k",
+        use_responses_api=True,
+    )
+
+    with (
+        patch.object(llm.client, "completion") as completion,
+        pytest.raises(ValueError, match="cannot send"),
+    ):
+        llm.invoke("hi")
+
+    completion.assert_not_called()
+
+
+def test_use_responses_api_refuses_a_name_litellm_would_not_bridge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """litellm bridges only a routed name its model map leaves unresolved.
+
+    Resolved to a chat model, the name would go to Chat Completions as the model id.
+    """
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openrouter/responses/fake-model",
+        {"mode": "chat", "litellm_provider": "openrouter"},
+    )
+    llm = ChatLiteLLM(
+        model="openrouter/fake-model", api_key="k", use_responses_api=True
+    )
+
+    with (
+        patch.object(llm.client, "completion") as completion,
+        pytest.raises(ValueError, match="cannot send"),
+    ):
+        llm.invoke("hi")
+
+    completion.assert_not_called()
