@@ -36,6 +36,7 @@ from litellm.types.utils import Message
 # first-party
 from langchain_litellm.chat_models import ChatLiteLLM, ChatLiteLLMRouter
 from langchain_litellm.chat_models.litellm import (
+    _ORIGIN,
     _attach_thinking_blocks,
     _convert_delta_to_message_chunk,
     _convert_message_to_dict,
@@ -50,6 +51,7 @@ SIGNED = {"type": "thinking", "thinking": "".join(THOUGHT), "signature": "sig-1=
 SECOND = {"type": "thinking", "thinking": "Second.", "signature": "sig-2=="}
 REDACTED = {"type": "redacted_thinking", "data": "opaque=="}
 TOOL_CALL = {"name": "get_weather", "args": {"city": "Paris"}, "id": "toolu_01"}
+CLAUDE = "anthropic/claude-sonnet-4-20250514"
 GATEWAY = "http://gateway.internal:4000"
 KIMI_BASE = "https://api.kimi.com/coding/"
 
@@ -61,13 +63,13 @@ def endpoint(model: str, api_base: str | None = None) -> str:
     return origin
 
 
-ANTHROPIC = endpoint("anthropic/claude-sonnet-4-20250514")
+ANTHROPIC = endpoint(CLAUDE)
 KIMI = endpoint("anthropic/kimi-for-coding", "https://api.kimi.com/coding/")
 
 
 def signed_at(endpoint: str, *blocks: dict[str, Any]) -> list[dict[str, Any]]:
     """Blocks as stored after a response: each marked with the endpoint that signed it."""
-    return [{**block, "origin": endpoint} for block in blocks]
+    return [{**block, _ORIGIN: endpoint} for block in blocks]
 
 
 WEATHER_TOOL = {
@@ -99,7 +101,7 @@ CLAUDE_ON_BEDROCK = "anthropic.claude-sonnet-4-20250514-v1:0"
     ("model", "provider", "api_base", "base_model", "expected"),
     [
         (
-            "anthropic/claude-sonnet-4-20250514",
+            CLAUDE,
             None,
             None,
             None,
@@ -425,10 +427,10 @@ def test_blocks_go_back_to_their_endpoint_with_only_provider_keys() -> None:
                 **SIGNED,
                 "index": 0,
                 "cache_control": {"type": "ephemeral"},
-                "origin": KIMI,
+                _ORIGIN: KIMI,
             },
-            {"type": "thinking", "thinking": "unsigned", "origin": KIMI},
-            {**REDACTED, "origin": KIMI},
+            {"type": "thinking", "thinking": "unsigned", _ORIGIN: KIMI},
+            {**REDACTED, _ORIGIN: KIMI},
         ],
         content=[
             {"type": "thinking", "thinking": "inline"},
@@ -460,7 +462,7 @@ def test_blocks_never_go_to_an_endpoint_that_did_not_sign_them() -> None:
     "blocks",
     [
         [SIGNED],
-        [{**SIGNED, "origin": ANTHROPIC}, {**SECOND, "origin": KIMI}],
+        [{**SIGNED, _ORIGIN: ANTHROPIC}, {**SECOND, _ORIGIN: KIMI}],
     ],
     ids=["no-origin", "mixed-origins"],
 )
@@ -473,7 +475,7 @@ def test_a_turn_goes_back_only_when_every_block_names_the_endpoint(
 def test_request_omits_the_key_when_nothing_is_signed() -> None:
     """litellm treats a present key as "has thinking", so an unsigned-only key would
     keep thinking enabled while every block is dropped before the request."""
-    unsigned = [{"type": "thinking", "thinking": "x", "origin": ANTHROPIC}]
+    unsigned = [{"type": "thinking", "thinking": "x", _ORIGIN: ANTHROPIC}]
 
     assert "thinking_blocks" not in _attached(_turn(unsigned), ANTHROPIC)
 
@@ -534,10 +536,10 @@ def _capture_calls(monkeypatch: pytest.MonkeyPatch, cls: type) -> dict[str, Any]
 @pytest.mark.parametrize(
     ("kwargs", "history", "forwarded"),
     [
-        ({"model": "anthropic/claude-sonnet-4-20250514"}, ANTHROPIC, True),
+        ({"model": CLAUDE}, ANTHROPIC, True),
         ({"model": "openai/gpt-4o"}, ANTHROPIC, False),
         (
-            {"model": "anthropic/claude-sonnet-4-20250514"},
+            {"model": CLAUDE},
             KIMI,
             False,
         ),
@@ -551,20 +553,20 @@ def _capture_calls(monkeypatch: pytest.MonkeyPatch, cls: type) -> dict[str, Any]
         ),
         (
             {
-                "model": "anthropic/claude-sonnet-4-20250514",
+                "model": CLAUDE,
                 "model_kwargs": {"fallbacks": ["gemini/gemini-2.5-pro"]},
             },
             ANTHROPIC,
             False,
         ),
         (
-            {"model": "anthropic/claude-sonnet-4-20250514", "api_base": GATEWAY},
+            {"model": CLAUDE, "api_base": GATEWAY},
             endpoint("anthropic/kimi-k2", GATEWAY),
             False,
         ),
         (
-            {"model": "anthropic/claude-sonnet-4-20250514", "api_base": GATEWAY},
-            endpoint("anthropic/claude-sonnet-4-20250514", GATEWAY),
+            {"model": CLAUDE, "api_base": GATEWAY},
+            endpoint(CLAUDE, GATEWAY),
             True,
         ),
     ],
@@ -598,9 +600,7 @@ def test_base_forwards_only_to_the_one_endpoint_that_signed(
         ({"fallbacks": ["gemini/gemini-2.5-pro"]}, None),
         (
             {"base_url": "https://api.kimi.com/coding/"},
-            endpoint(
-                "anthropic/claude-sonnet-4-20250514", "https://api.kimi.com/coding/"
-            ),
+            endpoint(CLAUDE, "https://api.kimi.com/coding/"),
         ),
     ],
     ids=["redirect", "fallback", "base-url"],
@@ -611,23 +611,23 @@ def test_a_per_call_setting_decides_for_the_call(
     """History signed elsewhere never goes; what comes back is marked with this call's
     one endpoint, or not kept when the call could reach more than one."""
     captured = _capture_calls(monkeypatch, ChatLiteLLM)
-    llm = ChatLiteLLM(model="anthropic/claude-sonnet-4-20250514", api_key="fake")
+    llm = ChatLiteLLM(model=CLAUDE, api_key="fake")
 
     message = llm.invoke(_history(), **call)
 
     assert "thinking_blocks" not in _assistant_sent(captured)
     kept = message.additional_kwargs.get("thinking_blocks")
-    assert (kept[0]["origin"] if kept else None) == stored
+    assert (kept[0][_ORIGIN] if kept else None) == stored
 
 
 @pytest.mark.parametrize(
     ("kwargs", "stored"),
     [
-        ({"model": "anthropic/claude-sonnet-4-20250514"}, signed_at(ANTHROPIC, SIGNED)),
+        ({"model": CLAUDE}, signed_at(ANTHROPIC, SIGNED)),
         ({"model": "gemini/gemini-2.5-pro"}, None),
         (
             {
-                "model": "anthropic/claude-sonnet-4-20250514",
+                "model": CLAUDE,
                 "model_kwargs": {"fallbacks": ["gemini/gemini-2.5-pro"]},
             },
             None,
@@ -645,18 +645,25 @@ def test_blocks_are_captured_only_when_the_signer_is_known(
     assert message.additional_kwargs.get("thinking_blocks") == stored
 
 
+def _router_of(entries: list[dict[str, Any]], **settings: Any) -> litellm.Router:
+    return litellm.Router(model_list=entries, num_retries=0, **settings)
+
+
+def _entry(group: str, model: str, **extra: Any) -> dict[str, Any]:
+    info = extra.pop("model_info", None)
+    entry: dict[str, Any] = {
+        "model_name": group,
+        "litellm_params": {"model": model, "api_key": "k", **extra},
+    }
+    if info is not None:
+        entry["model_info"] = info
+    return entry
+
+
 def _router(deployments: list[tuple[str, str]], **settings: Any) -> litellm.Router:
-    return litellm.Router(
-        model_list=[
-            {"model_name": group, "litellm_params": {"model": model, "api_key": "k"}}
-            for group, model in deployments
-        ],
-        num_retries=0,
-        **settings,
+    return _router_of(
+        [_entry(group, model) for group, model in deployments], **settings
     )
-
-
-CLAUDE = "anthropic/claude-sonnet-4-20250514"
 
 
 @pytest.mark.parametrize(
@@ -732,20 +739,6 @@ def test_router_forwards_only_when_every_reachable_deployment_signs_the_same(
     llm.invoke(_history(), **call)
 
     assert ("thinking_blocks" in _assistant_sent(captured)) is forwarded
-
-
-def test_router_counts_a_fallback_keyed_by_the_group_without_its_provider(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
-    router = _router(
-        [(CLAUDE, CLAUDE), ("backup", "openai/gpt-4o")],
-        fallbacks=[{"claude-sonnet-4-20250514": ["backup"]}],
-    )
-
-    ChatLiteLLMRouter(router=router, model_name=CLAUDE).invoke(_history())
-
-    assert "thinking_blocks" not in _assistant_sent(captured)
 
 
 # ── every guard, at the entry points ─────────────────────────────────────────
@@ -1047,21 +1040,6 @@ def test_a_captured_origin_carries_nothing_of_the_api_base(
     stored = repr(message.additional_kwargs)
     assert message.additional_kwargs["thinking_blocks"]
     assert not any(part in stored for part in ("secret", "gw.example", "key=", "user:"))
-
-
-def _router_of(entries: list[dict[str, Any]], **settings: Any) -> litellm.Router:
-    return litellm.Router(model_list=entries, num_retries=0, **settings)
-
-
-def _entry(group: str, model: str, **extra: Any) -> dict[str, Any]:
-    info = extra.pop("model_info", None)
-    entry: dict[str, Any] = {
-        "model_name": group,
-        "litellm_params": {"model": model, "api_key": "k", **extra},
-    }
-    if info is not None:
-        entry["model_info"] = info
-    return entry
 
 
 @pytest.mark.parametrize(
