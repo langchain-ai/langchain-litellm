@@ -758,11 +758,13 @@ def test_router_forwards_only_when_every_reachable_deployment_signs_the_same(
 def test_a_subclass_overriding_create_chat_result_still_captures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``_create_chat_result`` is an extension point, so its signature stays as is."""
+    """``_create_chat_result`` is an extension point, so an override still captures."""
 
     class Sub(ChatLiteLLM):
-        def _create_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
-            return super()._create_chat_result(response)
+        def _create_chat_result(
+            self, response: Mapping[str, Any], **params: Any
+        ) -> ChatResult:
+            return super()._create_chat_result(response, **params)
 
     _capture_calls(monkeypatch, Sub)
 

@@ -381,6 +381,26 @@ def _cost_metadata(response: Any) -> dict[str, Any]:
     return {"response_cost": cost} if cost is not None else {}
 
 
+def _rejoin_split_reply(choices: Sequence[Any], n: int | None) -> Sequence[Any]:
+    """Rejoin one reply that litellm split across choices, unless ``n`` asked for several.
+
+    litellm's Responses API bridge gives each text part, and the tool calls, a choice
+    of their own. They are joined here as a stream joins them.
+    """
+    if len(choices) < 2 or (n or 1) > 1:
+        return choices
+    messages = [choice["message"] for choice in choices]
+    message = {
+        "role": messages[0]["role"],
+        "content": "".join(m.get("content") or "" for m in messages),
+        "tool_calls": [call for m in messages for call in m.get("tool_calls") or []],
+        "reasoning_content": "".join(
+            m.get("reasoning_content") or "" for m in messages
+        ),
+    }
+    return [{"message": message, "finish_reason": choices[-1].get("finish_reason")}]
+
+
 class ChatLiteLLMException(Exception):
     """Exception raised for errors in the LiteLLM integration."""
 
@@ -762,6 +782,13 @@ class ChatLiteLLM(BaseChatModel):
     so a config built from ``os.getenv`` still reaches the endpoint."""
     organization: str | None = None
     custom_llm_provider: str | None = None
+    use_responses_api: bool | None = None
+    """Send calls to the provider's Responses API instead of Chat Completions.
+
+    litellm translates each request and reply, so calls are written as usual, but
+    it drops Chat Completions-only params such as ``stop`` and ``n``. A model
+    litellm cannot bridge raises ``ValueError``. ``None`` and ``False`` leave the
+    route to litellm, which sends some models, such as ``gpt-5-pro``, there anyway."""
     base_model: str | None = None
     extra_headers: dict[str, str] | None = Field(default=None, repr=False)
     request_timeout: float | tuple[float, float] | None = None
@@ -895,6 +922,32 @@ class ChatLiteLLM(BaseChatModel):
             return None
         return getattr(self, field, None) or None
 
+    def _route_to_responses_api(
+        self, model: str, custom_llm_provider: str | None, api_base: str | None
+    ) -> str:
+        """Name ``model`` so litellm's own bridge carries the call to a Responses API.
+
+        Whether litellm bridges a name hangs on its model map, and a provider without
+        a Responses API is answered over its chat API instead, so litellm is asked both.
+        """
+        named, provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+        )
+        bare_model = named.removeprefix("responses/")
+        routed = f"responses/{bare_model}"
+        bridge, _ = litellm.main.responses_api_bridge_check(
+            model=routed, custom_llm_provider=provider
+        )
+        config = litellm.utils.ProviderConfigManager.get_provider_responses_api_config(
+            provider=provider, model=bare_model
+        )
+        if bridge.get("mode") != "responses" or config is None:
+            raise ValueError(
+                f"use_responses_api=True, but litellm cannot send {model!r} to a "
+                "Responses API."
+            )
+        return f"{provider}/{routed}"
+
     def _merge_call_params(
         self, params: dict[str, Any], kwargs: dict[str, Any]
     ) -> dict[str, Any]:
@@ -913,13 +966,27 @@ class ChatLiteLLM(BaseChatModel):
         choosing an endpoint and a key together is choosing them for each other.
 
         A ``None`` override means "not supplied", matching how litellm reads params.
+
+        ``use_responses_api`` routes the destination once it is settled, so a
+        redirected call reaches the Responses API too. It is read like the
+        destination, from the call, ``model_kwargs`` or the field, and never sent.
         """
         merged = {**params, **kwargs}
 
         # None means omitted: fall back rather than sending a null destination.
-        for key in _DESTINATION_KEYS:
+        for key in (*_DESTINATION_KEYS, "use_responses_api"):
             if key in kwargs and kwargs[key] is None:
                 merged[key] = params.get(key)
+
+        use_responses_api = merged.pop("use_responses_api", None)
+        if use_responses_api is None:
+            use_responses_api = self.use_responses_api
+        if use_responses_api:
+            merged["model"] = self._route_to_responses_api(
+                merged["model"],
+                merged.get("custom_llm_provider"),
+                merged.get("api_base"),
+            )
 
         redirected = {
             key: kwargs[key] for key in _DESTINATION_KEYS if kwargs.get(key) is not None
@@ -1085,14 +1152,16 @@ class ChatLiteLLM(BaseChatModel):
             messages=message_dicts, run_manager=run_manager, **params
         )
         return _keep_thinking_blocks(
-            self._create_chat_result(response), response, endpoint
+            self._create_chat_result(response, **params), response, endpoint
         )
 
-    def _create_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
+    def _create_chat_result(
+        self, response: Mapping[str, Any], **params: Any
+    ) -> ChatResult:
         generations = []
         token_usage = response.get("usage", {})
         usage_metadata = _create_usage_metadata(token_usage)
-        for res in response["choices"]:
+        for res in _rejoin_split_reply(response["choices"], params.get("n")):
             message = _convert_dict_to_message(res["message"])
             if isinstance(message, AIMessage):
                 message.response_metadata = {
@@ -1351,7 +1420,7 @@ class ChatLiteLLM(BaseChatModel):
             messages=message_dicts, run_manager=run_manager, **params
         )
         return _keep_thinking_blocks(
-            self._create_chat_result(response), response, endpoint
+            self._create_chat_result(response, **params), response, endpoint
         )
 
     def bind_tools(
@@ -1575,6 +1644,7 @@ class ChatLiteLLM(BaseChatModel):
             "top_k": self.top_k,
             "n": self.n,
             "num_ctx": self.num_ctx,
+            "use_responses_api": self.use_responses_api,
         }
 
     def _get_ls_params(
