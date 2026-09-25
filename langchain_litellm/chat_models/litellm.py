@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import functools
 import hashlib
 import json
 import logging
@@ -128,11 +127,6 @@ _CLAUDE_HOSTS = frozenset({"bedrock", "vertex_ai", "azure_ai"})
 _ORIGIN = "origin"
 
 
-@functools.cache
-def _litellm_providers() -> frozenset[str]:
-    return frozenset(str(getattr(p, "value", p)) for p in litellm.provider_list)
-
-
 # A bare Bedrock model id, which litellm routes to Bedrock, optionally region-prefixed.
 _BEDROCK_CLAUDE_ID = re.compile(r"^([a-z]+\.)?anthropic\.claude")
 
@@ -153,12 +147,11 @@ def _endpoint_name(
     was. The provider comes from the model prefix, not ``litellm.get_llm_provider``,
     which authenticates some providers while it resolves them.
     """
-    provider = (custom_llm_provider or "").lower()
+    provider = custom_llm_provider or ""
+    # litellm routes a bare model to Anthropic whatever the case of "claude".
     name = (model or "").lower()
     if not provider and "/" in name:
-        prefix, rest = name.split("/", 1)
-        if prefix in _litellm_providers():
-            provider, name = prefix, rest
+        provider, name = name.split("/", 1)
     if not provider and name.startswith("claude"):
         provider = "anthropic"
     elif not provider and _BEDROCK_CLAUDE_ID.match(name):
@@ -174,7 +167,7 @@ def _endpoint_name(
             or os.environ.get("ANTHROPIC_API_BASE")
             or os.environ.get("ANTHROPIC_BASE_URL")
         )
-    return f"{provider}|{(base or '').strip().rstrip('/').lower()}|{name}"
+    return f"{provider}|{(base or '').rstrip('/').lower()}|{name}"
 
 
 def _signing_endpoint(

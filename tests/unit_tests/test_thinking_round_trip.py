@@ -113,6 +113,13 @@ CLAUDE_ON_BEDROCK = "anthropic.claude-sonnet-4-20250514-v1:0"
             "anthropic||claude-sonnet-4-20250514",
         ),
         (
+            "Claude-Sonnet-4-20250514",
+            None,
+            None,
+            None,
+            "anthropic||claude-sonnet-4-20250514",
+        ),
+        (
             "anthropic/kimi-for-coding",
             None,
             "https://api.kimi.com/coding/",
@@ -186,6 +193,9 @@ def test_an_unset_base_names_where_litellm_actually_sends(
 
     assert _endpoint_name("anthropic/claude-x", None, None) == (
         "anthropic|https://gw.example|claude-x"
+    )
+    assert _endpoint_name(f"bedrock/{CLAUDE_ON_BEDROCK}", None, None) == (
+        f"bedrock||{CLAUDE_ON_BEDROCK}"
     )
 
 
