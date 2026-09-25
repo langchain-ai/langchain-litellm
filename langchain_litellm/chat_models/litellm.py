@@ -106,6 +106,32 @@ def _provider_api_key_field(cls: type[BaseModel], provider: str | None) -> str |
     return field if field in cls.model_fields else None
 
 
+def _route_to_responses_api(
+    model: str, custom_llm_provider: str | None, api_base: str | None
+) -> str:
+    """Name ``model`` so litellm's own bridge carries the call to a Responses API.
+
+    Whether litellm bridges a name hangs on its model map, and a provider without a
+    Responses API is answered over its chat API instead, so litellm is asked both.
+    """
+    bare_model, provider, _, _ = litellm.get_llm_provider(
+        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+    )
+    routed = f"responses/{bare_model}"
+    bridge, _ = litellm.main.responses_api_bridge_check(
+        model=routed, custom_llm_provider=provider
+    )
+    config = litellm.utils.ProviderConfigManager.get_provider_responses_api_config(
+        provider=provider, model=bare_model
+    )
+    if bridge.get("mode") != "responses" or config is None:
+        raise ValueError(
+            f"use_responses_api=True, but litellm cannot send {model!r} to a "
+            "Responses API."
+        )
+    return f"{provider}/{routed}"
+
+
 def _get_field(source: Any, name: str) -> Any:
     """Retrieve *name* by dict lookup or attribute access.
 
@@ -504,6 +530,13 @@ class ChatLiteLLM(BaseChatModel):
     so a config built from ``os.getenv`` still reaches the endpoint."""
     organization: str | None = None
     custom_llm_provider: str | None = None
+    use_responses_api: bool | None = None
+    """Send calls to the provider's Responses API instead of Chat Completions.
+
+    litellm translates each request and reply, so calls are written as usual, but
+    it drops Chat Completions-only params such as ``stop`` and ``n``. A model
+    litellm cannot bridge raises ``ValueError``. ``None`` and ``False`` leave the
+    route to litellm, which sends some models, such as ``gpt-5-pro``, there anyway."""
     base_model: str | None = None
     extra_headers: dict[str, str] | None = Field(default=None, repr=False)
     request_timeout: float | tuple[float, float] | None = None
@@ -655,6 +688,9 @@ class ChatLiteLLM(BaseChatModel):
         choosing an endpoint and a key together is choosing them for each other.
 
         A ``None`` override means "not supplied", matching how litellm reads params.
+
+        ``use_responses_api`` routes the destination once it is settled, so a
+        redirected call reaches the Responses API too.
         """
         merged = {**params, **kwargs}
 
@@ -662,6 +698,13 @@ class ChatLiteLLM(BaseChatModel):
         for key in _DESTINATION_KEYS:
             if key in kwargs and kwargs[key] is None:
                 merged[key] = params.get(key)
+
+        if self.use_responses_api:
+            merged["model"] = _route_to_responses_api(
+                merged["model"],
+                merged.get("custom_llm_provider"),
+                merged.get("api_base"),
+            )
 
         redirected = {
             key: kwargs[key] for key in _DESTINATION_KEYS if kwargs.get(key) is not None
