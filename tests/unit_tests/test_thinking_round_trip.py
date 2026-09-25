@@ -134,6 +134,13 @@ CLAUDE_ON_BEDROCK = "anthropic.claude-sonnet-4-20250514-v1:0"
             "anthropic|https://api.kimi.com/coding|kimi-for-coding",
         ),
         (
+            "anthropic/claude-x",
+            None,
+            "https://user:pw@GW.example.com:8443/v1/?key=ABC#top",
+            None,
+            "anthropic|https://gw.example.com:8443/v1|claude-x",
+        ),
+        (
             "bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0",
             None,
             None,
@@ -200,14 +207,17 @@ def test_an_unset_base_names_where_litellm_actually_sends(
 
 
 def test_a_stored_origin_never_carries_the_api_base() -> None:
-    """Traces and checkpoints keep additional_kwargs, so the origin is a digest."""
+    """Traces and checkpoints keep additional_kwargs, and a digest of a credential can
+    be checked against guesses, so credentials and query strings never reach it."""
     origin = _signing_endpoint(
-        "anthropic/claude-x", None, "https://user:secret@gw.example.com/v1?key=ABC"
+        "anthropic/claude-x", None, "https://user:secret@gw.example.com/v1/?key=ABC#top"
     )
 
     assert origin is not None
     assert len(origin) == 16
-    assert not any(part in origin for part in ("secret", "gw.example", "abc", "user"))
+    assert origin == _signing_endpoint(
+        "anthropic/claude-x", None, "https://gw.example.com/v1"
+    )
 
 
 # ── the stored shape ─────────────────────────────────────────────────────────
