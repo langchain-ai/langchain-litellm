@@ -3,6 +3,7 @@
 # stdlib
 import json
 import logging
+import re
 import subprocess
 import sys
 from collections import OrderedDict, defaultdict
@@ -19,6 +20,7 @@ from langchain_core.caches import InMemoryCache
 from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableLambda
+from langchain_core.tools import Tool
 from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function
 from pydantic import BaseModel, ValidationError
 
@@ -1058,8 +1060,9 @@ def test_bind_tools_any_becomes_required_without_thinking() -> None:
         "required",
         True,
         {"type": "function", "function": {"name": "_dummy_tool"}},
+        {"type": "required"},
     ],
-    ids=["any", "required", "True", "dict"],
+    ids=["any", "required", "True", "dict", "dict-required"],
 )
 def test_bind_tools_downgraded_with_thinking(
     tool_choice: str | bool | dict[str, Any],
@@ -1088,8 +1091,9 @@ def test_bind_tools_downgraded_with_thinking(
         "required",
         True,
         {"type": "function", "function": {"name": "_dummy_tool"}},
+        {"type": "required"},
     ],
-    ids=["any", "required", "True", "dict"],
+    ids=["any", "required", "True", "dict", "dict-required"],
 )
 def test_bind_tools_not_downgraded_with_thinking_on_non_claude_models(
     tool_choice: str | bool | dict[str, Any],
@@ -1107,11 +1111,11 @@ def test_bind_tools_not_downgraded_with_thinking_on_non_claude_models(
 
 @pytest.mark.parametrize(
     "tool_choice",
-    ["auto", "none", None, False],
-    ids=["auto", "none", "None", "False"],
+    ["auto", "none", None, False, {"type": "none"}, {"type": "web_search"}],
+    ids=["auto", "none", "None", "False", "dict-none", "dict-built-in"],
 )
 def test_bind_tools_non_forced_unchanged_with_thinking(
-    tool_choice: str | bool | None,
+    tool_choice: str | bool | dict[str, Any] | None,
 ) -> None:
     """Non-forced tool_choice values should pass through untouched."""
     llm = ChatLiteLLM(
@@ -1155,6 +1159,85 @@ def test_bind_tools_dict_validation_with_thinking() -> None:
         llm.bind_tools(
             [_dummy_tool],
             tool_choice={"type": "function", "function": {"name": "nonexistent_tool"}},
+        )
+
+
+_FLAT_FUNCTION_TOOL = {
+    "type": "function",
+    "name": "lookup",
+    "parameters": {"type": "object", "properties": {}},
+    "strict": False,
+}
+
+
+@pytest.mark.parametrize(
+    ("tools", "name"),
+    [
+        ([_dummy_tool, {"type": "web_search"}], "_dummy_tool"),
+        ([_FLAT_FUNCTION_TOOL], "lookup"),
+    ],
+    ids=["beside-built-in", "flat-function"],
+)
+def test_bind_tools_forces_a_function_bound_in_any_shape(
+    tools: list[Any], name: str
+) -> None:
+    """Built-in and Responses-style tools carry no ``function`` key to read a name from."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="fake")
+    choice = {"type": "function", "function": {"name": name}}
+
+    bound = llm.bind_tools(tools, tool_choice=choice)
+
+    assert bound.kwargs["tool_choice"] == choice  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("tools", "tool_choice"),
+    [
+        ([_dummy_tool, {"type": "web_search"}], {"type": "web_search"}),
+        ([_dummy_tool], {"type": "auto"}),
+        ([_FLAT_FUNCTION_TOOL], {"type": "function", "name": "lookup"}),
+    ],
+    ids=["built-in", "auto", "flat-function-choice"],
+)
+def test_bind_tools_leaves_other_dict_choices_to_litellm(
+    tools: list[Any], tool_choice: dict[str, Any]
+) -> None:
+    """Only a function choice names a tool to check; litellm accepts or refuses the rest."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="fake")
+
+    bound = llm.bind_tools(tools, tool_choice=tool_choice)
+
+    assert bound.kwargs["tool_choice"] == tool_choice  # type: ignore[attr-defined]
+
+
+_CUSTOM_TOOL = Tool(
+    name="grep",
+    func=lambda pattern: pattern,
+    description="Search text for a pattern.",
+    metadata={"type": "custom_tool"},
+)
+
+
+@pytest.mark.parametrize(
+    ("tools", "name", "function_names"),
+    [
+        ([_dummy_tool, {"type": "web_search"}], "web_search", ["_dummy_tool"]),
+        ([_dummy_tool, _CUSTOM_TOOL], "grep", ["_dummy_tool"]),
+        ([{"type": "web_search"}], "_dummy_tool", []),
+    ],
+    ids=["built-in", "custom", "only-built-ins"],
+)
+def test_bind_tools_rejects_a_function_choice_naming_no_bound_function(
+    tools: list[Any], name: str, function_names: list[str]
+) -> None:
+    """Only a bound function tool can be forced by a function choice."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="fake")
+
+    with pytest.raises(
+        ValueError, match=re.escape(f"only provided tools were {function_names}")
+    ):
+        llm.bind_tools(
+            tools, tool_choice={"type": "function", "function": {"name": name}}
         )
 
 
