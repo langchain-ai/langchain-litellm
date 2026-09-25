@@ -141,6 +141,14 @@ CLAUDE_ON_BEDROCK = "anthropic.claude-sonnet-4-20250514-v1:0"
             "anthropic|https://gw.example.com:8443/v1|claude-x",
         ),
         (
+            "anthropic/claude-x",
+            None,
+            "https://GW.example.com/TeamA/",
+            None,
+            "anthropic|https://gw.example.com/TeamA|claude-x",
+        ),
+        ("anthropic/claude-x", None, "https://[::1/v1", None, None),
+        (
             "bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0",
             None,
             None,
@@ -823,10 +831,24 @@ def test_a_result_that_does_not_pair_with_its_choices_keeps_nothing(
     [
         {"fallbacks": ["gemini/gemini-2.5-pro"]},
         {"context_window_fallback_dict": {CLAUDE: "gemini/gemini-2.5-pro"}},
+        {
+            "model_list": [
+                {"model_name": CLAUDE, "litellm_params": {"model": CLAUDE}},
+                {"model_name": CLAUDE, "litellm_params": {"model": "openai/gpt-4o"}},
+            ]
+        },
+        {"deployment_id": "my-azure-deployment"},
+        {"azure": True},
     ],
-    ids=["fallbacks", "context-window-fallback"],
+    ids=[
+        "fallbacks",
+        "context-window-fallback",
+        "model-list",
+        "deployment-id",
+        "azure-flag",
+    ],
 )
-def test_base_neither_replays_nor_keeps_when_litellm_can_fall_back(
+def test_base_neither_replays_nor_keeps_when_litellm_may_send_elsewhere(
     monkeypatch: pytest.MonkeyPatch, model_kwargs: dict[str, Any]
 ) -> None:
     captured = _capture_calls(monkeypatch, ChatLiteLLM)
@@ -837,6 +859,26 @@ def test_base_neither_replays_nor_keeps_when_litellm_can_fall_back(
 
     assert "thinking_blocks" not in _assistant_sent(captured)
     assert "thinking_blocks" not in message.additional_kwargs
+
+
+@pytest.mark.parametrize(
+    ("model", "history", "forwarded"),
+    [("claude-fast", endpoint("claude-fast"), False), ("fast", ANTHROPIC, True)],
+    ids=["alias-to-gemini", "alias-to-claude"],
+)
+def test_an_aliased_model_is_named_by_what_litellm_resolves_it_to(
+    monkeypatch: pytest.MonkeyPatch, model: str, history: str, forwarded: bool
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "model_alias_map",
+        {"claude-fast": "gemini/gemini-2.5-flash", "fast": CLAUDE},
+    )
+    captured = _capture_calls(monkeypatch, ChatLiteLLM)
+
+    ChatLiteLLM(model=model, api_key="fake").invoke(_history(history))
+
+    assert ("thinking_blocks" in _assistant_sent(captured)) is forwarded
 
 
 def test_base_replays_nothing_under_global_model_fallbacks(
@@ -969,6 +1011,17 @@ def test_only_assistant_turns_that_hold_blocks_get_them() -> None:
     assert ["thinking_blocks" in d for d in message_dicts] == [False, False, True]
 
 
+def test_a_value_that_is_not_a_list_of_blocks_is_ignored() -> None:
+    """Histories and checkpoints are the caller's, so anything can be stored there."""
+    kept = _kept({"role": "assistant", "content": "hi", "thinking_blocks": 7}, KIMI)
+    stored = AIMessage(
+        "", tool_calls=[TOOL_CALL], additional_kwargs={"thinking_blocks": 7}
+    )
+
+    assert "thinking_blocks" not in kept.additional_kwargs
+    assert "thinking_blocks" not in _attached(stored, ANTHROPIC)
+
+
 def test_a_redacted_block_ends_the_text_buffered_before_it() -> None:
     """Bedrock closes a block with no text, so leftover fragments must not carry over."""
     thinking = _ThinkingBlockAssembler(ANTHROPIC)
@@ -1075,6 +1128,24 @@ def _entry(group: str, model: str, **extra: Any) -> dict[str, Any]:
             "arn",
             True,
         ),
+        (
+            [_entry("main", CLAUDE)],
+            {"default_litellm_params": {"fallbacks": ["gemini/gemini-2.5-pro"]}},
+            ANTHROPIC,
+            False,
+        ),
+        (
+            [_entry("main", "anthropic/kimi-for-coding", api_base=GATEWAY)],
+            {"default_litellm_params": {"api_base": KIMI_BASE}},
+            KIMI,
+            True,
+        ),
+        (
+            [_entry("main", "anthropic/kimi-for-coding", api_base=KIMI_BASE)],
+            {"default_litellm_params": {"api_base": None}},
+            KIMI,
+            True,
+        ),
     ],
     ids=[
         "content-policy-fallback",
@@ -1084,6 +1155,9 @@ def _entry(group: str, model: str, **extra: Any) -> dict[str, Any]:
         "deployment-provider",
         "model-info-base-model",
         "deployment-base-model",
+        "default-fallbacks",
+        "default-api-base",
+        "unset-default",
     ],
 )
 def test_router_resolves_each_deployment_like_the_base(
@@ -1110,10 +1184,12 @@ def test_router_resolves_each_deployment_like_the_base(
 def test_a_call_level_key_beats_the_deployments(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The Router sends a call's own keys over its deployment's, so the name does too."""
+    """The Router sends a call's keys over its defaults and deployment's, so the name
+    does too."""
     captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
     router = _router_of(
-        [_entry("main", "anthropic/kimi-for-coding", api_base=KIMI_BASE)]
+        [_entry("main", "anthropic/kimi-for-coding", api_base=KIMI_BASE)],
+        default_litellm_params={"api_base": KIMI_BASE},
     )
     llm = ChatLiteLLMRouter(router=router, model_name="main")
 
@@ -1122,6 +1198,21 @@ def test_a_call_level_key_beats_the_deployments(
     )
 
     assert "thinking_blocks" in _assistant_sent(captured)
+
+
+def test_a_router_without_a_model_list_still_answers() -> None:
+    """``router`` is any object with the Router's call methods, as on main."""
+    sent: dict[str, Any] = {}
+
+    class CompletionOnly:
+        def completion(self, **kwargs: Any) -> Any:
+            sent.update(kwargs)
+            return _reply()
+
+    llm = ChatLiteLLMRouter(router=CompletionOnly(), model=CLAUDE)
+
+    assert llm.invoke(_history()).content == "ok"
+    assert "thinking_blocks" not in _assistant_sent(sent)
 
 
 def test_a_group_whose_deployments_differ_has_no_endpoint() -> None:
@@ -1380,6 +1471,45 @@ def test_every_replayed_turn_goes_out_exactly_as_claude_returned_it(
         ["thinking", "tool_use"],
     ]
     assert [m["content"][0] for m in replayed] == [SIGNED, SECOND]
+
+
+def test_a_bedrock_converse_continuation_carries_the_signed_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Through litellm's real converse transform: reasoning first, and no text block."""
+    for name, value in {
+        "AWS_ACCESS_KEY_ID": "AKIAFAKE",
+        "AWS_SECRET_ACCESS_KEY": "fake",
+        "AWS_REGION_NAME": "us-east-1",
+    }.items():
+        monkeypatch.setenv(name, value)
+    bodies: list[dict[str, Any]] = []
+
+    def answer(self: Any, request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.read()))
+        reply = {
+            "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        }
+        return httpx.Response(200, json=reply, request=request)
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", answer)
+    model = f"bedrock/converse/{CLAUDE_ON_BEDROCK}"
+
+    llm = ChatLiteLLM(model=model, max_retries=1).bind_tools([WEATHER_TOOL])
+
+    llm.invoke(_history(endpoint(model)))
+
+    turn = next(m for m in bodies[-1]["messages"] if m["role"] == "assistant")
+    assert [list(block) for block in turn["content"]] == [
+        ["reasoningContent"],
+        ["toolUse"],
+    ]
+    assert turn["content"][0]["reasoningContent"]["reasoningText"] == {
+        "text": SIGNED["thinking"],
+        "signature": SIGNED["signature"],
+    }
 
 
 def _stream_fakes(
