@@ -144,6 +144,12 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         ):
             return None
         defaults = getattr(router, "default_litellm_params", None) or {}
+        # The Router swaps in a team's own deployments for a team caller.
+        if any(
+            isinstance(metadata, Mapping) and metadata.get("user_api_key_team_id")
+            for metadata in (params.get("metadata"), defaults.get("metadata"))
+        ):
+            return None
         call = {key: value for key, value in params.items() if key != "model"}
         layered = {**{k: v for k, v in defaults.items() if v is not None}, **call}
         endpoints = set()
@@ -218,14 +224,18 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         params["stream"] = False
         params = {k: v for k, v in params.items() if v is not None}
         self._prepare_params_for_router(params)
-        endpoint = self._thinking_endpoint(params)
-        _attach_thinking_blocks(messages, message_dicts, endpoint)
+        binding = _attach_thinking_blocks(
+            messages,
+            message_dicts,
+            self._thinking_endpoint(params),
+            params.get("tools"),
+        )
 
         response = self.completion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
         )
         return _keep_thinking_blocks(
-            self._create_chat_result(response, **params), response, endpoint
+            self._create_chat_result(response, **params), response, binding
         )
 
     def _stream(
@@ -252,9 +262,13 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             if value is not None or key == "stream_options"
         }
         self._prepare_params_for_router(params)
-        endpoint = self._thinking_endpoint(params)
-        _attach_thinking_blocks(messages, message_dicts, endpoint)
-        thinking = _ThinkingBlockAssembler(endpoint) if endpoint else None
+        binding = _attach_thinking_blocks(
+            messages,
+            message_dicts,
+            self._thinking_endpoint(params),
+            params.get("tools"),
+        )
+        thinking = _ThinkingBlockAssembler(*binding) if binding else None
         first_chunk_yielded = False
         cost_named = False
 
@@ -349,9 +363,13 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             if value is not None or key == "stream_options"
         }
         self._prepare_params_for_router(params)
-        endpoint = self._thinking_endpoint(params)
-        _attach_thinking_blocks(messages, message_dicts, endpoint)
-        thinking = _ThinkingBlockAssembler(endpoint) if endpoint else None
+        binding = _attach_thinking_blocks(
+            messages,
+            message_dicts,
+            self._thinking_endpoint(params),
+            params.get("tools"),
+        )
+        thinking = _ThinkingBlockAssembler(*binding) if binding else None
         first_chunk_yielded = False
         cost_named = False
 
@@ -445,14 +463,18 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         params["stream"] = False
         params = {k: v for k, v in params.items() if v is not None}
         self._prepare_params_for_router(params)
-        endpoint = self._thinking_endpoint(params)
-        _attach_thinking_blocks(messages, message_dicts, endpoint)
+        binding = _attach_thinking_blocks(
+            messages,
+            message_dicts,
+            self._thinking_endpoint(params),
+            params.get("tools"),
+        )
 
         response = await self.acompletion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
         )
         return _keep_thinking_blocks(
-            self._create_chat_result(response, **params), response, endpoint
+            self._create_chat_result(response, **params), response, binding
         )
 
     # from

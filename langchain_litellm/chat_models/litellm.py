@@ -127,6 +127,8 @@ def _get_field(source: Any, name: str) -> Any:
 _CLAUDE_HOSTS = frozenset({"bedrock", "vertex_ai", "azure_ai"})
 # Where a stored thinking block records the endpoint that signed it.
 _ORIGIN = "origin"
+# Where it records the history it followed, which a replay must send unchanged.
+_PREFIX = "prefix"
 # Settings that never move a call elsewhere; deployment_id sends it to Azure. Any
 # other setting with a value turns replay off, so an unknown one fails closed.
 _NON_ROUTING_PARAMS = (
@@ -144,9 +146,24 @@ _NON_ROUTING_PARAMS = (
     "num_retries",
     "metadata",
     "extra_body",
+    "stream_timeout",
+    "tags",
+    "litellm_session_id",
+    "litellm_trace_id",
+    # Request options of the Anthropic and Bedrock formats themselves.
+    "context_management",
+    "cache_control",
+    "cache_control_injection_points",
+    "speed",
+    "output_config",
+    "guardrailConfig",
+    "performanceConfig",
+    "requestMetadata",
     # Load balancing between the deployments of one Router group.
     "rpm",
     "tpm",
+    "itpm",
+    "otpm",
     "weight",
     "order",
     "max_parallel_requests",
@@ -158,10 +175,27 @@ _NON_ROUTING_PARAMS = (
     "aws_profile_name",
     "aws_role_name",
     "aws_session_name",
+    "aws_web_identity_token",
+    "aws_sts_endpoint",
+    "aws_external_id",
     "vertex_project",
     "vertex_location",
     "vertex_credentials",
+    "vertex_ai_project",
+    "vertex_ai_location",
+    "vertex_ai_credentials",
+    "azure_ad_token",
+    "tenant_id",
+    "client_id",
+    "client_secret",
 }
+# Custom pricing, which only feeds litellm's cost tracking.
+_PRICING_PREFIXES = (
+    "input_cost_per_",
+    "output_cost_per_",
+    "cache_read_input_",
+    "cache_creation_input_",
+)
 
 
 # A bare Bedrock model id, which litellm routes to Bedrock, optionally region-prefixed.
@@ -234,7 +268,7 @@ def _signed_thinking_blocks(blocks: Any) -> list[dict[str, Any]]:
     A ``thinking`` block counts only with a non-empty ``signature``, which is what
     Anthropic and Bedrock check, and a ``redacted_thinking`` block with its ``data``.
     """
-    if not isinstance(blocks, list | tuple):
+    if not isinstance(blocks, list):
         return []
     kept: list[dict[str, Any]] = []
     for block in blocks:
@@ -257,13 +291,19 @@ def _signed_thinking_blocks(blocks: Any) -> list[dict[str, Any]]:
     return kept
 
 
-def _stored_thinking_blocks(blocks: Any, origin: str) -> list[dict[str, Any]]:
-    """The signed blocks of a response, each marked with the endpoint that signed it.
+def _stored_thinking_blocks(
+    blocks: Any, origin: str, prefix: str
+) -> list[dict[str, Any]]:
+    """The signed blocks of a response, each marked with the endpoint that signed it
+    and the history it followed.
 
-    The mark goes on every block, not once on the message: merging stream chunks
+    The marks go on every block, not once on the message: merging stream chunks
     joins two strings end to end but keeps list items apart.
     """
-    return [{**block, _ORIGIN: origin} for block in _signed_thinking_blocks(blocks)]
+    return [
+        {**block, _ORIGIN: origin, _PREFIX: prefix}
+        for block in _signed_thinking_blocks(blocks)
+    ]
 
 
 class _ThinkingBlockAssembler:
@@ -276,21 +316,22 @@ class _ThinkingBlockAssembler:
     builds its own, so fragments from two streams never meet.
     """
 
-    def __init__(self, origin: str) -> None:
+    def __init__(self, origin: str, prefix: str) -> None:
         self._origin = origin
+        self._prefix = prefix
         self._pending: list[str] = []
 
     def feed(self, blocks: Any) -> list[dict[str, Any]]:
         completed: list[dict[str, Any]] = []
-        if not isinstance(blocks, list | tuple):
+        if not isinstance(blocks, list):
             return completed
         for block in blocks:
             block_type = _get_field(block, "type")
             if block_type == "redacted_thinking":
-                completed.extend(_stored_thinking_blocks([block], self._origin))
+                completed.extend(self._stored([block]))
                 self._pending = []
             elif block_type == "thinking":
-                closed = _stored_thinking_blocks([block], self._origin)
+                closed = self._stored([block])
                 if closed:
                     closed[0]["thinking"] = closed[0]["thinking"] or "".join(
                         self._pending
@@ -303,70 +344,167 @@ class _ThinkingBlockAssembler:
                         self._pending.append(thinking)
         return completed
 
+    def _stored(self, blocks: list[Any]) -> list[dict[str, Any]]:
+        return _stored_thinking_blocks(blocks, self._origin, self._prefix)
+
 
 def _keep_thinking_blocks(
-    result: ChatResult, response: Mapping[str, Any], endpoint: str | None
+    result: ChatResult,
+    response: Mapping[str, Any],
+    binding: tuple[str, str] | None,
 ) -> ChatResult:
-    """Store each choice's signed blocks on its message, marked with ``endpoint``.
+    """Store each choice's signed blocks on its message, marked with ``binding``.
 
     This runs on whatever ``_create_chat_result`` returns, so a subclass that
     overrides it keeps its signature.
     """
-    if endpoint is None:
+    if binding is None:
         return result
-    choices = response["choices"]
-    if len(result.generations) != len(choices):
+    kept = [
+        _stored_thinking_blocks(
+            _get_field(_get_field(choice, "message"), "thinking_blocks"), *binding
+        )
+        for choice in response["choices"]
+    ]
+    if not any(kept):
+        return result
+    if len(result.generations) != len(kept):
         logger.warning("Not keeping thinking blocks: generations and choices differ.")
         return result
-    for generation, choice in zip(result.generations, choices, strict=True):
-        blocks = _stored_thinking_blocks(
-            _get_field(_get_field(choice, "message"), "thinking_blocks"), endpoint
-        )
+    for generation, blocks in zip(result.generations, kept, strict=True):
         if blocks:
             generation.message.additional_kwargs["thinking_blocks"] = blocks
     return result
+
+
+def _as_sent(value: Any) -> bytes:
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), default=str
+    ).encode()
+
+
+class _HistoryDigest:
+    """Digest what a turn follows as Anthropic checks it: the tools, every system
+    message, which litellm lifts to the top wherever it sits, then the rest in order.
+    """
+
+    def __init__(self, tools: Any, message_dicts: Sequence[Mapping[str, Any]]) -> None:
+        system = [d for d in message_dicts if d.get("role") == "system"]
+        self._running = hashlib.sha256(_as_sent([tools, system]))
+
+    def add(self, message_dict: Mapping[str, Any]) -> None:
+        if message_dict.get("role") != "system":
+            self._running.update(_as_sent(message_dict))
+
+    def digest(self) -> str:
+        return self._running.hexdigest()[:16]
+
+
+def _with_blocks(
+    message_dict: dict[str, Any], blocks: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """The turn as replayed. An empty tool-call content goes out as ``None``: litellm
+    writes placeholder text into an empty string, which would edit the signed turn."""
+    replayed = {**message_dict, "thinking_blocks": blocks}
+    if replayed.get("tool_calls") and replayed.get("content") == "":
+        replayed["content"] = None
+    return replayed
+
+
+def _replayable_blocks(
+    message: AIMessage, message_dict: Mapping[str, Any], endpoint: str, prefix: str
+) -> list[dict[str, Any]]:
+    """The blocks ``message`` may carry back after the history digested as ``prefix``."""
+    stored = message.additional_kwargs.get("thinking_blocks")
+    if not isinstance(stored, list) or not stored:
+        return []
+    if any(_get_field(block, _ORIGIN) != endpoint for block in stored):
+        logger.debug(
+            "Not replaying a turn's thinking blocks: another endpoint signed them."
+        )
+        return []
+    if any(_get_field(block, _PREFIX) != prefix for block in stored):
+        logger.debug(
+            "Not replaying a turn's thinking blocks: the history before them changed."
+        )
+        return []
+    blocks = _signed_thinking_blocks(stored)
+    # litellm rebuilds a turn as its thinking, then its text, then its tool calls.
+    if len(blocks) > 1 and (
+        message_dict.get("tool_calls") or message_dict.get("content")
+    ):
+        logger.debug(
+            "Not replaying a turn's thinking blocks: litellm would reorder them."
+        )
+        return []
+    return blocks
+
+
+def _replayable_turns(
+    messages: Sequence[BaseMessage],
+    message_dicts: list[dict[str, Any]],
+    endpoint: str,
+    tools: Any,
+) -> dict[int, list[dict[str, Any]]]:
+    """The blocks each turn may carry back, by index.
+
+    A turn is checked against the history before it as it would be sent, since an
+    earlier turn's replayed blocks are part of it. Nothing goes back unless the last
+    tool-call turn does: litellm drops thinking for a loop whose last tool call has
+    none only when no turn carries any.
+    """
+    history = _HistoryDigest(tools, message_dicts)
+    replayable: dict[int, list[dict[str, Any]]] = {}
+    last_tool_call_goes = True
+    for index, message in enumerate(messages):
+        message_dict = message_dicts[index]
+        if isinstance(message, AIMessage):
+            blocks = _replayable_blocks(
+                message, message_dict, endpoint, history.digest()
+            )
+            if blocks:
+                replayable[index] = blocks
+                message_dict = _with_blocks(message_dict, blocks)
+            if message_dict.get("tool_calls"):
+                last_tool_call_goes = bool(blocks)
+        history.add(message_dict)
+    return replayable if last_tool_call_goes else {}
 
 
 def _attach_thinking_blocks(
     messages: Sequence[BaseMessage],
     message_dicts: list[dict[str, Any]],
     endpoint: str | None,
-) -> None:
-    """Hand back the thinking blocks that ``endpoint``, this request's only one, signed.
+    tools: Any,
+) -> tuple[str, str] | None:
+    """Hand back the thinking blocks ``endpoint``, this request's only one, signed
+    after exactly the history that precedes each turn now, as Anthropic requires.
 
-    A turn gets its blocks back only when every one of them came from that endpoint.
-    Its empty tool-call content then goes out as ``None``: litellm writes placeholder
-    text into an empty string, which would edit the turn the signature covers.
+    Returns what the reply's blocks are stored with: the endpoint and the digest of
+    this request as sent, or None when no single endpoint signs them.
     """
-    if not any(
+    held = any(
         isinstance(message, AIMessage)
         and message.additional_kwargs.get("thinking_blocks")
         for message in messages
-    ):
-        return
+    )
     if endpoint is None:
-        logger.debug("Not replaying thinking blocks: no single signing endpoint.")
-        return
-    if len(messages) != len(message_dicts):
+        if held:
+            logger.debug("Not replaying thinking blocks: no single signing endpoint.")
+        return None
+    replayable: dict[int, list[dict[str, Any]]] = {}
+    if held and len(messages) != len(message_dicts):
         logger.warning("Not replaying thinking blocks: messages and dicts differ.")
-        return
-    for message, message_dict in zip(messages, message_dicts, strict=True):
-        if not isinstance(message, AIMessage):
-            continue
-        stored = message.additional_kwargs.get("thinking_blocks")
-        if not isinstance(stored, list | tuple) or not stored:
-            continue
-        if any(_get_field(block, _ORIGIN) != endpoint for block in stored):
-            logger.debug(
-                "Not replaying a turn's thinking blocks: another endpoint signed them."
+    elif held:
+        replayable = _replayable_turns(messages, message_dicts, endpoint, tools)
+    history = _HistoryDigest(tools, message_dicts)
+    for index, message_dict in enumerate(message_dicts):
+        if index in replayable:
+            message_dict = message_dicts[index] = _with_blocks(
+                message_dict, replayable[index]
             )
-            continue
-        blocks = _signed_thinking_blocks(stored)
-        if not blocks:
-            continue
-        message_dict["thinking_blocks"] = blocks
-        if message_dict.get("tool_calls") and message_dict.get("content") == "":
-            message_dict["content"] = None
+        history.add(message_dict)
+    return endpoint, history.digest()
 
 
 def _cost_metadata(response: Any) -> dict[str, Any]:
@@ -1011,28 +1149,38 @@ class ChatLiteLLM(BaseChatModel):
         response cache or proxy switch, can answer from another endpoint, so it
         replays nothing. An alias is named by the model it maps to, as litellm does.
         """
-        if (
-            any(
-                value and key not in _NON_ROUTING_PARAMS
-                for key, value in params.items()
-            )
-            or litellm.model_fallbacks
-            or litellm.cache is not None
-            or litellm.use_litellm_proxy is True
-            or get_secret_bool("USE_LITELLM_PROXY") is True
-        ):
-            return None
         model = params.get("model")
         aliases = litellm.model_alias_map
         if aliases and model in aliases:
             model = aliases[model]
-        return _signing_endpoint(
+        endpoint = _signing_endpoint(
             model,
             params.get("custom_llm_provider"),
             # litellm sends to base_url over api_base when a caller sets both.
             params.get("base_url") or params.get("api_base"),
             params.get("base_model"),
         )
+        unknown = sorted(
+            key
+            for key, value in params.items()
+            if value
+            and key not in _NON_ROUTING_PARAMS
+            and not key.startswith(_PRICING_PREFIXES)
+        )
+        if unknown and endpoint is not None:
+            logger.debug(
+                "Not replaying thinking blocks: litellm may route on %s.",
+                ", ".join(unknown),
+            )
+        if (
+            unknown
+            or litellm.model_fallbacks
+            or litellm.cache is not None
+            or litellm.use_litellm_proxy is True
+            or get_secret_bool("USE_LITELLM_PROXY") is True
+        ):
+            return None
+        return endpoint
 
     @property
     def _client_params(self) -> dict[str, Any]:
@@ -1146,13 +1294,17 @@ class ChatLiteLLM(BaseChatModel):
         # This branch parses a mapping, so it must not inherit stream=True from a
         # streaming=True instance that the caller overrode with stream=False.
         params["stream"] = False
-        endpoint = self._thinking_endpoint(params)
-        _attach_thinking_blocks(messages, message_dicts, endpoint)
+        binding = _attach_thinking_blocks(
+            messages,
+            message_dicts,
+            self._thinking_endpoint(params),
+            params.get("tools"),
+        )
         response = self.completion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
         )
         return _keep_thinking_blocks(
-            self._create_chat_result(response, **params), response, endpoint
+            self._create_chat_result(response, **params), response, binding
         )
 
     def _create_chat_result(
@@ -1218,9 +1370,13 @@ class ChatLiteLLM(BaseChatModel):
                 if self.stream_options is not None
                 else {"include_usage": True}
             )
-        endpoint = self._thinking_endpoint(params)
-        _attach_thinking_blocks(messages, message_dicts, endpoint)
-        thinking = _ThinkingBlockAssembler(endpoint) if endpoint else None
+        binding = _attach_thinking_blocks(
+            messages,
+            message_dicts,
+            self._thinking_endpoint(params),
+            params.get("tools"),
+        )
+        thinking = _ThinkingBlockAssembler(*binding) if binding else None
         default_chunk_class = AIMessageChunk
         first_chunk_yielded = False
         cost_named = False
@@ -1314,9 +1470,13 @@ class ChatLiteLLM(BaseChatModel):
                 if self.stream_options is not None
                 else {"include_usage": True}
             )
-        endpoint = self._thinking_endpoint(params)
-        _attach_thinking_blocks(messages, message_dicts, endpoint)
-        thinking = _ThinkingBlockAssembler(endpoint) if endpoint else None
+        binding = _attach_thinking_blocks(
+            messages,
+            message_dicts,
+            self._thinking_endpoint(params),
+            params.get("tools"),
+        )
+        thinking = _ThinkingBlockAssembler(*binding) if binding else None
         default_chunk_class = AIMessageChunk
         first_chunk_yielded = False
         cost_named = False
@@ -1414,13 +1574,17 @@ class ChatLiteLLM(BaseChatModel):
         # This branch parses a mapping, so it must not inherit stream=True from a
         # streaming=True instance that the caller overrode with stream=False.
         params["stream"] = False
-        endpoint = self._thinking_endpoint(params)
-        _attach_thinking_blocks(messages, message_dicts, endpoint)
+        binding = _attach_thinking_blocks(
+            messages,
+            message_dicts,
+            self._thinking_endpoint(params),
+            params.get("tools"),
+        )
         response = await self.acompletion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
         )
         return _keep_thinking_blocks(
-            self._create_chat_result(response, **params), response, endpoint
+            self._create_chat_result(response, **params), response, binding
         )
 
     def bind_tools(
