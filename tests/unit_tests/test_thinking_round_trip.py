@@ -15,6 +15,7 @@ import json
 import logging
 from collections.abc import Callable, Mapping
 from typing import Any
+from unittest.mock import Mock
 
 # third-party
 import httpx
@@ -181,6 +182,7 @@ CLAUDE_ON_BEDROCK = "anthropic.claude-sonnet-4-20250514-v1:0"
         ),
         ("azure_ai/claude-sonnet-4", None, None, None, "azure_ai||claude-sonnet-4"),
         ("gemini/gemini-2.5-pro", None, None, None, None),
+        ("anthropic/claude-x", "openai", None, None, None),
         ("openai/gpt-4o", None, None, None, None),
         ("deepseek/deepseek-reasoner", None, None, None, None),
         ("mistral/magistral-medium-latest", None, None, None, None),
@@ -681,6 +683,7 @@ def _router(deployments: list[tuple[str, str]], **settings: Any) -> litellm.Rout
             False,
         ),
         ([("main", CLAUDE), ("main", "openai/gpt-4o")], {}, {}, False),
+        ([("main", CLAUDE), ("other", "openai/gpt-4o")], {}, {}, True),
         (
             [("main", CLAUDE), ("backup", "openai/gpt-4o")],
             {"fallbacks": [{"main": ["backup"]}]},
@@ -718,6 +721,7 @@ def _router(deployments: list[tuple[str, str]], **settings: Any) -> litellm.Rout
         "same-endpoint-twice",
         "anthropic-and-bedrock",
         "mixed-group",
+        "another-group-differs",
         "falls-back-to-openai",
         "falls-back-to-a-wildcard",
         "default-fallback",
@@ -832,6 +836,11 @@ def test_a_result_that_does_not_pair_with_its_choices_keeps_nothing(
         },
         {"deployment_id": "my-azure-deployment"},
         {"azure": True},
+        {"litellm_credential_name": "gateway"},
+        {"prompt_id": "weather"},
+        {"use_litellm_proxy": True},
+        {"caching": True},
+        {"a_setting_this_does_not_know": "x"},
     ],
     ids=[
         "fallbacks",
@@ -839,6 +848,11 @@ def test_a_result_that_does_not_pair_with_its_choices_keeps_nothing(
         "model-list",
         "deployment-id",
         "azure-flag",
+        "credential-name",
+        "prompt-id",
+        "proxy-flag",
+        "caching",
+        "unknown-setting",
     ],
 )
 def test_base_neither_replays_nor_keeps_when_litellm_may_send_elsewhere(
@@ -874,15 +888,110 @@ def test_an_aliased_model_is_named_by_what_litellm_resolves_it_to(
     assert ("thinking_blocks" in _assistant_sent(captured)) is forwarded
 
 
-def test_base_replays_nothing_under_global_model_fallbacks(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "setting", ["model_fallbacks", "cache", "use_litellm_proxy", "USE_LITELLM_PROXY"]
+)
+def test_base_neither_replays_nor_keeps_under_a_litellm_wide_redirect(
+    monkeypatch: pytest.MonkeyPatch, setting: str
 ) -> None:
-    monkeypatch.setattr(litellm, "model_fallbacks", ["gemini/gemini-2.5-pro"])
+    if setting == "model_fallbacks":
+        monkeypatch.setattr(litellm, "model_fallbacks", ["gemini/gemini-2.5-pro"])
+    elif setting == "cache":
+        monkeypatch.setattr(litellm, "cache", object())
+    elif setting == "use_litellm_proxy":
+        monkeypatch.setattr(litellm, "use_litellm_proxy", True)
+    else:
+        monkeypatch.setenv("USE_LITELLM_PROXY", "True")
     captured = _capture_calls(monkeypatch, ChatLiteLLM)
 
-    ChatLiteLLM(model=CLAUDE, api_key="fake").invoke(_history())
+    message = ChatLiteLLM(model=CLAUDE, api_key="fake").invoke(_history())
 
     assert "thinking_blocks" not in _assistant_sent(captured)
+    assert "thinking_blocks" not in message.additional_kwargs
+
+
+@pytest.mark.parametrize(
+    ("model", "model_kwargs"),
+    [
+        (
+            CLAUDE,
+            {
+                "thinking": {"type": "enabled", "budget_tokens": 1024},
+                "allowed_openai_params": ["thinking"],
+                "drop_params": True,
+                "additional_drop_params": ["seed"],
+                "metadata": {"run": "r1"},
+                "extra_body": {"k": 1},
+                "num_retries": 2,
+            },
+        ),
+        (
+            f"bedrock/converse/{CLAUDE_ON_BEDROCK}",
+            {
+                "aws_region_name": "us-east-1",
+                "aws_access_key_id": "AKIAFAKE",
+                "aws_secret_access_key": "fake",
+                "aws_session_token": "fake",
+                "aws_profile_name": "p",
+                "aws_role_name": "r",
+                "aws_session_name": "s",
+            },
+        ),
+        (
+            "vertex_ai/claude-3-7-sonnet@20250219",
+            {
+                "vertex_project": "p",
+                "vertex_location": "us-east5",
+                "vertex_credentials": "{}",
+            },
+        ),
+    ],
+    ids=["anthropic-call-settings", "bedrock-credentials", "vertex-credentials"],
+)
+def test_settings_that_never_route_keep_replay_on(
+    monkeypatch: pytest.MonkeyPatch, model: str, model_kwargs: dict[str, Any]
+) -> None:
+    captured = _capture_calls(monkeypatch, ChatLiteLLM)
+    llm = ChatLiteLLM(
+        model=model,
+        api_key="fake",
+        top_k=5,
+        extra_headers={"anthropic-beta": "interleaved-thinking-2025-05-14"},
+        model_kwargs=model_kwargs,
+    )
+
+    llm.invoke(_history(endpoint(model)))
+
+    assert "thinking_blocks" in _assistant_sent(captured)
+
+
+def test_an_alias_map_litellm_tolerates_is_tolerated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "model_alias_map", ["not-a-mapping"])
+    captured = _capture_calls(monkeypatch, ChatLiteLLM)
+
+    ChatLiteLLM(model="openai/gpt-4o", api_key="fake").invoke("hi")
+
+    assert captured["model"] == "openai/gpt-4o"
+
+
+@pytest.mark.usefixtures("_no_anthropic_base")
+def test_the_unset_base_comes_from_where_litellm_looks_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_BASE", KIMI_BASE)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://other.example")
+    monkeypatch.setattr(litellm, "api_base", GATEWAY)
+    assert (
+        _endpoint_name(CLAUDE, None, None)
+        == f"anthropic|{GATEWAY}|claude-sonnet-4-20250514"
+    )
+
+    monkeypatch.setattr(litellm, "api_base", None)
+    assert _endpoint_name(CLAUDE, None, None) == (
+        "anthropic|https://api.kimi.com/coding|claude-sonnet-4-20250514"
+    )
 
 
 @pytest.mark.usefixtures("_no_anthropic_base")
@@ -1015,6 +1124,33 @@ def test_a_value_that_is_not_a_list_of_blocks_is_ignored() -> None:
     assert "thinking_blocks" not in _attached(stored, ANTHROPIC)
 
 
+def test_a_stored_block_keeps_the_keys_saved_histories_hold() -> None:
+    """Checkpoints keep these blocks, so renaming a key strands every saved one."""
+    kept = _kept(_litellm_message(content="", thinking_blocks=[SIGNED]), KIMI)
+
+    assert kept.additional_kwargs["thinking_blocks"] == [
+        {
+            "type": "thinking",
+            "thinking": SIGNED["thinking"],
+            "signature": SIGNED["signature"],
+            "origin": KIMI,
+        }
+    ]
+
+
+def test_a_closing_block_keeps_the_text_it_was_signed_with() -> None:
+    thinking = _ThinkingBlockAssembler(ANTHROPIC)
+    thinking.feed([{"type": "thinking", "thinking": "draft "}])
+
+    closed = thinking.feed(
+        [{"type": "thinking", "thinking": "final", "signature": "s=="}]
+    )
+
+    assert closed == signed_at(
+        ANTHROPIC, {"type": "thinking", "thinking": "final", "signature": "s=="}
+    )
+
+
 def test_a_redacted_block_ends_the_text_buffered_before_it() -> None:
     """Bedrock closes a block with no text, so leftover fragments must not carry over."""
     thinking = _ThinkingBlockAssembler(ANTHROPIC)
@@ -1124,6 +1260,37 @@ def test_a_captured_origin_carries_nothing_of_the_api_base(
             KIMI,
             True,
         ),
+        (
+            [
+                _entry("main", CLAUDE, silent_model="shadow"),
+                _entry("shadow", "anthropic/kimi-for-coding", api_base=KIMI_BASE),
+            ],
+            {},
+            ANTHROPIC,
+            False,
+        ),
+        (
+            [_entry("main", CLAUDE, litellm_credential_name="gateway")],
+            {},
+            ANTHROPIC,
+            False,
+        ),
+        (
+            [
+                _entry(
+                    "main",
+                    CLAUDE,
+                    rpm=10,
+                    tpm=1000,
+                    weight=2,
+                    order=1,
+                    max_parallel_requests=4,
+                )
+            ],
+            {},
+            ANTHROPIC,
+            True,
+        ),
     ],
     ids=[
         "content-policy-fallback",
@@ -1136,6 +1303,9 @@ def test_a_captured_origin_carries_nothing_of_the_api_base(
         "default-fallbacks",
         "default-api-base",
         "unset-default",
+        "silent-mirror",
+        "credential-name",
+        "load-balancing-settings",
     ],
 )
 def test_router_resolves_each_deployment_like_the_base(
@@ -1191,6 +1361,15 @@ def test_a_router_without_a_model_list_still_answers() -> None:
 
     assert llm.invoke(_history()).content == "ok"
     assert "thinking_blocks" not in _assistant_sent(sent)
+
+
+def test_a_mock_router_still_answers() -> None:
+    router = Mock()
+    router.completion.return_value = _reply()
+
+    llm = ChatLiteLLMRouter(router=router, model=CLAUDE)
+
+    assert llm.invoke("hi").content == "ok"
 
 
 def test_a_group_whose_deployments_differ_has_no_endpoint() -> None:
