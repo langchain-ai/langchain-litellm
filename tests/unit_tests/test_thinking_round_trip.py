@@ -775,11 +775,23 @@ class _ExtraSystemDict(ChatLiteLLM):
 
 
 @pytest.mark.parametrize(
-    ("cls", "model", "history", "reason"),
+    ("cls", "model", "history", "reason", "level"),
     [
-        (ChatLiteLLM, "openai/gpt-4o", ANTHROPIC, "no single signing endpoint"),
-        (ChatLiteLLM, CLAUDE, KIMI, "another endpoint signed them"),
-        (_ExtraSystemDict, CLAUDE, ANTHROPIC, "messages and dicts differ"),
+        (
+            ChatLiteLLM,
+            "openai/gpt-4o",
+            ANTHROPIC,
+            "no single signing endpoint",
+            logging.DEBUG,
+        ),
+        (ChatLiteLLM, CLAUDE, KIMI, "another endpoint signed them", logging.DEBUG),
+        (
+            _ExtraSystemDict,
+            CLAUDE,
+            ANTHROPIC,
+            "messages and dicts differ",
+            logging.WARNING,
+        ),
     ],
     ids=["no-endpoint", "other-signer", "unpaired-dicts"],
 )
@@ -790,13 +802,15 @@ def test_withheld_blocks_are_logged(
     model: str,
     history: str,
     reason: str,
+    level: int,
 ) -> None:
+    """A subclass whose reshaping turns replay off for good is told at WARNING."""
     captured = _capture_calls(monkeypatch, cls)
 
     with caplog.at_level(logging.DEBUG, logger="langchain_litellm.chat_models.litellm"):
         cls(model=model, api_key="fake").invoke(_history(history))
 
-    assert reason in caplog.text
+    assert [r.levelno for r in caplog.records if reason in r.getMessage()] == [level]
     assert "thinking_blocks" not in _assistant_sent(captured)
 
 
@@ -820,7 +834,11 @@ def test_a_result_that_does_not_pair_with_its_choices_keeps_nothing(
         result = _keep_thinking_blocks(ChatResult(generations=[]), response, ANTHROPIC)
 
     assert result.generations == []
-    assert "generations and choices differ" in caplog.text
+    assert [
+        r.levelno
+        for r in caplog.records
+        if "generations and choices differ" in r.getMessage()
+    ] == [logging.WARNING]
 
 
 @pytest.mark.parametrize(
