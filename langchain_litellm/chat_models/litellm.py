@@ -316,7 +316,7 @@ def _keep_thinking_blocks(
         return result
     choices = response["choices"]
     if len(result.generations) != len(choices):
-        logger.debug("Not keeping thinking blocks: generations and choices differ.")
+        logger.warning("Not keeping thinking blocks: generations and choices differ.")
         return result
     for generation, choice in zip(result.generations, choices, strict=True):
         blocks = _stored_thinking_blocks(
@@ -348,7 +348,7 @@ def _attach_thinking_blocks(
         logger.debug("Not replaying thinking blocks: no single signing endpoint.")
         return
     if len(messages) != len(message_dicts):
-        logger.debug("Not replaying thinking blocks: messages and dicts differ.")
+        logger.warning("Not replaying thinking blocks: messages and dicts differ.")
         return
     for message, message_dict in zip(messages, message_dicts, strict=True):
         if not isinstance(message, AIMessage):
