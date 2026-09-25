@@ -263,6 +263,29 @@ class _ThinkingBlockAssembler:
         return completed
 
 
+def _keep_thinking_blocks(
+    result: ChatResult, response: Mapping[str, Any], endpoint: str | None
+) -> ChatResult:
+    """Store each choice's signed blocks on its message, marked with ``endpoint``.
+
+    This runs on whatever ``_create_chat_result`` returns, so a subclass that
+    overrides it keeps its signature.
+    """
+    if endpoint is None:
+        return result
+    choices = response["choices"]
+    if len(result.generations) != len(choices):
+        logger.debug("Not keeping thinking blocks: generations and choices differ.")
+        return result
+    for generation, choice in zip(result.generations, choices, strict=True):
+        blocks = _stored_thinking_blocks(
+            _get_field(_get_field(choice, "message"), "thinking_blocks"), endpoint
+        )
+        if blocks:
+            generation.message.additional_kwargs["thinking_blocks"] = blocks
+    return result
+
+
 def _attach_thinking_blocks(
     messages: Sequence[BaseMessage],
     message_dicts: list[dict[str, Any]],
@@ -352,9 +375,7 @@ def _create_retry_decorator(
     )
 
 
-def _convert_dict_to_message(
-    _dict: Mapping[str, Any], *, thinking_origin: str | None = None
-) -> BaseMessage:
+def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
     role = _dict["role"]
     if role == "user":
         return HumanMessage(content=_dict["content"])
@@ -433,13 +454,6 @@ def _convert_dict_to_message(
 
         if _dict.get("reasoning_content"):
             additional_kwargs["reasoning_content"] = _dict["reasoning_content"]
-
-        if thinking_origin is not None:
-            thinking_blocks = _stored_thinking_blocks(
-                _dict.get("thinking_blocks"), thinking_origin
-            )
-            if thinking_blocks:
-                additional_kwargs["thinking_blocks"] = thinking_blocks
 
         # Check standard field first, then fallback to Vertex specific field
         provider_specific_fields = _dict.get("provider_specific_fields")
@@ -1007,18 +1021,16 @@ class ChatLiteLLM(BaseChatModel):
         response = self.completion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
         )
-        return self._create_chat_result(response, thinking_endpoint=endpoint)
+        return _keep_thinking_blocks(
+            self._create_chat_result(response), response, endpoint
+        )
 
-    def _create_chat_result(
-        self, response: Mapping[str, Any], *, thinking_endpoint: str | None = None
-    ) -> ChatResult:
+    def _create_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
         generations = []
         token_usage = response.get("usage", {})
         usage_metadata = _create_usage_metadata(token_usage)
         for res in response["choices"]:
-            message = _convert_dict_to_message(
-                res["message"], thinking_origin=thinking_endpoint
-            )
+            message = _convert_dict_to_message(res["message"])
             if isinstance(message, AIMessage):
                 message.response_metadata = {
                     "model_name": self.model_name or self.model,
@@ -1277,7 +1289,9 @@ class ChatLiteLLM(BaseChatModel):
         response = await self.acompletion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
         )
-        return self._create_chat_result(response, thinking_endpoint=endpoint)
+        return _keep_thinking_blocks(
+            self._create_chat_result(response), response, endpoint
+        )
 
     def bind_tools(
         self,

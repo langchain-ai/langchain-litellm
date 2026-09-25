@@ -27,6 +27,7 @@ from langchain_litellm.chat_models.litellm import (
     _create_retry_decorator,
     _create_usage_metadata,
     _get_field,
+    _keep_thinking_blocks,
     _litellm_providers,
     _signing_endpoint,
     _ThinkingBlockAssembler,
@@ -227,14 +228,15 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         params["stream"] = False
         params = {k: v for k, v in params.items() if v is not None}
         self._prepare_params_for_router(params)
-        _attach_thinking_blocks(
-            messages, message_dicts, self._thinking_endpoint(params)
-        )
+        endpoint = self._thinking_endpoint(params)
+        _attach_thinking_blocks(messages, message_dicts, endpoint)
 
         response = self.completion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
         )
-        return self._create_chat_result(response, **params)
+        return _keep_thinking_blocks(
+            self._create_chat_result(response, **params), response, endpoint
+        )
 
     def _stream(
         self,
@@ -455,14 +457,15 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         params["stream"] = False
         params = {k: v for k, v in params.items() if v is not None}
         self._prepare_params_for_router(params)
-        _attach_thinking_blocks(
-            messages, message_dicts, self._thinking_endpoint(params)
-        )
+        endpoint = self._thinking_endpoint(params)
+        _attach_thinking_blocks(messages, message_dicts, endpoint)
 
         response = await self.acompletion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
         )
-        return self._create_chat_result(response, **params)
+        return _keep_thinking_blocks(
+            self._create_chat_result(response, **params), response, endpoint
+        )
 
     # from
     # https://github.com/langchain-ai/langchain/blob/master/libs/community/langchain_community/chat_models/openai.py
@@ -504,9 +507,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         generations = []
         token_usage = response.get("usage", Usage(prompt_tokens=0, total_tokens=0))
         usage_metadata = _create_usage_metadata(token_usage)
-        endpoint = self._thinking_endpoint(params)
         for res in response["choices"]:
-            message = _convert_dict_to_message(res["message"], thinking_origin=endpoint)
+            message = _convert_dict_to_message(res["message"])
             if isinstance(message, AIMessage):
                 message.response_metadata = {
                     "model_name": self.model_name or self.model,

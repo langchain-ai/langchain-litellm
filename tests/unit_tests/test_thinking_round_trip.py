@@ -32,9 +32,9 @@ from langchain_litellm.chat_models import ChatLiteLLM, ChatLiteLLMRouter
 from langchain_litellm.chat_models.litellm import (
     _attach_thinking_blocks,
     _convert_delta_to_message_chunk,
-    _convert_dict_to_message,
     _convert_message_to_dict,
     _endpoint_name,
+    _keep_thinking_blocks,
     _signing_endpoint,
     _ThinkingBlockAssembler,
 )
@@ -202,8 +202,15 @@ def _litellm_message(**fields: Any) -> Any:
     return Message(**fields)
 
 
+def _kept(message: Any, origin: str | None) -> Any:
+    """What a non-streaming call stores from a response holding ``message``."""
+    response = {"choices": [{"message": message, "finish_reason": "stop"}]}
+    result = ChatLiteLLM(model=CLAUDE, api_key="fake")._create_chat_result(response)
+    return _keep_thinking_blocks(result, response, origin).generations[0].message
+
+
 def test_non_streaming_response_stores_only_signed_blocks_with_their_origin() -> None:
-    message = _convert_dict_to_message(
+    message = _kept(
         _litellm_message(
             content="",
             reasoning_content=SIGNED["thinking"],
@@ -214,7 +221,7 @@ def test_non_streaming_response_stores_only_signed_blocks_with_their_origin() ->
                 REDACTED,
             ],
         ),
-        thinking_origin=KIMI,
+        KIMI,
     )
 
     assert message.additional_kwargs["thinking_blocks"] == signed_at(
@@ -224,13 +231,13 @@ def test_non_streaming_response_stores_only_signed_blocks_with_their_origin() ->
 
 
 def test_response_without_signed_blocks_stores_no_key() -> None:
-    message = _convert_dict_to_message(
+    message = _kept(
         {
             "role": "assistant",
             "content": "hi",
             "thinking_blocks": [{"type": "thinking", "thinking": "r"}],
         },
-        thinking_origin=ANTHROPIC,
+        ANTHROPIC,
     )
 
     assert "thinking_blocks" not in message.additional_kwargs
@@ -238,9 +245,7 @@ def test_response_without_signed_blocks_stores_no_key() -> None:
 
 def test_blocks_are_not_captured_without_an_origin() -> None:
     """A route that never checks the signature must not collect blocks to replay."""
-    message = _convert_dict_to_message(
-        _litellm_message(content="", thinking_blocks=[SIGNED])
-    )
+    message = _kept(_litellm_message(content="", thinking_blocks=[SIGNED]), None)
 
     assert "thinking_blocks" not in message.additional_kwargs
 
@@ -749,6 +754,18 @@ def test_withheld_blocks_are_logged(
         ChatLiteLLM(model=model, api_key="fake").invoke(_history(history))
 
     assert reason in caplog.text
+
+
+def test_a_result_that_does_not_pair_with_its_choices_keeps_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    response = _reply(thinking_blocks=[SIGNED])
+
+    with caplog.at_level(logging.DEBUG, logger="langchain_litellm.chat_models.litellm"):
+        result = _keep_thinking_blocks(ChatResult(generations=[]), response, ANTHROPIC)
+
+    assert result.generations == []
+    assert "generations and choices differ" in caplog.text
 
 
 @pytest.mark.parametrize(
