@@ -1,7 +1,7 @@
 """LiteLLM Router chat model integration for LangChain."""
 
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import Any, Self
+from typing import Any
 
 from langchain_core.callbacks.manager import (
     AsyncCallbackManagerForLLMRun,
@@ -17,7 +17,6 @@ from langchain_core.messages import (
     BaseMessage,
 )
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
-from pydantic import model_validator
 
 from langchain_litellm.chat_models.litellm import (
     ChatLiteLLM,
@@ -57,15 +56,14 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         super().__init__(router=router, **kwargs)  # type: ignore[call-arg]
         self.router = router
 
-    @model_validator(mode="after")
-    def _refuse_use_responses_api(self) -> Self:
-        if self.use_responses_api:
-            raise ValueError(
-                "ChatLiteLLMRouter sends each call to the deployment the Router "
-                "picks, so use_responses_api cannot route it; name the deployment's "
-                "model '<provider>/responses/<model>' instead."
-            )
-        return self
+    def _route_to_responses_api(
+        self, model: str, custom_llm_provider: str | None, api_base: str | None
+    ) -> str:
+        raise ValueError(
+            "ChatLiteLLMRouter sends each call to the deployment the Router picks, "
+            "so use_responses_api cannot route it; name the deployment's model "
+            "'<provider>/responses/<model>' instead."
+        )
 
     @property
     def _llm_type(self) -> str:
