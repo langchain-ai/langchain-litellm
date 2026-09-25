@@ -16,7 +16,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, cast
 from unittest.mock import Mock
 
 # third-party
@@ -766,7 +766,9 @@ def test_a_reply_is_stored_with_the_history_it_followed(
     message = llm.invoke([MONDAY, QUESTION])
 
     assert message.additional_kwargs["thinking_blocks"] == signed_at(
-        ANTHROPIC, SIGNED, before=_asked_after(MONDAY, tools=llm.kwargs["tools"])
+        ANTHROPIC,
+        SIGNED,
+        before=_asked_after(MONDAY, tools=cast(Any, llm).kwargs["tools"]),
     )
 
 
@@ -894,18 +896,19 @@ def test_a_setting_outside_the_list_is_named_where_it_turns_replay_off(
     assert ("a_setting_this_does_not_know" in caplog.text) is logged
 
 
-@pytest.mark.parametrize("where", ["call", "router-default"])
+@pytest.mark.parametrize("where", ["model-kwargs", "router-default"])
 def test_a_team_call_on_a_router_replays_nothing(
     monkeypatch: pytest.MonkeyPatch, where: str
 ) -> None:
     """The Router swaps in a team's own deployments, which this cannot see."""
     captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
-    team = {"metadata": {"user_api_key_team_id": "team-a"}}
+    team: dict[str, Any] = {"metadata": {"user_api_key_team_id": "team-a"}}
     defaults = team if where == "router-default" else None
     router = _router_of([_entry("main", CLAUDE)], default_litellm_params=defaults)
-    call = team if where == "call" else {}
+    model_kwargs = team if where == "model-kwargs" else {}
+    llm = ChatLiteLLMRouter(router=router, model_name="main", model_kwargs=model_kwargs)
 
-    ChatLiteLLMRouter(router=router, model_name="main").invoke(_history(), **call)
+    llm.invoke(_history())
 
     assert "thinking_blocks" not in _assistant_sent(captured)
 
@@ -2013,7 +2016,9 @@ def test_a_bedrock_converse_continuation_carries_the_signed_block(
 
     llm = ChatLiteLLM(model=model, max_retries=1).bind_tools([WEATHER_TOOL])
 
-    llm.invoke(_history(endpoint(model), _asked_after(tools=llm.kwargs["tools"])))
+    llm.invoke(
+        _history(endpoint(model), _asked_after(tools=cast(Any, llm).kwargs["tools"]))
+    )
 
     turn = next(m for m in bodies[-1]["messages"] if m["role"] == "assistant")
     assert [list(block) for block in turn["content"]] == [
