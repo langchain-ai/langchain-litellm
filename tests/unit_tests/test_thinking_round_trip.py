@@ -988,6 +988,12 @@ def _entry(group: str, model: str, **extra: Any) -> dict[str, Any]:
             "arn",
             True,
         ),
+        (
+            [_entry("main", f"bedrock/converse/{ARN}", base_model=CLAUDE_ON_BEDROCK)],
+            {},
+            "arn",
+            True,
+        ),
     ],
     ids=[
         "content-policy-fallback",
@@ -996,6 +1002,7 @@ def _entry(group: str, model: str, **extra: Any) -> dict[str, Any]:
         "deployment-base-url",
         "deployment-provider",
         "model-info-base-model",
+        "deployment-base-model",
     ],
 )
 def test_router_resolves_each_deployment_like_the_base(
@@ -1017,6 +1024,23 @@ def test_router_resolves_each_deployment_like_the_base(
     llm.invoke(_history(history))
 
     assert ("thinking_blocks" in _assistant_sent(captured)) is forwarded
+
+
+def test_a_call_level_key_beats_the_deployments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Router sends a call's own keys over its deployment's, so the name does too."""
+    captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
+    router = _router_of(
+        [_entry("main", "anthropic/kimi-for-coding", api_base=KIMI_BASE)]
+    )
+    llm = ChatLiteLLMRouter(router=router, model_name="main")
+
+    llm.invoke(
+        _history(endpoint("anthropic/kimi-for-coding", GATEWAY)), api_base=GATEWAY
+    )
+
+    assert "thinking_blocks" in _assistant_sent(captured)
 
 
 def test_a_group_whose_deployments_differ_has_no_endpoint() -> None:

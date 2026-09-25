@@ -28,8 +28,6 @@ from langchain_litellm.chat_models.litellm import (
     _create_usage_metadata,
     _get_field,
     _keep_thinking_blocks,
-    _litellm_providers,
-    _signing_endpoint,
     _ThinkingBlockAssembler,
 )
 
@@ -124,48 +122,27 @@ class ChatLiteLLMRouter(ChatLiteLLM):
     def _thinking_endpoint(self, params: dict[str, Any]) -> str | None:
         """The one signing endpoint every deployment this request can reach shares.
 
-        The Router picks a deployment per request and re-sends the same messages to
-        any fallback, so thinking goes back only for a group with no fallback and no
-        alias whose deployments all sign at the same endpoint.
+        The Router re-sends the same messages to any fallback, and an alias points
+        the group elsewhere, so a router with either replays nothing. Each deployment
+        of the group resolves as a direct call would, the call's keys over its own.
         """
         group = params.get("model")
         router = self.router
-        if not isinstance(group, str) or any(
-            params.get(key) for key in _FALLBACK_SETTINGS
+        if group in (getattr(router, "model_group_alias", None) or {}) or any(
+            params.get(key) or getattr(router, key, None) for key in _FALLBACK_SETTINGS
         ):
             return None
-        if getattr(router, "default_fallbacks", None):
-            return None
-        # The Router also matches a fallback keyed by the group minus its provider.
-        names = {group, "*"}
-        prefix, _, bare = group.partition("/")
-        if bare and prefix in _litellm_providers():
-            names.add(bare)
-        for setting in _FALLBACK_SETTINGS:
-            for mapping in getattr(router, setting, None) or []:
-                if not isinstance(mapping, dict) or names & mapping.keys():
-                    return None
-        if group in (getattr(router, "model_group_alias", None) or {}):
-            return None
+        call = {key: value for key, value in params.items() if key != "model"}
         endpoints = set()
         for entry in router.model_list or []:
             if entry.get("model_name") != group:
                 continue
-            deployment = entry.get("litellm_params") or {}
-            # Call-level keys override the deployment's, and base_url beats api_base.
-            base = (params.get("base_url") or deployment.get("base_url")) or (
-                params.get("api_base") or deployment.get("api_base")
-            )
-            endpoints.add(
-                _signing_endpoint(
-                    deployment.get("model"),
-                    params.get("custom_llm_provider")
-                    or deployment.get("custom_llm_provider"),
-                    base,
-                    deployment.get("base_model")
-                    or (entry.get("model_info") or {}).get("base_model"),
+            deployment = {**(entry.get("litellm_params") or {}), **call}
+            if not deployment.get("base_model"):
+                deployment["base_model"] = (entry.get("model_info") or {}).get(
+                    "base_model"
                 )
-            )
+            endpoints.add(super()._thinking_endpoint(deployment))
         return endpoints.pop() if len(endpoints) == 1 else None
 
     def completion_with_retry(
