@@ -505,8 +505,12 @@ def test_blocks_never_go_to_an_endpoint_that_did_not_sign_them() -> None:
     [
         [SIGNED],
         [*signed_at(ANTHROPIC, SIGNED), *signed_at(KIMI, SECOND)],
+        [
+            *signed_at(ANTHROPIC, SIGNED),
+            *signed_at(ANTHROPIC, SECOND, before="0" * 16),
+        ],
     ],
-    ids=["no-origin", "mixed-origins"],
+    ids=["no-origin", "mixed-origins", "mixed-histories"],
 )
 def test_a_turn_goes_back_only_when_every_block_names_the_endpoint(
     blocks: list[dict[str, Any]],
