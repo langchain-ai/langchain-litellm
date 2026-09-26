@@ -228,7 +228,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             messages,
             message_dicts,
             self._thinking_endpoint(params),
-            params.get("tools"),
+            params,
         )
 
         response = self.completion_with_retry(
@@ -266,7 +266,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             messages,
             message_dicts,
             self._thinking_endpoint(params),
-            params.get("tools"),
+            params,
         )
         thinking = _ThinkingBlockAssembler(*binding) if binding else None
         first_chunk_yielded = False
@@ -367,7 +367,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             messages,
             message_dicts,
             self._thinking_endpoint(params),
-            params.get("tools"),
+            params,
         )
         thinking = _ThinkingBlockAssembler(*binding) if binding else None
         first_chunk_yielded = False
@@ -467,7 +467,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             messages,
             message_dicts,
             self._thinking_endpoint(params),
-            params.get("tools"),
+            params,
         )
 
         response = await self.acompletion_with_retry(

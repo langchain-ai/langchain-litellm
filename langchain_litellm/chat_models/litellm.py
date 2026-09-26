@@ -129,6 +129,13 @@ _CLAUDE_HOSTS = frozenset({"bedrock", "vertex_ai", "azure_ai"})
 _ORIGIN = "origin"
 # Where it records the history it followed, which a replay must send unchanged.
 _PREFIX = "prefix"
+# A prefix no history matches, for a block streamed after its reply's text or tool
+# call: litellm rebuilds a turn thinking first, so it would move the block.
+_AFTER_REPLY = "after-reply"
+# Settings litellm turns into the tools a request carries.
+_TOOL_SETTINGS = ("tools", "functions", "web_search_options", "response_format")
+# Roles litellm lifts into the system prompt, wherever they sit.
+_SYSTEM_ROLES = frozenset({"system", "developer"})
 # Settings that never move a call elsewhere; deployment_id sends it to Azure. Any
 # other setting with a value turns replay off, so an unknown one fails closed.
 _NON_ROUTING_PARAMS = (
@@ -320,8 +327,15 @@ class _ThinkingBlockAssembler:
         self._origin = origin
         self._prefix = prefix
         self._pending: list[str] = []
+        self._replied = False
 
-    def feed(self, blocks: Any) -> list[dict[str, Any]]:
+    def feed(self, blocks: Any, replied: bool = False) -> list[dict[str, Any]]:
+        """Take one delta's blocks; ``replied`` says it also carried text or a tool call."""
+        completed = self._completed(blocks)
+        self._replied = self._replied or replied
+        return completed
+
+    def _completed(self, blocks: Any) -> list[dict[str, Any]]:
         completed: list[dict[str, Any]] = []
         if not isinstance(blocks, list):
             return completed
@@ -345,7 +359,8 @@ class _ThinkingBlockAssembler:
         return completed
 
     def _stored(self, blocks: list[Any]) -> list[dict[str, Any]]:
-        return _stored_thinking_blocks(blocks, self._origin, self._prefix)
+        prefix = _AFTER_REPLY if self._replied else self._prefix
+        return _stored_thinking_blocks(blocks, self._origin, prefix)
 
 
 def _keep_thinking_blocks(
@@ -377,23 +392,32 @@ def _keep_thinking_blocks(
     return result
 
 
+class _UndigestableError(Exception):
+    """A message JSON cannot encode, so no later request could match its history."""
+
+
 def _as_sent(value: Any) -> bytes:
-    return json.dumps(
-        value, sort_keys=True, separators=(",", ":"), default=str
-    ).encode()
+    try:
+        sent = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    except (TypeError, ValueError, RecursionError) as error:
+        raise _UndigestableError from error
+    return sent.encode()
 
 
 class _HistoryDigest:
-    """Digest what a turn follows as Anthropic checks it: the tools, every system
-    message, which litellm lifts to the top wherever it sits, then the rest in order.
+    """Digest what a turn follows as Anthropic checks it: the settings litellm turns
+    into tools, every message litellm lifts into the system prompt, then the rest.
     """
 
-    def __init__(self, tools: Any, message_dicts: Sequence[Mapping[str, Any]]) -> None:
-        system = [d for d in message_dicts if d.get("role") == "system"]
+    def __init__(
+        self, params: Mapping[str, Any], message_dicts: Sequence[Mapping[str, Any]]
+    ) -> None:
+        tools = {k: params[k] for k in _TOOL_SETTINGS if params.get(k) is not None}
+        system = [d for d in message_dicts if d.get("role") in _SYSTEM_ROLES]
         self._running = hashlib.sha256(_as_sent([tools, system]))
 
     def add(self, message_dict: Mapping[str, Any]) -> None:
-        if message_dict.get("role") != "system":
+        if message_dict.get("role") not in _SYSTEM_ROLES:
             self._running.update(_as_sent(message_dict))
 
     def digest(self) -> str:
@@ -423,18 +447,22 @@ def _replayable_blocks(
             "Not replaying a turn's thinking blocks: another endpoint signed them."
         )
         return []
-    if any(_get_field(block, _PREFIX) != prefix for block in stored):
-        logger.debug(
-            "Not replaying a turn's thinking blocks: the history before them changed."
-        )
-        return []
     blocks = _signed_thinking_blocks(stored)
-    # litellm rebuilds a turn as its thinking, then its text, then its tool calls.
-    if len(blocks) > 1 and (
-        message_dict.get("tool_calls") or message_dict.get("content")
+    # litellm rebuilds a turn as its thinking, then its text, then its tool calls. A
+    # reply stops at its one tool call, so blocks before it alone keep their order.
+    if any(_get_field(block, _PREFIX) == _AFTER_REPLY for block in stored) or (
+        len(blocks) > 1
+        and (
+            message_dict.get("content") or len(message_dict.get("tool_calls") or []) > 1
+        )
     ):
         logger.debug(
             "Not replaying a turn's thinking blocks: litellm would reorder them."
+        )
+        return []
+    if any(_get_field(block, _PREFIX) != prefix for block in stored):
+        logger.debug(
+            "Not replaying a turn's thinking blocks: the history before them changed."
         )
         return []
     return blocks
@@ -444,16 +472,19 @@ def _replayable_turns(
     messages: Sequence[BaseMessage],
     message_dicts: list[dict[str, Any]],
     endpoint: str,
-    tools: Any,
+    params: Mapping[str, Any],
 ) -> dict[int, list[dict[str, Any]]]:
     """The blocks each turn may carry back, by index.
 
     A turn is checked against the history before it as it would be sent, since an
-    earlier turn's replayed blocks are part of it. Nothing goes back unless the last
-    tool-call turn does: litellm drops thinking for a loop whose last tool call has
-    none only when no turn carries any.
+    earlier turn's replayed blocks are part of it. Under modify_params, litellm drops
+    requested thinking for a loop whose last tool call has none, but only when no
+    turn carries any; there alone, nothing goes back unless that turn does.
     """
-    history = _HistoryDigest(tools, message_dicts)
+    rescued = litellm.modify_params and bool(
+        params.get("thinking") or params.get("reasoning_effort")
+    )
+    history = _HistoryDigest(params, message_dicts)
     replayable: dict[int, list[dict[str, Any]]] = {}
     last_tool_call_goes = True
     for index, message in enumerate(messages):
@@ -468,14 +499,14 @@ def _replayable_turns(
             if message_dict.get("tool_calls"):
                 last_tool_call_goes = bool(blocks)
         history.add(message_dict)
-    return replayable if last_tool_call_goes else {}
+    return {} if rescued and not last_tool_call_goes else replayable
 
 
 def _attach_thinking_blocks(
     messages: Sequence[BaseMessage],
     message_dicts: list[dict[str, Any]],
     endpoint: str | None,
-    tools: Any,
+    params: Mapping[str, Any],
 ) -> tuple[str, str] | None:
     """Hand back the thinking blocks ``endpoint``, this request's only one, signed
     after exactly the history that precedes each turn now, as Anthropic requires.
@@ -492,18 +523,26 @@ def _attach_thinking_blocks(
         if held:
             logger.debug("Not replaying thinking blocks: no single signing endpoint.")
         return None
-    replayable: dict[int, list[dict[str, Any]]] = {}
-    if held and len(messages) != len(message_dicts):
-        logger.warning("Not replaying thinking blocks: messages and dicts differ.")
-    elif held:
-        replayable = _replayable_turns(messages, message_dicts, endpoint, tools)
-    history = _HistoryDigest(tools, message_dicts)
-    for index, message_dict in enumerate(message_dicts):
-        if index in replayable:
-            message_dict = message_dicts[index] = _with_blocks(
-                message_dict, replayable[index]
-            )
-        history.add(message_dict)
+    try:
+        replayable: dict[int, list[dict[str, Any]]] = {}
+        if held and len(messages) != len(message_dicts):
+            logger.warning("Not replaying thinking blocks: messages and dicts differ.")
+        elif held:
+            replayable = _replayable_turns(messages, message_dicts, endpoint, params)
+        sent = [
+            _with_blocks(message_dict, replayable[index])
+            if index in replayable
+            else message_dict
+            for index, message_dict in enumerate(message_dicts)
+        ]
+        history = _HistoryDigest(params, sent)
+        for message_dict in sent:
+            history.add(message_dict)
+    except _UndigestableError:
+        # Such content still goes out; it just cannot be matched on a later request.
+        logger.debug("Not replaying thinking blocks: the history cannot be digested.")
+        return None
+    message_dicts[:] = sent
     return endpoint, history.digest()
 
 
@@ -728,7 +767,10 @@ def _convert_delta_to_message_chunk(
     if reasoning_content:
         additional_kwargs["reasoning_content"] = reasoning_content
     if thinking is not None:
-        thinking_blocks = thinking.feed(_get_field(delta, "thinking_blocks"))
+        thinking_blocks = thinking.feed(
+            _get_field(delta, "thinking_blocks"),
+            replied=bool(content or raw_tool_calls),
+        )
         if thinking_blocks:
             additional_kwargs["thinking_blocks"] = thinking_blocks
 
@@ -1298,7 +1340,7 @@ class ChatLiteLLM(BaseChatModel):
             messages,
             message_dicts,
             self._thinking_endpoint(params),
-            params.get("tools"),
+            params,
         )
         response = self.completion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
@@ -1374,7 +1416,7 @@ class ChatLiteLLM(BaseChatModel):
             messages,
             message_dicts,
             self._thinking_endpoint(params),
-            params.get("tools"),
+            params,
         )
         thinking = _ThinkingBlockAssembler(*binding) if binding else None
         default_chunk_class = AIMessageChunk
@@ -1474,7 +1516,7 @@ class ChatLiteLLM(BaseChatModel):
             messages,
             message_dicts,
             self._thinking_endpoint(params),
-            params.get("tools"),
+            params,
         )
         thinking = _ThinkingBlockAssembler(*binding) if binding else None
         default_chunk_class = AIMessageChunk
@@ -1578,7 +1620,7 @@ class ChatLiteLLM(BaseChatModel):
             messages,
             message_dicts,
             self._thinking_endpoint(params),
-            params.get("tools"),
+            params,
         )
         response = await self.acompletion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
