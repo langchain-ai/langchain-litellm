@@ -1233,9 +1233,11 @@ def test_bind_tools_rejects_a_function_choice_naming_no_bound_function(
     """Only a bound function tool can be forced by a function choice."""
     llm = ChatLiteLLM(model="gpt-4o-mini", api_key="fake")
 
-    with pytest.raises(
-        ValueError, match=re.escape(f"only provided tools were {function_names}")
-    ):
+    message = (
+        f"tool_choice names {name!r}, but the bound function tools are "
+        f"{function_names}."
+    )
+    with pytest.raises(ValueError, match=re.escape(message)):
         llm.bind_tools(
             tools, tool_choice={"type": "function", "function": {"name": name}}
         )
