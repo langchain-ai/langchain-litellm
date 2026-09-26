@@ -3,6 +3,7 @@
 from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Any
 
+import litellm
 from langchain_core.callbacks.manager import (
     AsyncCallbackManagerForLLMRun,
     CallbackManagerForLLMRun,
@@ -29,6 +30,7 @@ from langchain_litellm.chat_models.litellm import (
     _get_field,
     _keep_thinking_blocks,
     _rejoin_split_reply,
+    _sends_manual_thinking,
     _ThinkingBlockAssembler,
 )
 
@@ -38,6 +40,11 @@ _FALLBACK_SETTINGS = (
     "context_window_fallbacks",
     "content_policy_fallbacks",
 )
+
+
+def _without_none(params: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in params.items() if value is not None}
+
 
 token_usage_key_name = "token_usage"  # nosec # incorrectly flagged as password
 model_extra_key_name = "model_extra"  # nosec # incorrectly flagged as password
@@ -137,12 +144,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         the provider's model name at all, so the base implementation would miss a
         Claude deployment routed under an unrelated alias.
         """
-        alias = self.model_name or self.model
-        matched = [
-            entry
-            for entry in self.router.model_list or []
-            if entry.get("model_name") == alias
-        ]
+        matched = self._group_entries()
         if not matched:
             return super()._is_claude_model()
         # A model group can fan across providers, so any Claude deployment counts.
@@ -211,6 +213,46 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                 )
             deployments.append(deployment)
         return deployments
+
+    def _thinking_refuses_forced_tools(self, overrides: Mapping[str, Any]) -> bool:
+        """Answer for the Claude deployments the Router may pick.
+
+        A deployment or the Router's defaults can set thinking alone. The caller's
+        params win over the defaults, and litellm's Router decides what they replace
+        on the deployment where it has a rule for it.
+        """
+        matched = self._group_entries()
+        if not matched:
+            return super()._thinking_refuses_forced_tools(overrides)
+        request = {
+            **_without_none(self.router.default_litellm_params),
+            **_without_none({**self.model_kwargs, **overrides}),
+        }
+        replace = getattr(
+            litellm.Router, "_deployment_params_with_request_reasoning_override", None
+        )
+        return any(
+            "claude" in str(params.get("model", "")).lower()
+            and _sends_manual_thinking(
+                params["model"],
+                params.get("custom_llm_provider"),
+                params.get("api_base"),
+                {
+                    **_without_none(replace(params, request) if replace else params),
+                    **request,
+                },
+            )
+            for params in (entry.get("litellm_params", {}) for entry in matched)
+        )
+
+    def _group_entries(self) -> list[dict[str, Any]]:
+        """The ``model_list`` entries this model's alias routes to."""
+        alias = self.model_name or self.model
+        return [
+            entry
+            for entry in self.router.model_list or []
+            if entry.get("model_name") == alias
+        ]
 
     def completion_with_retry(
         self, run_manager: CallbackManagerForLLMRun | None = None, **kwargs: Any
