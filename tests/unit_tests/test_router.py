@@ -1,6 +1,7 @@
 """Test router chat model integration."""
 
 import json
+import logging
 from collections.abc import Callable
 from typing import Any
 from unittest.mock import patch
@@ -430,6 +431,99 @@ def test_router_is_claude_model_reads_the_matching_deployment() -> None:
     )
 
     assert ChatLiteLLMRouter(router=router, model_name="mixed")._is_claude_model()
+
+
+_THINKING = {"thinking": {"type": "enabled", "budget_tokens": 1024}}
+_LOOKUP = {"type": "function", "function": {"name": "lookup", "parameters": {}}}
+
+
+def _claude_router(
+    deployment: dict[str, Any] | None = None, defaults: dict[str, Any] | None = None
+) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5",
+                    "api_key": "k",
+                    **(deployment or {}),
+                },
+            }
+        ],
+        default_litellm_params=defaults,
+    )
+
+
+@pytest.mark.parametrize(
+    ("router", "model_kwargs", "bind_kwargs"),
+    [
+        (lambda: _claude_router(deployment=_THINKING), {}, {}),
+        (lambda: _claude_router(defaults=dict(_THINKING)), {}, {}),
+        (_claude_router, _THINKING, {}),
+        (_claude_router, {}, _THINKING),
+    ],
+    ids=["deployment", "router-defaults", "model-kwargs", "bind-kwargs"],
+)
+def test_router_downgrades_a_forced_choice_for_a_thinking_deployment(
+    router: Callable[[], litellm.Router],
+    model_kwargs: dict[str, Any],
+    bind_kwargs: dict[str, Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The Router picks the deployment, so thinking can be configured there alone."""
+    llm = ChatLiteLLMRouter(router=router(), model_kwargs=model_kwargs)
+
+    with caplog.at_level(
+        logging.WARNING, logger="langchain_litellm.chat_models.litellm"
+    ):
+        bound = llm.bind_tools([_LOOKUP], tool_choice="required", **bind_kwargs)
+
+    assert bound.kwargs["tool_choice"] == "auto"  # type: ignore[attr-defined]
+    assert "incompatible with thinking" in caplog.text
+
+
+def test_router_keeps_a_forced_choice_no_claude_deployment_refuses() -> None:
+    """Only a Claude deployment with manual thinking refuses the forced tool."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mixed",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-6",
+                    "api_key": "k",
+                    "reasoning_effort": "high",
+                },
+            },
+            {
+                "model_name": "mixed",
+                "litellm_params": {
+                    "model": "deepseek/deepseek-chat",
+                    "api_key": "k",
+                    **_THINKING,
+                },
+            },
+        ]
+    )
+
+    bound = ChatLiteLLMRouter(router=router, model_name="mixed").bind_tools(
+        [_LOOKUP], tool_choice="required"
+    )
+
+    assert bound.kwargs["tool_choice"] == "required"  # type: ignore[attr-defined]
+
+
+def test_router_structured_output_stops_forcing_for_a_thinking_deployment() -> None:
+    """Structured output reads the same deployments as bind_tools."""
+    llm = ChatLiteLLMRouter(router=_claude_router(deployment=_THINKING))
+
+    with pytest.warns(UserWarning, match="Structured output via function calling"):
+        structured = llm.with_structured_output(
+            {"title": "Answer", "type": "object", "properties": {}},
+            method="function_calling",
+        )
+
+    assert structured.first.kwargs["tool_choice"] is None  # type: ignore[attr-defined]
 
 
 def test_router_generate_does_not_inherit_a_streaming_default() -> None:

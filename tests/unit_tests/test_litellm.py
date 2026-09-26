@@ -6,6 +6,7 @@ import logging
 import re
 import subprocess
 import sys
+import warnings
 from collections import OrderedDict, defaultdict
 from pathlib import Path
 from typing import Any
@@ -1073,7 +1074,7 @@ def test_bind_tools_downgraded_with_thinking(
     is enabled, so the model can produce CoT text before tool calls.
     """
     llm = ChatLiteLLM(
-        model="anthropic/claude-sonnet-4-20250514",
+        model="anthropic/claude-sonnet-4-5",
         api_key="fake",
         model_kwargs=_THINKING_KWARGS,
     )
@@ -1083,6 +1084,66 @@ def test_bind_tools_downgraded_with_thinking(
         bound = llm.bind_tools([_dummy_tool], tool_choice=tool_choice)
     assert bound.kwargs["tool_choice"] == "auto"  # type: ignore[attr-defined]
     assert "incompatible with thinking" in caplog.text
+
+
+# Manual thinking for these on every supported version: set by the caller, or mapped
+# so by litellm.
+_MANUAL_THINKING = [
+    ("anthropic/claude-sonnet-4-5", {}, _THINKING_KWARGS),
+    ("anthropic/claude-sonnet-4-5", {"reasoning_effort": "high"}, {}),
+    ("anthropic/claude-sonnet-4-5", {}, {"reasoning_effort": "high"}),
+    ("anthropic/claude-fable-5-1", _THINKING_KWARGS, {}),
+]
+_MANUAL_THINKING_IDS = [
+    "thinking-bound",
+    "effort-in-model-kwargs",
+    "effort-bound",
+    "manual-set-by-the-caller",
+]
+
+# ...and adaptive thinking for these, beside which Anthropic accepts a forced tool.
+_ADAPTIVE_THINKING = [
+    ("anthropic/claude-sonnet-4-6", {"thinking": {"type": "adaptive"}}),
+    ("anthropic/claude-sonnet-4-6", {"reasoning_effort": "high"}),
+]
+_ADAPTIVE_THINKING_IDS = ["adaptive", "effort"]
+
+
+@pytest.mark.parametrize(
+    ("model", "model_kwargs", "bind_kwargs"),
+    _MANUAL_THINKING,
+    ids=_MANUAL_THINKING_IDS,
+)
+def test_bind_tools_downgraded_wherever_thinking_is_set(
+    model: str,
+    model_kwargs: dict[str, Any],
+    bind_kwargs: dict[str, Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Each of these turns manual thinking on for the call, so each needs the downgrade."""
+    llm = ChatLiteLLM(model=model, api_key="fake", model_kwargs=model_kwargs)
+    with caplog.at_level(
+        logging.WARNING, logger="langchain_litellm.chat_models.litellm"
+    ):
+        bound = llm.bind_tools([_dummy_tool], tool_choice="required", **bind_kwargs)
+    assert bound.kwargs["tool_choice"] == "auto"  # type: ignore[attr-defined]
+    assert "incompatible with thinking" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("model", "model_kwargs"), _ADAPTIVE_THINKING, ids=_ADAPTIVE_THINKING_IDS
+)
+def test_bind_tools_keeps_a_forced_choice_beside_adaptive_thinking(
+    model: str, model_kwargs: dict[str, Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Anthropic refuses a forced tool only beside manual thinking."""
+    llm = ChatLiteLLM(model=model, api_key="fake", model_kwargs=model_kwargs)
+    with caplog.at_level(
+        logging.WARNING, logger="langchain_litellm.chat_models.litellm"
+    ):
+        bound = llm.bind_tools([_dummy_tool], tool_choice="required")
+    assert bound.kwargs["tool_choice"] == "required"  # type: ignore[attr-defined]
+    assert "incompatible with thinking" not in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -1288,9 +1349,17 @@ def test_bind_tools_rejects_a_function_choice_naming_no_bound_function(
         )
 
 
-def test_with_structured_output_function_calling_warns_and_raises_for_claude_thinking() -> (
-    None
-):
+@pytest.mark.parametrize(
+    ("model", "model_kwargs"),
+    [
+        ("anthropic/claude-sonnet-4-5", _THINKING_KWARGS),
+        ("anthropic/claude-sonnet-4-5", {"reasoning_effort": "high"}),
+    ],
+    ids=["thinking", "effort"],
+)
+def test_with_structured_output_function_calling_warns_and_raises_for_claude_thinking(
+    model: str, model_kwargs: dict[str, Any]
+) -> None:
     """Claude thinking should not silently fall back to plain-text structured output."""
     bind_kwargs: dict[str, Any] = {}
 
@@ -1299,11 +1368,7 @@ def test_with_structured_output_function_calling_warns_and_raises_for_claude_thi
             bind_kwargs.update(kwargs)
             return RunnableLambda(lambda _: AIMessage(content="plain text"))
 
-    llm = _FakeChatLiteLLM(
-        model="anthropic/claude-sonnet-4-20250514",
-        api_key="fake",
-        model_kwargs=_THINKING_KWARGS,
-    )
+    llm = _FakeChatLiteLLM(model=model, api_key="fake", model_kwargs=model_kwargs)
 
     with pytest.warns(UserWarning, match="Structured output via function calling"):
         structured = llm.with_structured_output(
@@ -1315,6 +1380,26 @@ def test_with_structured_output_function_calling_warns_and_raises_for_claude_thi
         structured.invoke("Return structured output.")
 
 
+@pytest.mark.parametrize(
+    ("model", "model_kwargs"), _ADAPTIVE_THINKING, ids=_ADAPTIVE_THINKING_IDS
+)
+def test_with_structured_output_forces_its_tool_beside_adaptive_thinking(
+    model: str, model_kwargs: dict[str, Any]
+) -> None:
+    """Adaptive thinking accepts a forced tool, so function calling keeps forcing it."""
+    llm = ChatLiteLLM(model=model, api_key="fake", model_kwargs=model_kwargs)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        structured = llm.with_structured_output(
+            _StructuredResponse, method="function_calling"
+        )
+
+    assert not [w for w in caught if "Structured output" in str(w.message)]
+    bound = structured.first  # type: ignore[attr-defined]
+    assert bound.kwargs["tool_choice"] == "required"
+
+
 def test_with_structured_output_include_raw_preserves_raw_for_claude_thinking() -> None:
     """`include_raw` should surface the parsing error without dropping the raw message."""
 
@@ -1323,7 +1408,7 @@ def test_with_structured_output_include_raw_preserves_raw_for_claude_thinking() 
             return RunnableLambda(lambda _: AIMessage(content="plain text"))
 
     llm = _FakeChatLiteLLM(
-        model="anthropic/claude-sonnet-4-20250514",
+        model="anthropic/claude-sonnet-4-5",
         api_key="fake",
         model_kwargs=_THINKING_KWARGS,
     )
