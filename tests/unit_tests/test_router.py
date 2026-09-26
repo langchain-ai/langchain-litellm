@@ -1,5 +1,6 @@
 """Test router chat model integration."""
 
+import json
 from collections.abc import Callable
 from typing import Any
 from unittest.mock import patch
@@ -16,8 +17,10 @@ from tests.utils import (
     function_call_item,
     make_router,
     message_item,
+    responses_api_events,
     responses_api_reply,
     serve_http,
+    web_search_call_item,
 )
 
 
@@ -261,6 +264,78 @@ async def test_router_split_reply_keeps_its_tool_calls(
     assert [
         (call["name"], call["args"], call["id"]) for call in message.tool_calls
     ] == [("get_weather", {"city": "Paris"}, "call_1")]
+
+
+def get_weather(city: str) -> str:
+    """Report the weather in a city."""
+    return city
+
+
+def _streamed_search_and_answer(reply: dict[str, Any]) -> list[dict[str, Any]]:
+    """The events the Responses API streams for ``reply``: a web search, then text."""
+    search, answer = reply["output"]
+    return responses_api_events(
+        {
+            "type": "response.created",
+            "response": {**reply, "status": "in_progress", "output": []},
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {**search, "status": "in_progress"},
+        },
+        *(
+            {
+                "type": f"response.web_search_call.{state}",
+                "output_index": 0,
+                "item_id": search["id"],
+            }
+            for state in ("in_progress", "searching", "completed")
+        ),
+        {"type": "response.output_item.done", "output_index": 0, "item": search},
+        {
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": answer["id"],
+            "content_index": 0,
+            "delta": answer["content"][0]["text"],
+            "logprobs": [],
+        },
+        {"type": "response.completed", "response": reply},
+    )
+
+
+@pytest.mark.parametrize("method", ["invoke", "ainvoke", "stream", "astream"])
+@pytest.mark.asyncio
+async def test_router_sends_built_in_tools_through_a_responses_deployment(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    """Chat Completions rejects built-in tools, so the deployment's name routes them.
+
+    The search runs on the provider's side, so it never comes back as a tool call.
+    """
+    reply = responses_api_reply(web_search_call_item(), message_item("Sunny."))
+    requests = serve_http(monkeypatch, reply, _streamed_search_and_answer(reply))
+    llm = ChatLiteLLMRouter(
+        router=_router_serving("openai/responses/gpt-4o-mini")
+    ).bind_tools([get_weather, {"type": "web_search"}], tool_choice="auto")
+
+    if method == "invoke":
+        message = llm.invoke("weather in Paris?")
+    elif method == "ainvoke":
+        message = await llm.ainvoke("weather in Paris?")
+    elif method == "stream":
+        message = _merge(list(llm.stream("weather in Paris?")))
+    else:
+        message = _merge([chunk async for chunk in llm.astream("weather in Paris?")])
+
+    assert [str(request.url) for request in requests] == [
+        "https://api.openai.com/v1/responses"
+    ]
+    tools = json.loads(requests[0].content)["tools"]
+    assert [tool["type"] for tool in tools] == ["function", "web_search"]
+    assert message.content == "Sunny."
+    assert message.tool_calls == []
 
 
 def test_router_n_above_one_keeps_each_completion(

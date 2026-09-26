@@ -1,3 +1,5 @@
+import json
+from collections.abc import Sequence
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -6,20 +8,32 @@ import pytest
 from litellm import Router
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from openai.types.chat import ChatCompletion
-from openai.types.responses import Response
+from openai.types.responses import Response, ResponseStreamEvent
+from pydantic import TypeAdapter
 
 
 def serve_http(
-    monkeypatch: pytest.MonkeyPatch, body: dict[str, Any]
+    monkeypatch: pytest.MonkeyPatch,
+    body: dict[str, Any],
+    events: Sequence[dict[str, Any]] = (),
 ) -> list[httpx.Request]:
     """Answer every request litellm sends with ``body``, in-process.
 
+    A request that asks to stream gets ``events`` as server-sent events instead.
     litellm sends async calls through its own aiohttp transport, not httpx's.
     """
     requests: list[httpx.Request] = []
+    stream = "".join(f"data: {json.dumps(event)}\n\n" for event in events).encode()
 
     def _reply(_: object, request: httpx.Request) -> httpx.Response:
         requests.append(request)
+        if json.loads(request.content).get("stream"):
+            return httpx.Response(
+                200,
+                content=stream,
+                headers={"content-type": "text/event-stream"},
+                request=request,
+            )
         return httpx.Response(200, json=body, request=request)
 
     async def _areply(transport: object, request: httpx.Request) -> httpx.Response:
@@ -54,6 +68,15 @@ def responses_api_reply(*output: dict[str, Any]) -> dict[str, Any]:
     return reply
 
 
+def responses_api_events(*events: dict[str, Any]) -> list[dict[str, Any]]:
+    """Responses API stream ``events`` in order, each checked by the openai SDK."""
+    numbered = [
+        {**event, "sequence_number": number} for number, event in enumerate(events)
+    ]
+    TypeAdapter(list[ResponseStreamEvent]).validate_python(numbered)
+    return numbered
+
+
 def message_item(*texts: str) -> dict[str, Any]:
     return {
         "type": "message",
@@ -72,6 +95,15 @@ def function_call_item(call_id: str, arguments: str) -> dict[str, Any]:
         "call_id": call_id,
         "name": "get_weather",
         "arguments": arguments,
+    }
+
+
+def web_search_call_item() -> dict[str, Any]:
+    return {
+        "type": "web_search_call",
+        "id": "ws_1",
+        "status": "completed",
+        "action": {"type": "search", "query": "weather in Paris"},
     }
 
 
