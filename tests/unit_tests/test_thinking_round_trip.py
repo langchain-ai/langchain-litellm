@@ -11,7 +11,6 @@ SSE parser and its clients all run.
 
 # stdlib
 import asyncio
-import copy
 import hashlib
 import json
 import logging
@@ -27,6 +26,7 @@ from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
     BaseMessage,
+    ChatMessage,
     HumanMessage,
     SystemMessage,
     ToolMessage,
@@ -77,18 +77,22 @@ def _as_sent(value: Any) -> bytes:
     ).encode()
 
 
+LIFTED = ("system", "developer")
+
+
 def prefix_of(
     before: list[dict[str, Any]],
     tools: Any = None,
-    system: list[dict[str, Any]] | None = None,
+    **shaping: Any,
 ) -> str:
-    """The stored digest of what a turn followed: its tools, every system message,
-    then the other messages before it, each as sent."""
-    if system is None:
-        system = [m for m in before if m["role"] == "system"]
-    running = hashlib.sha256(_as_sent([tools, system]))
+    """The stored digest of what a turn followed: the settings litellm turns into
+    tools, every system or developer message, then the rest before it, as sent."""
+    if tools is not None:
+        shaping["tools"] = tools
+    system = [m for m in before if m["role"] in LIFTED]
+    running = hashlib.sha256(_as_sent([shaping, system]))
     for message in before:
-        if message["role"] != "system":
+        if message["role"] not in LIFTED:
             running.update(_as_sent(message))
     return running.hexdigest()[:16]
 
@@ -481,7 +485,7 @@ def _turn(blocks: list[dict[str, Any]], content: Any = "") -> AIMessage:
 
 def _attached(message: AIMessage, endpoint: str | None) -> dict[str, Any]:
     message_dicts = [_convert_message_to_dict(message)]
-    _attach_thinking_blocks([message], message_dicts, endpoint, None)
+    _attach_thinking_blocks([message], message_dicts, endpoint, {})
     return message_dicts[0]
 
 
@@ -755,12 +759,32 @@ def test_blocks_are_captured_only_when_the_signer_is_known(
             ],
             False,
         ),
+        (
+            [
+                MONDAY,
+                QUESTION,
+                _turn(signed_at(ANTHROPIC, SIGNED, before=_asked_after(MONDAY))),
+                SUNNY,
+            ],
+            True,
+        ),
+        (
+            [
+                QUESTION,
+                _turn(signed_at(ANTHROPIC, SIGNED, before=ASKED)),
+                SUNNY,
+                ChatMessage(role="developer", content="Be brief."),
+            ],
+            False,
+        ),
     ],
     ids=[
         "appended-only",
         "system-prompt-changed",
         "system-message-added-later",
         "earlier-turns-trimmed",
+        "system-prompt-unchanged",
+        "developer-message-added-later",
     ],
 )
 def test_a_turn_goes_back_only_after_the_history_it_followed(
@@ -830,7 +854,7 @@ def test_a_later_turn_follows_the_earlier_one_as_it_was_sent() -> None:
     ]
     message_dicts = [_convert_message_to_dict(m) for m in messages]
 
-    binding = _attach_thinking_blocks(messages, message_dicts, ANTHROPIC, None)
+    binding = _attach_thinking_blocks(messages, message_dicts, ANTHROPIC, {})
 
     assert [d.get("thinking_blocks") for d in message_dicts] == [
         None,
@@ -842,24 +866,53 @@ def test_a_later_turn_follows_the_earlier_one_as_it_was_sent() -> None:
     assert binding == (ANTHROPIC, prefix_of(message_dicts))
 
 
-def test_nothing_goes_back_when_the_last_tool_call_turn_cannot() -> None:
-    """litellm drops thinking for a loop whose last tool-call turn has none only when
-    no turn carries any, so a partial replay would do worse than none."""
+ENABLED = {"type": "enabled", "budget_tokens": 1024}
+
+
+@pytest.mark.parametrize(
+    ("modify_params", "params", "first_goes_back"),
+    [
+        (False, {"thinking": ENABLED}, True),
+        (True, {"thinking": ENABLED}, False),
+        (True, {"reasoning_effort": "low"}, False),
+        (True, {}, True),
+    ],
+    ids=["default", "rescue-on-thinking", "rescue-on-effort", "nothing-to-rescue"],
+)
+def test_the_last_tool_call_turn_decides_only_where_litellm_can_rescue(
+    monkeypatch: pytest.MonkeyPatch,
+    modify_params: bool,
+    params: dict[str, Any],
+    first_goes_back: bool,
+) -> None:
+    """Under modify_params, litellm drops requested thinking for a loop whose last
+    tool-call turn has none, but only if no turn carries any. Anywhere else, holding
+    every turn back would only stop replay for the rest of the conversation."""
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
     later = AIMessage("", tool_calls=[{**TOOL_CALL, "id": "toolu_02"}])
     messages = [*_history(), later, ToolMessage("Mild", tool_call_id="toolu_02")]
     message_dicts = [_convert_message_to_dict(m) for m in messages]
-    unchanged = copy.deepcopy(message_dicts)
 
-    binding = _attach_thinking_blocks(messages, message_dicts, ANTHROPIC, None)
+    binding = _attach_thinking_blocks(messages, message_dicts, ANTHROPIC, params)
 
-    assert message_dicts == unchanged
-    assert binding == (ANTHROPIC, prefix_of(unchanged))
+    assert ("thinking_blocks" in message_dicts[1]) is first_goes_back
+    assert binding == (ANTHROPIC, prefix_of(message_dicts))
 
 
 @pytest.mark.parametrize(
     ("message", "replayed"),
     [
-        (_turn(signed_at(ANTHROPIC, SIGNED, SECOND)), False),
+        (_turn(signed_at(ANTHROPIC, SIGNED, SECOND)), True),
+        (
+            AIMessage(
+                "",
+                tool_calls=[TOOL_CALL, {**TOOL_CALL, "id": "toolu_02"}],
+                additional_kwargs={
+                    "thinking_blocks": signed_at(ANTHROPIC, SIGNED, SECOND)
+                },
+            ),
+            False,
+        ),
         (
             AIMessage(
                 "Checking.",
@@ -879,18 +932,119 @@ def test_nothing_goes_back_when_the_last_tool_call_turn_cannot() -> None:
             True,
         ),
     ],
-    ids=["with-tool-calls", "with-text", "thinking-only"],
+    ids=["one-tool-call", "two-tool-calls", "with-text", "thinking-only"],
 )
 def test_a_turn_litellm_would_reorder_stays_behind(
     caplog: pytest.LogCaptureFixture, message: AIMessage, replayed: bool
 ) -> None:
     """litellm rebuilds a turn as its thinking, then its text, then its tool calls,
-    so several blocks around text or tool calls may not go back as they came."""
+    so several blocks around text or a second tool call may not go back as they
+    came. A reply stops at its one tool call, so blocks before it keep their order."""
     with caplog.at_level(logging.DEBUG, logger="langchain_litellm.chat_models.litellm"):
         sent = _attached(message, ANTHROPIC)
 
     assert ("thinking_blocks" in sent) is replayed
     assert ("litellm would reorder them" in caplog.text) is not replayed
+
+
+def test_a_redacted_block_goes_back_with_its_turn() -> None:
+    """Filtering on type == "thinking" would drop it and break the turn."""
+    sent = _attached(_turn(signed_at(ANTHROPIC, SIGNED, REDACTED)), ANTHROPIC)
+
+    assert sent["thinking_blocks"] == [SIGNED, REDACTED]
+
+
+def _deltas_of(*blocks: list[dict[str, Any]]) -> list[Any]:
+    """litellm's own parser on a reply streamed as these content blocks in order."""
+    events: list[dict[str, Any]] = []
+    for index, (start, *deltas) in enumerate(blocks):
+        events.append(
+            {"type": "content_block_start", "index": index, "content_block": start}
+        )
+        events += [
+            {"type": "content_block_delta", "index": index, "delta": d} for d in deltas
+        ]
+        events.append({"type": "content_block_stop", "index": index})
+    parser = ModelResponseIterator(
+        streaming_response=iter([]), sync_stream=True, json_mode=False
+    )
+    return [r.choices[0].delta for r in map(parser.chunk_parser, events) if r.choices]
+
+
+TEXT = [{"type": "text", "text": ""}, {"type": "text_delta", "text": "Checking."}]
+UPDATE = [
+    {"type": "thinking", "thinking": "", "signature": ""},
+    {"type": "thinking_delta", "thinking": "Now the tool."},
+    {"type": "signature_delta", "signature": "sig-update=="},
+]
+TOOL_USE = [
+    {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}},
+    {"type": "input_json_delta", "partial_json": '{"city": "Paris"}'},
+]
+
+
+@pytest.mark.parametrize(
+    ("blocks", "replayed"),
+    [((UPDATE, TEXT, TOOL_USE), True), ((TEXT, UPDATE, TOOL_USE), False)],
+    ids=["thinking-first", "thinking-after-text"],
+)
+def test_a_streamed_block_that_followed_the_reply_stays_behind(
+    caplog: pytest.LogCaptureFixture,
+    blocks: tuple[list[dict[str, Any]], ...],
+    replayed: bool,
+) -> None:
+    """A stream shows the order litellm's rebuild would lose: a block written after
+    text or a tool call would go back ahead of it."""
+    thinking = _ThinkingBlockAssembler(ANTHROPIC, NOTHING_BEFORE)
+    total: Any = None
+    for delta in _deltas_of(*blocks):
+        chunk = _convert_delta_to_message_chunk(delta, AIMessageChunk, thinking)
+        total = chunk if total is None else total + chunk
+    turn = AIMessage(
+        total.content,
+        tool_calls=total.tool_calls,
+        additional_kwargs={
+            "thinking_blocks": total.additional_kwargs["thinking_blocks"]
+        },
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="langchain_litellm.chat_models.litellm"):
+        sent = _attached(turn, ANTHROPIC)
+
+    assert ("thinking_blocks" in sent) is replayed
+    assert ("litellm would reorder them" in caplog.text) is not replayed
+
+
+@pytest.mark.parametrize(
+    "setting",
+    [{"web_search_options": {}}, {"response_format": {"type": "json_object"}}],
+    ids=["web-search", "response-format"],
+)
+def test_a_setting_litellm_turns_into_a_tool_is_part_of_the_history(
+    monkeypatch: pytest.MonkeyPatch, setting: dict[str, Any]
+) -> None:
+    """litellm adds a tool for these, and Anthropic counts every change to the tools."""
+    captured = _capture_calls(monkeypatch, ChatLiteLLM)
+    llm = ChatLiteLLM(model=CLAUDE, api_key="fake", model_kwargs=setting)
+    after_setting = prefix_of([_convert_message_to_dict(QUESTION)], **setting)
+
+    llm.invoke(_history())
+    assert "thinking_blocks" not in _assistant_sent(captured)
+    llm.invoke(_history(before=after_setting))
+    assert "thinking_blocks" in _assistant_sent(captured)
+
+
+def test_a_history_json_cannot_hold_goes_out_as_on_main(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keys JSON cannot sort must not break a call that works without the digest."""
+    captured = _capture_calls(monkeypatch, ChatLiteLLM)
+    odd = HumanMessage([{"type": "text", "text": "hi", "meta": {1: "a", "b": 2}}])
+
+    message = ChatLiteLLM(model=CLAUDE, api_key="fake").invoke([odd])
+
+    assert captured["messages"][0]["role"] == "user"
+    assert "thinking_blocks" not in message.additional_kwargs
 
 
 def test_a_changed_history_is_named_when_it_holds_blocks_back(
@@ -1494,7 +1648,7 @@ def test_only_assistant_turns_that_hold_blocks_get_them() -> None:
     messages = [*earlier, _turn(signed_at(ANTHROPIC, SIGNED, before=before))]
     message_dicts = [_convert_message_to_dict(m) for m in messages]
 
-    _attach_thinking_blocks(messages, message_dicts, ANTHROPIC, None)
+    _attach_thinking_blocks(messages, message_dicts, ANTHROPIC, {})
 
     assert ["thinking_blocks" in d for d in message_dicts] == [False, False, True]
 
