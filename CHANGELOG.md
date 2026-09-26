@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.10.0](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.9.0...langchain-litellm==0.10.0) (2026-09-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* **chat_models:** a tool_choice string other than auto, none, required or any is read as a tool name and must name a bound function tool, or bind_tools raises ValueError. On mistral/, codestral/ and Vertex AI Mistral models a tool name no longer forces a tool call, since litellm drops the function choice there; pass "required" to keep forcing. On Claude with thinking enabled other than through model_kwargs["thinking"], the named tool is now forced, which Anthropic rejects alongside thinking.
+* **chat_models:** `use_responses_api=True`, which `ChatLiteLLM` ignored, now sends calls to the Responses API, where litellm drops Chat Completions-only params such as `stop`, `n` and `seed`, and raises `ValueError` for a model litellm cannot bridge; `ChatLiteLLMRouter` raises `ValueError` for it. Drop the flag to stay on Chat Completions.
+
+### Features
+
+* **chat_models:** route calls through the Responses API with use_responses_api ([#301](https://github.com/langchain-ai/langchain-litellm/issues/301)) ([2a7a4a2](https://github.com/langchain-ai/langchain-litellm/commit/2a7a4a29fb7325827e47f654a7e1b127f634ecb3))
+
+
+### Bug Fixes
+
+* **chat_models:** downgrade a forced tool_choice wherever thinking is manual ([#313](https://github.com/langchain-ai/langchain-litellm/issues/313)) ([079aa08](https://github.com/langchain-ai/langchain-litellm/commit/079aa08c2322e71211292e1c2af2a763d30e8b6d))
+* **chat_models:** force the tool a string tool_choice names ([#311](https://github.com/langchain-ai/langchain-litellm/issues/311)) ([cad44b6](https://github.com/langchain-ai/langchain-litellm/commit/cad44b69dcedf38f19db77c883d16f0cb350b80d))
+* **chat_models:** rejoin a reply litellm splits across choices ([#307](https://github.com/langchain-ai/langchain-litellm/issues/307)) ([a6fe164](https://github.com/langchain-ai/langchain-litellm/commit/a6fe164375cc1651bd34247816733a6dfe66560d))
+* **chat_models:** replay signed thinking blocks to the endpoint that signed them ([#300](https://github.com/langchain-ai/langchain-litellm/issues/300)) ([5cfd986](https://github.com/langchain-ai/langchain-litellm/commit/5cfd986709e7b183a6f7188051a15227624cb6fc))
+* **chat_models:** stop bind_tools raising KeyError on a dict tool_choice ([#310](https://github.com/langchain-ai/langchain-litellm/issues/310)) ([9db3498](https://github.com/langchain-ai/langchain-litellm/commit/9db349870ccb4017d38f450c8f93b3eb0a781042))
+
 ## [0.9.0](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.8.1...langchain-litellm==0.9.0) (2026-09-24)
 
 
