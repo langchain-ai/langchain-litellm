@@ -81,9 +81,18 @@ WEATHER_TOOL = {
 }
 
 
+def _uncached(value: Any) -> Any:
+    """Anthropic lets a cache breakpoint move, so the digest ignores cache_control."""
+    if isinstance(value, dict):
+        return {k: _uncached(v) for k, v in value.items() if k != "cache_control"}
+    if isinstance(value, list):
+        return [_uncached(v) for v in value]
+    return value
+
+
 def _canonical(value: Any) -> bytes:
     return json.dumps(
-        value, sort_keys=True, separators=(",", ":"), default=str
+        _uncached(value), sort_keys=True, separators=(",", ":"), default=str
     ).encode()
 
 
@@ -1060,21 +1069,29 @@ def test_a_setting_litellm_turns_into_a_tool_is_part_of_the_history(
     assert "thinking_blocks" in _assistant_sent(captured)
 
 
+@pytest.mark.parametrize(
+    ("earlier", "level"),
+    [([], logging.DEBUG), (_history(), logging.WARNING)],
+    ids=["nothing-to-lose", "blocks-lost"],
+)
 def test_a_history_json_cannot_hold_goes_out_as_on_main(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    earlier: list[Any],
+    level: int,
 ) -> None:
     """Keys JSON cannot sort must not break a call that works without the digest."""
     captured = _capture_calls(monkeypatch, ChatLiteLLM)
     odd = HumanMessage([{"type": "text", "text": "hi", "meta": {1: "a", "b": 2}}])
 
     with caplog.at_level(logging.DEBUG, logger="langchain_litellm.chat_models.litellm"):
-        message = ChatLiteLLM(model=CLAUDE, api_key="fake").invoke([odd])
+        message = ChatLiteLLM(model=CLAUDE, api_key="fake").invoke([*earlier, odd])
 
-    assert captured["messages"][0]["role"] == "user"
+    assert captured["messages"][-1]["role"] == "user"
     assert "thinking_blocks" not in message.additional_kwargs
     assert [
         r.levelno for r in caplog.records if "cannot be digested" in r.getMessage()
-    ] == [logging.WARNING]
+    ] == [level]
 
 
 def _circular() -> dict[str, Any]:
@@ -1150,6 +1167,60 @@ def test_a_container_upload_counts_as_a_change_of_tools() -> None:
     _attach_thinking_blocks(messages, message_dicts, ANTHROPIC, {})
 
     assert "thinking_blocks" not in message_dicts[1]
+
+
+@pytest.mark.parametrize(
+    "file_block",
+    [
+        {"type": "file", "file_id": "file_01"},
+        {"type": "file", "file": {"file_id": "file_01"}},
+    ],
+    ids=["langchain-standard", "openai-format"],
+)
+def test_a_file_litellm_may_upload_counts_as_a_change_of_tools(
+    file_block: dict[str, Any],
+) -> None:
+    """litellm turns a file it cannot inline into a container upload, which adds its
+    code-execution tool."""
+    attached = HumanMessage([{"type": "text", "text": "See this."}, file_block])
+    messages = [*_history(), attached]
+    message_dicts = [_convert_message_to_dict(m) for m in messages]
+
+    _attach_thinking_blocks(messages, message_dicts, ANTHROPIC, {})
+
+    assert "thinking_blocks" not in message_dicts[1]
+
+
+def test_a_moved_cache_breakpoint_keeps_the_history() -> None:
+    """Anthropic lets cache_control be added, moved or removed between requests."""
+    question: list[str | dict[Any, Any]] = [
+        {"type": "text", "text": "What's the weather in Paris?"}
+    ]
+    cached = HumanMessage(
+        [{**cast(dict[str, Any], question[0]), "cache_control": {"type": "ephemeral"}}]
+    )
+    before = prefix_of(
+        [_convert_message_to_dict(HumanMessage(question))], dummy_tool=True
+    )
+    messages = [cached, _turn(signed_at(ANTHROPIC, SIGNED, before=before)), SUNNY]
+    message_dicts = [_convert_message_to_dict(m) for m in messages]
+
+    _attach_thinking_blocks(messages, message_dicts, ANTHROPIC, {})
+
+    assert message_dicts[1]["thinking_blocks"] == [SIGNED]
+
+
+def test_an_empty_tool_call_list_counts_as_litellm_counts_it() -> None:
+    """litellm adds its placeholder tool for a tool_calls key that is present at all."""
+    messages = [HumanMessage("hi"), AIMessage("x")]
+    message_dicts: list[dict[str, Any]] = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "x", "tool_calls": []},
+    ]
+
+    binding = _attach_thinking_blocks(messages, message_dicts, ANTHROPIC, {})
+
+    assert binding == (ANTHROPIC, prefix_of(message_dicts))
 
 
 def test_a_block_and_text_in_one_delta_count_the_block_first() -> None:
@@ -2106,6 +2177,55 @@ def test_a_router_applies_litellms_rescue_to_thinking_its_deployment_requests(
     )
 
     assert ("thinking_blocks" in _assistant_sent(captured)) is not modify_params
+
+
+TIME_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_time",
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+DATE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_date",
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+
+@pytest.mark.parametrize(("sent", "replayed"), [("merged", True), ("call-only", False)])
+def test_a_router_digests_its_deployment_tools_ahead_of_the_calls(
+    monkeypatch: pytest.MonkeyPatch, sent: str, replayed: bool
+) -> None:
+    """The Router sends a deployment's own tools, then the call's."""
+    captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
+    router = _router_of([_entry("main", CLAUDE, tools=[TIME_TOOL])])
+    llm = ChatLiteLLMRouter(router=router, model_name="main").bind_tools([WEATHER_TOOL])
+    call_tools = cast(Any, llm).kwargs["tools"]
+    tools = [TIME_TOOL, *call_tools] if sent == "merged" else call_tools
+
+    llm.invoke(_history(before=_asked_after(tools=tools)))
+
+    assert ("thinking_blocks" in _assistant_sent(captured)) is replayed
+
+
+def test_a_router_group_whose_deployments_add_different_tools_replays_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
+    router = _router_of(
+        [
+            _entry("main", CLAUDE, api_key="k1", tools=[TIME_TOOL]),
+            _entry("main", CLAUDE, api_key="k2", tools=[DATE_TOOL]),
+        ]
+    )
+    llm = ChatLiteLLMRouter(router=router, model_name="main").bind_tools([WEATHER_TOOL])
+
+    llm.invoke(_history(before=_asked_after(tools=cast(Any, llm).kwargs["tools"])))
+
+    assert "thinking_blocks" not in _assistant_sent(captured)
 
 
 def test_a_group_whose_deployments_differ_has_no_endpoint() -> None:
