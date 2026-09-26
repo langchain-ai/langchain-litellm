@@ -77,7 +77,6 @@ from langchain_core.runnables import Runnable, RunnablePassthrough
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import TypeBaseModel, is_basemodel_subclass
-from litellm.secret_managers.main import get_secret_bool
 from litellm.types.utils import Delta
 from pydantic import BaseModel, Field, model_validator
 from typing_extensions import is_typeddict
@@ -398,9 +397,20 @@ class _UndigestableError(Exception):
     """A message JSON cannot encode, so no later request could match its history."""
 
 
+def _uncached(value: Any) -> Any:
+    """``value`` without cache_control, which Anthropic lets move between requests."""
+    if isinstance(value, Mapping):
+        return {k: _uncached(v) for k, v in value.items() if k != "cache_control"}
+    if isinstance(value, list | tuple):
+        return [_uncached(v) for v in value]
+    return value
+
+
 def _canonical(value: Any) -> bytes:
     try:
-        sent = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+        sent = json.dumps(
+            _uncached(value), sort_keys=True, separators=(",", ":"), default=str
+        )
     except (TypeError, ValueError, RecursionError) as error:
         raise _UndigestableError from error
     return sent.encode()
@@ -416,13 +426,14 @@ class _HistoryDigest:
     ) -> None:
         tools = {k: params[k] for k in _TOOL_SETTINGS if params.get(k) is not None}
         # litellm adds a placeholder tool when none is bound and a turn holds a tool
-        # call, and a code-execution tool once the history holds a container upload.
+        # call, and a code-execution tool for a file it uploads rather than inlines.
         if "tools" not in tools and any(
             d.get("tool_calls") is not None for d in message_dicts
         ):
             tools["dummy_tool"] = True
         if any(
-            isinstance(block, Mapping) and block.get("type") == "container_upload"
+            isinstance(block, Mapping)
+            and block.get("type") in ("container_upload", "file")
             for d in message_dicts
             if isinstance(d.get("content"), list)
             for block in d["content"]
@@ -560,8 +571,9 @@ def _attach_thinking_blocks(
             history.add(message_dict)
     except _UndigestableError:
         # Such content still goes out; it just cannot be matched on a later request.
-        logger.warning(
-            "Not keeping or replaying thinking blocks: the history cannot be digested."
+        logger.log(
+            logging.WARNING if holds_blocks else logging.DEBUG,
+            "Not keeping or replaying thinking blocks: the history cannot be digested.",
         )
         return None
     message_dicts[:] = sent
@@ -1241,7 +1253,7 @@ class ChatLiteLLM(BaseChatModel):
             or litellm.model_fallbacks
             or litellm.cache is not None
             or litellm.use_litellm_proxy is True
-            or get_secret_bool("USE_LITELLM_PROXY") is True
+            or litellm.get_secret_bool("USE_LITELLM_PROXY") is True
         ):
             return None
         return endpoint

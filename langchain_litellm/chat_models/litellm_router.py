@@ -160,10 +160,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         return endpoints.pop()
 
     def _replay_params(self, params: dict[str, Any]) -> Mapping[str, Any]:
-        """The group's deployment as sent: every one has the same replay settings,
-        or the request has no endpoint and nothing here is read."""
-        deployments = self._deployments(params)
-        return deployments[0] if deployments else params
+        """The group's deployment as sent. With an endpoint there is at least one,
+        and every one has the same replay settings."""
+        return self._deployments(params)[0]
 
     def _deployments(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         """Each deployment of the called group, layered as the Router sends it."""
@@ -175,7 +174,15 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         for entry in getattr(router, "model_list", None) or []:
             if entry.get("model_name") != params.get("model"):
                 continue
-            deployment = {**(entry.get("litellm_params") or {}), **layered}
+            litellm_params = entry.get("litellm_params") or {}
+            deployment = {**litellm_params, **layered}
+            # The Router sends a deployment's own tools ahead of the call's.
+            tools = [
+                *(litellm_params.get("tools") or []),
+                *(layered.get("tools") or []),
+            ]
+            if tools:
+                deployment["tools"] = tools
             if not deployment.get("base_model"):
                 deployment["base_model"] = (entry.get("model_info") or {}).get(
                     "base_model"
