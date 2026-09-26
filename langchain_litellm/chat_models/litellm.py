@@ -616,6 +616,39 @@ def _rejoin_split_reply(choices: Sequence[Any], n: int | None) -> Sequence[Any]:
     return [{"message": message, "finish_reason": choices[-1].get("finish_reason")}]
 
 
+def _sends_manual_thinking(
+    model: str,
+    custom_llm_provider: str | None,
+    api_base: str | None,
+    params: Mapping[str, Any],
+) -> bool:
+    """Ask litellm whether ``params`` reach the provider as manual thinking.
+
+    Anthropic refuses a forced tool beside ``thinking.type == "enabled"`` but not
+    beside adaptive thinking, and litellm decides per model which one a call sends.
+    """
+    thinking = litellm.utils.validate_and_fix_thinking_param(params.get("thinking"))
+    effort = params.get("reasoning_effort")
+    if thinking is None and effort is None:
+        return False
+    try:
+        bare_model, provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+        )
+    except litellm.BadRequestError:
+        # An alias or routed name that litellm resolves only when the call is made.
+        return False
+    mapped = litellm.get_optional_params(
+        model=bare_model,
+        custom_llm_provider=provider,
+        drop_params=True,
+        thinking=thinking,
+        reasoning_effort=effort,
+        max_tokens=params.get("max_tokens"),
+    ).get("thinking")
+    return isinstance(mapped, dict) and mapped.get("type") == "enabled"
+
+
 class ChatLiteLLMException(Exception):
     """Exception raised for errors in the LiteLLM integration."""
 
@@ -1031,9 +1064,26 @@ class ChatLiteLLM(BaseChatModel):
 
     max_retries: int = 1
 
-    def _thinking_config(self) -> dict[str, Any]:
-        thinking_config = self.model_kwargs.get("thinking")
-        return thinking_config if isinstance(thinking_config, dict) else {}
+    def _thinking_refuses_forced_tools(self, overrides: Mapping[str, Any]) -> bool:
+        """Answer whether the call carries manual thinking, which refuses a forced tool.
+
+        Manual thinking in ``model_kwargs`` counts outright, which keeps models that
+        refuse any forced tool working. Every other source counts as litellm sends it,
+        and kwargs passed at invoke time are not known when binding.
+        """
+        configured = self.model_kwargs.get("thinking")
+        if isinstance(configured, dict) and configured.get("type") == "enabled":
+            return True
+        return self._litellm_sends_manual_thinking(overrides)
+
+    def _litellm_sends_manual_thinking(self, overrides: Mapping[str, Any]) -> bool:
+        model, provider = self._constructor_destination()
+        return _sends_manual_thinking(
+            overrides.get("model") or model or self.model,
+            overrides.get("custom_llm_provider") or provider,
+            overrides.get("api_base") or self.api_base,
+            {"max_tokens": self.max_tokens, **self.model_kwargs, **overrides},
+        )
 
     def _is_claude_model(self) -> bool:
         return "claude" in (self.model_name or self.model).lower()
@@ -1737,13 +1787,9 @@ class ChatLiteLLM(BaseChatModel):
                     f"but the bound function tools are {tool_names}."
                 )
 
-        # When thinking/extended thinking is enabled, tool_choice="required"
-        # (or a forced specific tool) suppresses chain-of-thought on Claude
-        # models. Downgrade to "auto" only for Claude so other providers keep
-        # their original forced tool-calling behavior.
+        # Claude refuses a forced tool beside manual thinking, so downgrade to "auto"
+        # there; other providers and adaptive thinking keep the forced choice.
         # Prior art: langchain-ai/langchain#35544, langchain-ai/langchain-aws#927.
-        thinking_config = self._thinking_config()
-        is_claude_model = self._is_claude_model()
         # "any" is already mapped to "required" above, and litellm reads
         # {"type": "required"} as that same string.
         tool_choice_is_forced = (
@@ -1752,9 +1798,9 @@ class ChatLiteLLM(BaseChatModel):
             or (isinstance(tool_choice, dict) and tool_choice.get("type") == "required")
         )
         if (
-            thinking_config.get("type") == "enabled"
-            and is_claude_model
-            and tool_choice_is_forced
+            tool_choice_is_forced
+            and self._is_claude_model()
+            and self._thinking_refuses_forced_tools(kwargs)
         ):
             logger.warning(
                 "tool_choice=%r is incompatible with thinking/extended "
@@ -1791,10 +1837,7 @@ class ChatLiteLLM(BaseChatModel):
             tool_choice_value = "required"
             bind_kwargs = {"tool_choice": tool_choice_value}
 
-            if (
-                self._is_claude_model()
-                and self._thinking_config().get("type") == "enabled"
-            ):
+            if self._is_claude_model() and self._thinking_refuses_forced_tools({}):
                 warning_message = (
                     "Structured output via function calling is not guaranteed on "
                     "Claude models when `thinking` is enabled. Tool calls may be "

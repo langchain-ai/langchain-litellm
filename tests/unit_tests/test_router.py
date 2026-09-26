@@ -1,6 +1,7 @@
 """Test router chat model integration."""
 
 import json
+import logging
 from collections.abc import Callable
 from typing import Any
 from unittest.mock import patch
@@ -13,6 +14,7 @@ from langchain_litellm._version import __version__
 from langchain_litellm.chat_models import ChatLiteLLMRouter
 from langchain_litellm.chat_models.litellm_router import _deployment_metadata
 from tests.utils import (
+    OPUS_4_7_THINKS_ADAPTIVELY,
     chat_completion_reply,
     function_call_item,
     make_router,
@@ -430,6 +432,154 @@ def test_router_is_claude_model_reads_the_matching_deployment() -> None:
     )
 
     assert ChatLiteLLMRouter(router=router, model_name="mixed")._is_claude_model()
+
+
+_THINKING = {"thinking": {"type": "enabled", "budget_tokens": 1024}}
+_LOOKUP = {"type": "function", "function": {"name": "lookup", "parameters": {}}}
+
+
+def _claude_router(
+    model: str = "anthropic/claude-sonnet-4-5",
+    deployment: dict[str, Any] | None = None,
+    defaults: dict[str, Any] | None = None,
+) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {
+                    "model": model,
+                    "api_key": "k",
+                    **(deployment or {}),
+                },
+            }
+        ],
+        default_litellm_params=defaults,
+    )
+
+
+@pytest.mark.parametrize(
+    ("router", "model_kwargs", "bind_kwargs"),
+    [
+        (lambda: _claude_router(deployment=_THINKING), {}, {}),
+        (lambda: _claude_router(defaults=dict(_THINKING)), {}, {}),
+        (_claude_router, _THINKING, {}),
+        (_claude_router, {}, _THINKING),
+        (lambda: _claude_router(deployment=_THINKING), {}, {"thinking": None}),
+        (
+            lambda: _claude_router(
+                "anthropic/claude-sonnet-4-6",
+                deployment=_THINKING,
+                defaults={"reasoning_effort": "high"},
+            ),
+            {},
+            {},
+        ),
+    ],
+    ids=[
+        "deployment",
+        "router-defaults",
+        "model-kwargs",
+        "bind-kwargs",
+        "deployment-under-a-bound-none",
+        "deployment-beside-a-default-effort",
+    ],
+)
+def test_router_downgrades_a_forced_choice_for_a_thinking_deployment(
+    router: Callable[[], litellm.Router],
+    model_kwargs: dict[str, Any],
+    bind_kwargs: dict[str, Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The Router picks the deployment, so thinking can be configured there alone."""
+    llm = ChatLiteLLMRouter(router=router(), model_kwargs=model_kwargs)
+
+    with caplog.at_level(
+        logging.WARNING, logger="langchain_litellm.chat_models.litellm"
+    ):
+        bound = llm.bind_tools([_LOOKUP], tool_choice="required", **bind_kwargs)
+
+    assert bound.kwargs["tool_choice"] == "auto"  # type: ignore[attr-defined]
+    assert "incompatible with thinking" in caplog.text
+
+
+def test_router_keeps_a_forced_choice_no_claude_deployment_refuses() -> None:
+    """Only a Claude deployment with manual thinking refuses the forced tool."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mixed",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-6",
+                    "api_key": "k",
+                    "reasoning_effort": "high",
+                },
+            },
+            {
+                "model_name": "mixed",
+                "litellm_params": {
+                    "model": "deepseek/deepseek-chat",
+                    "api_key": "k",
+                    **_THINKING,
+                },
+            },
+        ]
+    )
+
+    bound = ChatLiteLLMRouter(router=router, model_name="mixed").bind_tools(
+        [_LOOKUP], tool_choice="required"
+    )
+
+    assert bound.kwargs["tool_choice"] == "required"  # type: ignore[attr-defined]
+
+
+@pytest.mark.skipif(
+    not OPUS_4_7_THINKS_ADAPTIVELY, reason="this litellm sends it manual thinking"
+)
+def test_router_keeps_a_forced_choice_a_deployment_sends_beside_adaptive_thinking() -> (
+    None
+):
+    """A deployment's thinking counts only as litellm sends it."""
+    router = _claude_router("anthropic/claude-opus-4-7", deployment=_THINKING)
+
+    bound = ChatLiteLLMRouter(router=router).bind_tools(
+        [_LOOKUP], tool_choice="required"
+    )
+
+    assert bound.kwargs["tool_choice"] == "required"  # type: ignore[attr-defined]
+
+
+# Newer litellm Routers drop a deployment's thinking under a request's reasoning_effort.
+_REQUEST_EFFORT_REPLACES_DEPLOYMENT_THINKING = hasattr(
+    litellm.Router, "_deployment_params_with_request_reasoning_override"
+)
+
+
+@pytest.mark.skipif(
+    not _REQUEST_EFFORT_REPLACES_DEPLOYMENT_THINKING,
+    reason="this litellm's Router sends both",
+)
+def test_router_keeps_a_forced_choice_when_a_request_effort_replaces_thinking() -> None:
+    """The deployment's manual thinking is dropped, and effort on Sonnet 4.6 is adaptive."""
+    router = _claude_router("anthropic/claude-sonnet-4-6", deployment=_THINKING)
+    llm = ChatLiteLLMRouter(router=router, model_kwargs={"reasoning_effort": "high"})
+
+    bound = llm.bind_tools([_LOOKUP], tool_choice="required")
+
+    assert bound.kwargs["tool_choice"] == "required"  # type: ignore[attr-defined]
+
+
+def test_router_structured_output_stops_forcing_for_a_thinking_deployment() -> None:
+    """Structured output reads the same deployments as bind_tools."""
+    llm = ChatLiteLLMRouter(router=_claude_router(deployment=_THINKING))
+
+    with pytest.warns(UserWarning, match="Structured output via function calling"):
+        structured = llm.with_structured_output(
+            {"title": "Answer", "type": "object", "properties": {}},
+            method="function_calling",
+        )
+
+    assert structured.first.kwargs["tool_choice"] is None  # type: ignore[attr-defined]
 
 
 def test_router_generate_does_not_inherit_a_streaming_default() -> None:
