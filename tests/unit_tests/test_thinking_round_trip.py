@@ -2075,13 +2075,17 @@ def test_a_router_digests_the_tools_its_deployment_adds(
     assert ("thinking_blocks" in _assistant_sent(captured)) is replayed
 
 
-def test_a_router_group_whose_deployments_add_different_tools_replays_nothing(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "setting",
+    [{"web_search_options": {}}, {"thinking": ENABLED}],
+    ids=["tools", "thinking"],
+)
+def test_a_router_group_whose_deployments_differ_in_replay_settings_replays_nothing(
+    monkeypatch: pytest.MonkeyPatch, setting: dict[str, Any]
 ) -> None:
+    """Replay reads one deployment's settings, and the Router may pick another."""
     captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
-    router = _router_of(
-        [_entry("main", CLAUDE), _entry("main", CLAUDE, web_search_options={})]
-    )
+    router = _router_of([_entry("main", CLAUDE), _entry("main", CLAUDE, **setting)])
 
     ChatLiteLLMRouter(router=router, model_name="main").invoke(_history())
 
