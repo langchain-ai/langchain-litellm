@@ -411,7 +411,7 @@ def _canonical(value: Any) -> bytes:
         sent = json.dumps(
             _uncached(value), sort_keys=True, separators=(",", ":"), default=str
         )
-    except (TypeError, ValueError, RecursionError) as error:
+    except (TypeError, RecursionError) as error:
         raise _UndigestableError from error
     return sent.encode()
 
