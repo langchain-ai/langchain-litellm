@@ -133,7 +133,7 @@ _PREFIX = "prefix"
 # call: litellm rebuilds a turn thinking first, so it would move the block.
 _AFTER_REPLY = "after-reply"
 # Settings litellm turns into the tools a request carries.
-_TOOL_SETTINGS = ("tools", "functions", "web_search_options", "response_format")
+_TOOL_SETTINGS = ("tools", "web_search_options", "response_format")
 # Roles litellm lifts into the system prompt, wherever they sit.
 _SYSTEM_ROLES = frozenset({"system", "developer"})
 # Settings that never move a call elsewhere; deployment_id sends it to Azure. Any
