@@ -1686,7 +1686,9 @@ class ChatLiteLLM(BaseChatModel):
                 - ``"any"`` or ``"required"`` or ``True``:
                     forces at least one tool to be called.
                 - dict of the form:
-                ``{"type": "function", "function": {"name": <<tool_name>>}}``
+                ``{"type": "function", "function": {"name": <<tool_name>>}}``,
+                which must name a bound function tool; any other dict goes to litellm
+                as is.
                 - ``False`` or ``None``: no effect
             **kwargs: Any additional parameters to pass to the
                 :class:`~langchain_core.runnables.Runnable` constructor.
@@ -1701,18 +1703,28 @@ class ChatLiteLLM(BaseChatModel):
         if tool_choice is True or tool_choice == "any":
             tool_choice = "required"
 
-        # Handle dict tool_choice logic — validate before any downgrade so
-        # typos in tool names always raise, even when thinking is enabled.
-        if isinstance(tool_choice, dict):
+        # Only a function choice names a tool to check, and before any downgrade so a
+        # typo always raises; litellm accepts or refuses every other dict itself.
+        function_choice = (
+            tool_choice
+            if isinstance(tool_choice, dict) and "function" in tool_choice
+            else None
+        )
+        if function_choice is not None:
+            # Only a function tool can be named, nested or in the flat Responses shape.
             tool_names = [
-                formatted_tool["function"]["name"] for formatted_tool in formatted_tools
+                tool["function"]["name"] if "function" in tool else tool["name"]
+                for tool in formatted_tools
+                if "function" in tool
+                or (tool.get("type") == "function" and "name" in tool)
             ]
             if not any(
-                tool_name == tool_choice["function"]["name"] for tool_name in tool_names
+                tool_name == function_choice["function"]["name"]
+                for tool_name in tool_names
             ):
                 raise ValueError(
-                    f"Tool choice {tool_choice} was specified, but the only "
-                    f"provided tools were {tool_names}."
+                    f"tool_choice names {function_choice['function']['name']!r}, "
+                    f"but the bound function tools are {tool_names}."
                 )
 
         # When thinking/extended thinking is enabled, tool_choice="required"
@@ -1722,9 +1734,12 @@ class ChatLiteLLM(BaseChatModel):
         # Prior art: langchain-ai/langchain#35544, langchain-ai/langchain-aws#927.
         thinking_config = self._thinking_config()
         is_claude_model = self._is_claude_model()
-        # "any" is already mapped to "required" above, so only check "required"
-        tool_choice_is_forced = tool_choice == "required" or isinstance(
-            tool_choice, dict
+        # "any" is already mapped to "required" above, and litellm reads
+        # {"type": "required"} as that same string.
+        tool_choice_is_forced = (
+            tool_choice == "required"
+            or function_choice is not None
+            or (isinstance(tool_choice, dict) and tool_choice.get("type") == "required")
         )
         if (
             thinking_config.get("type") == "enabled"
