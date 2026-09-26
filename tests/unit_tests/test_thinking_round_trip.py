@@ -71,7 +71,17 @@ ANTHROPIC = endpoint(CLAUDE)
 KIMI = endpoint("anthropic/kimi-for-coding", "https://api.kimi.com/coding/")
 
 
-def _as_sent(value: Any) -> bytes:
+WEATHER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "weather",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+    },
+}
+
+
+def _canonical(value: Any) -> bytes:
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), default=str
     ).encode()
@@ -83,21 +93,34 @@ LIFTED = ("system", "developer")
 def prefix_of(
     before: list[dict[str, Any]],
     tools: Any = None,
+    *,
+    dummy_tool: bool | None = None,
     **shaping: Any,
 ) -> str:
-    """The stored digest of what a turn followed: the settings litellm turns into
-    tools, every system or developer message, then the rest before it, as sent."""
+    """The stored digest of what a turn followed: the tools litellm will send, every
+    system or developer message, then the rest before it, as sent.
+
+    litellm adds a placeholder tool when none is bound and the request holds a tool
+    call; ``dummy_tool`` says so, read from ``before`` when that is the whole request.
+    """
     if tools is not None:
         shaping["tools"] = tools
+    if dummy_tool is None:
+        dummy_tool = "tools" not in shaping and any(
+            m.get("tool_calls") is not None for m in before
+        )
+    if dummy_tool:
+        shaping["dummy_tool"] = True
     system = [m for m in before if m["role"] in LIFTED]
-    running = hashlib.sha256(_as_sent([shaping, system]))
+    running = hashlib.sha256(_canonical([shaping, system]))
     for message in before:
         if message["role"] not in LIFTED:
-            running.update(_as_sent(message))
+            running.update(_canonical(message))
     return running.hexdigest()[:16]
 
 
-NOTHING_BEFORE = prefix_of([])
+# A turn at the start of a request that binds the weather tool, as _attached sends.
+NOTHING_BEFORE = prefix_of([], tools=[WEATHER_TOOL])
 
 
 def signed_at(
@@ -110,25 +133,16 @@ def signed_at(
 
 QUESTION = HumanMessage("What's the weather in Paris?")
 SUNNY = ToolMessage("Sunny", tool_call_id="toolu_01")
-ASKED = prefix_of([_convert_message_to_dict(QUESTION)])
+# What a tool-call turn answering QUESTION followed, replayed with no tools bound.
+ASKED = prefix_of([_convert_message_to_dict(QUESTION)], dummy_tool=True)
 MONDAY = SystemMessage("Today is Monday.")
 TUESDAY = SystemMessage("Today is Tuesday.")
 
 
 def _asked_after(*earlier: Any, tools: Any = None) -> str:
-    """What a turn answering QUESTION followed, after ``earlier`` messages."""
+    """What a tool-call turn answering QUESTION followed, after ``earlier`` messages."""
     sent = [_convert_message_to_dict(m) for m in (*earlier, QUESTION)]
-    return prefix_of(sent, tools=tools)
-
-
-WEATHER_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "get_weather",
-        "description": "weather",
-        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
-    },
-}
+    return prefix_of(sent, tools=tools, dummy_tool=tools is None)
 
 
 # ── which endpoints check replayed thinking ──────────────────────────────────
@@ -485,7 +499,9 @@ def _turn(blocks: list[dict[str, Any]], content: Any = "") -> AIMessage:
 
 def _attached(message: AIMessage, endpoint: str | None) -> dict[str, Any]:
     message_dicts = [_convert_message_to_dict(message)]
-    _attach_thinking_blocks([message], message_dicts, endpoint, {})
+    _attach_thinking_blocks(
+        [message], message_dicts, endpoint, {"tools": [WEATHER_TOOL]}
+    )
     return message_dicts[0]
 
 
@@ -1034,7 +1050,9 @@ def test_a_setting_litellm_turns_into_a_tool_is_part_of_the_history(
     """litellm adds a tool for these, and Anthropic counts every change to the tools."""
     captured = _capture_calls(monkeypatch, ChatLiteLLM)
     llm = ChatLiteLLM(model=CLAUDE, api_key="fake", model_kwargs=setting)
-    after_setting = prefix_of([_convert_message_to_dict(QUESTION)], **setting)
+    after_setting = prefix_of(
+        [_convert_message_to_dict(QUESTION)], dummy_tool=True, **setting
+    )
 
     llm.invoke(_history())
     assert "thinking_blocks" not in _assistant_sent(captured)
@@ -1043,16 +1061,118 @@ def test_a_setting_litellm_turns_into_a_tool_is_part_of_the_history(
 
 
 def test_a_history_json_cannot_hold_goes_out_as_on_main(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Keys JSON cannot sort must not break a call that works without the digest."""
     captured = _capture_calls(monkeypatch, ChatLiteLLM)
     odd = HumanMessage([{"type": "text", "text": "hi", "meta": {1: "a", "b": 2}}])
 
-    message = ChatLiteLLM(model=CLAUDE, api_key="fake").invoke([odd])
+    with caplog.at_level(logging.DEBUG, logger="langchain_litellm.chat_models.litellm"):
+        message = ChatLiteLLM(model=CLAUDE, api_key="fake").invoke([odd])
 
     assert captured["messages"][0]["role"] == "user"
     assert "thinking_blocks" not in message.additional_kwargs
+    assert [
+        r.levelno for r in caplog.records if "cannot be digested" in r.getMessage()
+    ] == [logging.WARNING]
+
+
+def _circular() -> dict[str, Any]:
+    content: dict[str, Any] = {"type": "text", "text": "hi"}
+    content["self"] = content
+    return content
+
+
+def _deep() -> dict[str, Any]:
+    nested: list[Any] = []
+    for _ in range(100_000):
+        nested = [nested]
+    return {"type": "text", "text": "hi", "nested": nested}
+
+
+@pytest.mark.parametrize(
+    "content",
+    [{"type": "text", "meta": {1: "a", "b": 2}}, _circular(), _deep()],
+    ids=["unsortable-keys", "circular", "too-deep"],
+)
+def test_every_way_json_fails_leaves_the_request_alone(content: dict[str, Any]) -> None:
+    message_dicts = [{"role": "user", "content": [content]}]
+
+    binding = _attach_thinking_blocks(
+        [HumanMessage("hi")], message_dicts, ANTHROPIC, {}
+    )
+
+    assert binding is None
+    assert message_dicts[0]["content"][0] is content
+
+
+GREETING = HumanMessage("Hello")
+
+
+@pytest.mark.parametrize(
+    ("since", "replayed"),
+    [
+        ([], True),
+        ([QUESTION, AIMessage("", tool_calls=[TOOL_CALL]), SUNNY], False),
+    ],
+    ids=["no-tool-call-since", "a-tool-call-since"],
+)
+def test_litellms_placeholder_tool_counts_as_a_change_of_tools(
+    monkeypatch: pytest.MonkeyPatch, since: list[Any], replayed: bool
+) -> None:
+    """With no tools bound, litellm adds a placeholder tool once any turn holds a
+    tool call, and Anthropic counts that as a change to the tools."""
+    captured = _capture_calls(monkeypatch, ChatLiteLLM)
+    greeted = AIMessage(
+        "Hi!",
+        additional_kwargs={
+            "thinking_blocks": signed_at(
+                ANTHROPIC,
+                SIGNED,
+                before=prefix_of([_convert_message_to_dict(GREETING)]),
+            )
+        },
+    )
+
+    ChatLiteLLM(model=CLAUDE, api_key="fake").invoke(
+        [GREETING, greeted, *since, HumanMessage("Thanks.")]
+    )
+
+    assert ("thinking_blocks" in captured["messages"][1]) is replayed
+
+
+def test_a_container_upload_counts_as_a_change_of_tools() -> None:
+    """litellm adds its code-execution tool once the history holds a container upload."""
+    upload = HumanMessage([{"type": "container_upload", "file_id": "file_01"}])
+    messages = [*_history(), upload]
+    message_dicts = [_convert_message_to_dict(m) for m in messages]
+
+    _attach_thinking_blocks(messages, message_dicts, ANTHROPIC, {})
+
+    assert "thinking_blocks" not in message_dicts[1]
+
+
+def test_a_block_and_text_in_one_delta_count_the_block_first() -> None:
+    """A chunk that holds the whole reply shows no order, so the block counts as
+    first, as it does on a call that is not streamed."""
+    thinking = _ThinkingBlockAssembler(ANTHROPIC, NOTHING_BEFORE)
+    whole = {"role": "assistant", "content": "Sunny.", "thinking_blocks": [SIGNED]}
+
+    chunk = _convert_delta_to_message_chunk(whole, AIMessageChunk, thinking)
+
+    assert chunk.additional_kwargs["thinking_blocks"] == signed_at(ANTHROPIC, SIGNED)
+
+
+@pytest.mark.usefixtures("_no_anthropic_base")
+def test_stored_marks_keep_the_values_saved_histories_hold() -> None:
+    """Checkpoints keep these digests, so changing what goes into them strands every
+    saved block: a new format needs a way to read the old one, not an edit."""
+    origin = _signing_endpoint(CLAUDE, None, None)
+    message_dicts = [_convert_message_to_dict(QUESTION)]
+
+    binding = _attach_thinking_blocks([QUESTION], message_dicts, origin, {})
+
+    assert binding == ("059c009c6c12e1bd", "0148c3026491315a")
 
 
 def test_a_changed_history_is_named_when_it_holds_blocks_back(
@@ -1652,7 +1772,7 @@ def test_only_assistant_turns_that_hold_blocks_get_them() -> None:
             "hi", additional_kwargs={"thinking_blocks": signed_at(ANTHROPIC, SIGNED)}
         ),
     ]
-    before = prefix_of([_convert_message_to_dict(m) for m in earlier])
+    before = prefix_of([_convert_message_to_dict(m) for m in earlier], dummy_tool=True)
     messages = [*earlier, _turn(signed_at(ANTHROPIC, SIGNED, before=before))]
     message_dicts = [_convert_message_to_dict(m) for m in messages]
 
@@ -1922,6 +2042,66 @@ def test_a_mock_router_still_answers() -> None:
     llm = ChatLiteLLMRouter(router=router, model=CLAUDE)
 
     assert llm.invoke("hi").content == "ok"
+
+
+@pytest.mark.parametrize(
+    ("deployment", "before", "replayed"),
+    [
+        ({}, ASKED, True),
+        ({"web_search_options": {}}, ASKED, False),
+        (
+            {"web_search_options": {}},
+            prefix_of(
+                [_convert_message_to_dict(QUESTION)],
+                dummy_tool=True,
+                web_search_options={},
+            ),
+            True,
+        ),
+    ],
+    ids=["no-tool-settings", "deployment-adds-web-search", "signed-with-web-search"],
+)
+def test_a_router_digests_the_tools_its_deployment_adds(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment: dict[str, Any],
+    before: str,
+    replayed: bool,
+) -> None:
+    captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
+    router = _router_of([_entry("main", CLAUDE, **deployment)])
+
+    ChatLiteLLMRouter(router=router, model_name="main").invoke(_history(before=before))
+
+    assert ("thinking_blocks" in _assistant_sent(captured)) is replayed
+
+
+def test_a_router_group_whose_deployments_add_different_tools_replays_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
+    router = _router_of(
+        [_entry("main", CLAUDE), _entry("main", CLAUDE, web_search_options={})]
+    )
+
+    ChatLiteLLMRouter(router=router, model_name="main").invoke(_history())
+
+    assert "thinking_blocks" not in _assistant_sent(captured)
+
+
+@pytest.mark.parametrize("modify_params", [True, False])
+def test_a_router_applies_litellms_rescue_to_thinking_its_deployment_requests(
+    monkeypatch: pytest.MonkeyPatch, modify_params: bool
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
+    router = _router_of([_entry("main", CLAUDE, thinking=ENABLED)])
+    later = AIMessage("", tool_calls=[{**TOOL_CALL, "id": "toolu_02"}])
+
+    ChatLiteLLMRouter(router=router, model_name="main").invoke(
+        [*_history(), later, ToolMessage("Mild", tool_call_id="toolu_02")]
+    )
+
+    assert ("thinking_blocks" in _assistant_sent(captured)) is not modify_params
 
 
 def test_a_group_whose_deployments_differ_has_no_endpoint() -> None:
