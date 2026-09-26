@@ -1181,8 +1181,8 @@ class ChatLiteLLM(BaseChatModel):
                 for tool_name in tool_names
             ):
                 raise ValueError(
-                    f"Tool choice {tool_choice} was specified, but the only "
-                    f"provided tools were {tool_names}."
+                    f"tool_choice names {function_choice['function']['name']!r}, "
+                    f"but the bound function tools are {tool_names}."
                 )
 
         # When thinking/extended thinking is enabled, tool_choice="required"
