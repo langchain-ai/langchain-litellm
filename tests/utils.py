@@ -4,12 +4,24 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import httpx
+import litellm
 import pytest
 from litellm import Router
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from openai.types.chat import ChatCompletion
 from openai.types.responses import Response, ResponseStreamEvent
 from pydantic import TypeAdapter
+
+# Newer litellm sends manual thinking to Opus 4.7 as adaptive thinking.
+OPUS_4_7_THINKS_ADAPTIVELY = (
+    litellm.get_optional_params(
+        model="claude-opus-4-7",
+        custom_llm_provider="anthropic",
+        drop_params=True,
+        thinking={"type": "enabled", "budget_tokens": 1024},
+    ).get("thinking")
+    or {}
+).get("type") == "adaptive"
 
 
 def serve_http(

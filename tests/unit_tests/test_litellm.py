@@ -37,6 +37,7 @@ from langchain_litellm.chat_models.litellm import (
     _provider_api_key_field,
 )
 from tests.utils import (
+    OPUS_4_7_THINKS_ADAPTIVELY,
     chat_completion_reply,
     function_call_item,
     message_item,
@@ -1086,19 +1087,39 @@ def test_bind_tools_downgraded_with_thinking(
     assert "incompatible with thinking" in caplog.text
 
 
-# Manual thinking for these on every supported version: set by the caller, or mapped
-# so by litellm.
+# Newer litellm reads a bool thinking as manual thinking.
+_BOOL_THINKING_IS_MANUAL = isinstance(
+    litellm.utils.validate_and_fix_thinking_param(True), dict
+)
+
+# Downgraded on every supported version: manual thinking set in model_kwargs, or
+# thinking litellm sends as manual.
 _MANUAL_THINKING = [
     ("anthropic/claude-sonnet-4-5", {}, _THINKING_KWARGS),
     ("anthropic/claude-sonnet-4-5", {"reasoning_effort": "high"}, {}),
     ("anthropic/claude-sonnet-4-5", {}, {"reasoning_effort": "high"}),
     ("anthropic/claude-fable-5-1", _THINKING_KWARGS, {}),
+    (
+        "anthropic/claude-sonnet-4-6",
+        {"model": "anthropic/claude-sonnet-4-5", "reasoning_effort": "high"},
+        {},
+    ),
+    pytest.param(
+        "anthropic/claude-sonnet-4-5",
+        {},
+        {"thinking": True},
+        marks=pytest.mark.skipif(
+            not _BOOL_THINKING_IS_MANUAL, reason="this litellm leaves a bool unmapped"
+        ),
+    ),
 ]
 _MANUAL_THINKING_IDS = [
     "thinking-bound",
     "effort-in-model-kwargs",
     "effort-bound",
-    "manual-set-by-the-caller",
+    "manual-in-model-kwargs",
+    "effort-for-the-model-kwargs-destination",
+    "bool-thinking-bound",
 ]
 
 # ...and adaptive thinking for these, beside which Anthropic accepts a forced tool.
@@ -1128,6 +1149,47 @@ def test_bind_tools_downgraded_wherever_thinking_is_set(
         bound = llm.bind_tools([_dummy_tool], tool_choice="required", **bind_kwargs)
     assert bound.kwargs["tool_choice"] == "auto"  # type: ignore[attr-defined]
     assert "incompatible with thinking" in caplog.text
+
+
+@pytest.mark.skipif(
+    not OPUS_4_7_THINKS_ADAPTIVELY, reason="this litellm sends it manual thinking"
+)
+def test_bind_tools_keeps_a_forced_choice_litellm_sends_beside_adaptive_thinking() -> (
+    None
+):
+    """Thinking passed at bind time counts only as litellm sends it."""
+    llm = ChatLiteLLM(model="anthropic/claude-opus-4-7", api_key="fake")
+
+    bound = llm.bind_tools([_dummy_tool], tool_choice="required", **_THINKING_KWARGS)
+
+    assert bound.kwargs["tool_choice"] == "required"  # type: ignore[attr-defined]
+
+
+def test_bind_tools_keeps_a_forced_choice_when_max_tokens_leaves_no_thinking() -> None:
+    """litellm sends no thinking that max_tokens cannot hold."""
+    llm = ChatLiteLLM(
+        model="anthropic/claude-sonnet-4-5",
+        api_key="fake",
+        max_tokens=1000,
+        model_kwargs={"thinking": {"type": "adaptive"}},
+    )
+
+    bound = llm.bind_tools([_dummy_tool], tool_choice="required")
+
+    assert bound.kwargs["tool_choice"] == "required"  # type: ignore[attr-defined]
+
+
+def test_bind_tools_leaves_a_name_litellm_resolves_later_to_the_call() -> None:
+    """litellm resolves an alias only when the call is made, so it cannot answer here."""
+    llm = ChatLiteLLM(
+        model="my-claude-alias",
+        api_key="fake",
+        model_kwargs={"reasoning_effort": "high"},
+    )
+
+    bound = llm.bind_tools([_dummy_tool], tool_choice="required")
+
+    assert bound.kwargs["tool_choice"] == "required"  # type: ignore[attr-defined]
 
 
 @pytest.mark.parametrize(
