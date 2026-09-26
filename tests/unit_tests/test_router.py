@@ -549,6 +549,26 @@ def test_router_keeps_a_forced_choice_a_deployment_sends_beside_adaptive_thinkin
     assert bound.kwargs["tool_choice"] == "required"  # type: ignore[attr-defined]
 
 
+# Newer litellm Routers drop a deployment's thinking under a request's reasoning_effort.
+_REQUEST_EFFORT_REPLACES_DEPLOYMENT_THINKING = hasattr(
+    litellm.Router, "_deployment_params_with_request_reasoning_override"
+)
+
+
+@pytest.mark.skipif(
+    not _REQUEST_EFFORT_REPLACES_DEPLOYMENT_THINKING,
+    reason="this litellm's Router sends both",
+)
+def test_router_keeps_a_forced_choice_when_a_request_effort_replaces_thinking() -> None:
+    """The deployment's manual thinking is dropped, and effort on Sonnet 4.6 is adaptive."""
+    router = _claude_router("anthropic/claude-sonnet-4-6", deployment=_THINKING)
+    llm = ChatLiteLLMRouter(router=router, model_kwargs={"reasoning_effort": "high"})
+
+    bound = llm.bind_tools([_LOOKUP], tool_choice="required")
+
+    assert bound.kwargs["tool_choice"] == "required"  # type: ignore[attr-defined]
+
+
 def test_router_structured_output_stops_forcing_for_a_thinking_deployment() -> None:
     """Structured output reads the same deployments as bind_tools."""
     llm = ChatLiteLLMRouter(router=_claude_router(deployment=_THINKING))
