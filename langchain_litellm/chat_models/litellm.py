@@ -88,6 +88,10 @@ logger = logging.getLogger(__name__)
 # Per-call kwargs that decide WHERE litellm sends the request.
 _DESTINATION_KEYS = ("model", "custom_llm_provider")
 
+# OpenAI's string tool_choice modes, which litellm maps per provider. Any other
+# string names a tool.
+_TOOL_CHOICE_KEYWORDS = ("auto", "none", "required")
+
 # A provider's key lives in the field named `<provider>_api_key`, so the mapping is
 # derived from the declared fields rather than restated. Only litellm provider ids
 # that do NOT follow that convention need an entry here.
@@ -1678,7 +1682,9 @@ class ChatLiteLLM(BaseChatModel):
                 models, callables, and BaseTools will be automatically converted to
                 their schema dictionary representation.
             tool_choice: Controls tool-calling behavior. Options are:
-                - str of the form ``"<<tool_name>>"``: calls <<tool_name>> tool.
+                - str of the form ``"<<tool_name>>"``: calls <<tool_name>>, which
+                must be a bound function tool. The keywords below win over a tool
+                of the same name.
                 - ``"auto"``:
                     automatically selects a tool (including no tool).
                 - ``"none"``:
@@ -1702,6 +1708,10 @@ class ChatLiteLLM(BaseChatModel):
         # A False tool_choice is left alone; it behaves like None or auto per provider.
         if tool_choice is True or tool_choice == "any":
             tool_choice = "required"
+        elif isinstance(tool_choice, str) and tool_choice not in _TOOL_CHOICE_KEYWORDS:
+            # A tool name, sent in the form litellm translates per provider and
+            # checked below like any function choice.
+            tool_choice = {"type": "function", "function": {"name": tool_choice}}
 
         # Only a function choice names a tool to check, and before any downgrade so a
         # typo always raises; litellm accepts or refuses every other dict itself.

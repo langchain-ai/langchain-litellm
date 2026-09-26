@@ -1061,8 +1061,9 @@ def test_bind_tools_any_becomes_required_without_thinking() -> None:
         True,
         {"type": "function", "function": {"name": "_dummy_tool"}},
         {"type": "required"},
+        "_dummy_tool",
     ],
-    ids=["any", "required", "True", "dict", "dict-required"],
+    ids=["any", "required", "True", "dict", "dict-required", "name"],
 )
 def test_bind_tools_downgraded_with_thinking(
     tool_choice: str | bool | dict[str, Any],
@@ -1170,22 +1171,27 @@ _FLAT_FUNCTION_TOOL = {
 }
 
 
+@pytest.mark.parametrize("by_name", [False, True], ids=["dict", "name"])
 @pytest.mark.parametrize(
     ("tools", "name"),
     [
+        ([_dummy_tool], "_dummy_tool"),
         ([_dummy_tool, {"type": "web_search"}], "_dummy_tool"),
         ([_FLAT_FUNCTION_TOOL], "lookup"),
     ],
-    ids=["beside-built-in", "flat-function"],
+    ids=["function", "beside-built-in", "flat-function"],
 )
 def test_bind_tools_forces_a_function_bound_in_any_shape(
-    tools: list[Any], name: str
+    tools: list[Any], name: str, by_name: bool
 ) -> None:
-    """Built-in and Responses-style tools carry no ``function`` key to read a name from."""
+    """Built-in and Responses-style tools carry no ``function`` key to read a name from.
+
+    A bare tool name is no choice litellm understands, so it becomes the function choice.
+    """
     llm = ChatLiteLLM(model="gpt-4o-mini", api_key="fake")
     choice = {"type": "function", "function": {"name": name}}
 
-    bound = llm.bind_tools(tools, tool_choice=choice)
+    bound = llm.bind_tools(tools, tool_choice=name if by_name else choice)
 
     assert bound.kwargs["tool_choice"] == choice  # type: ignore[attr-defined]
 
@@ -1208,6 +1214,45 @@ def test_bind_tools_leaves_other_dict_choices_to_litellm(
     bound = llm.bind_tools(tools, tool_choice=tool_choice)
 
     assert bound.kwargs["tool_choice"] == tool_choice  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("keyword", "sent"),
+    [("auto", "auto"), ("none", "none"), ("required", "required"), ("any", "required")],
+)
+def test_bind_tools_keeps_a_keyword_that_a_tool_is_named_after(
+    keyword: str, sent: str
+) -> None:
+    """A keyword means the same whichever tools are bound and wherever the call goes."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="fake")
+    tool = {
+        "type": "function",
+        "function": {"name": keyword, "parameters": {"type": "object"}},
+    }
+
+    bound = llm.bind_tools([tool], tool_choice=keyword)
+
+    assert bound.kwargs["tool_choice"] == sent  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("tools", "tool_choice"),
+    [
+        ([_dummy_tool], "nonexistent"),
+        ([_dummy_tool, {"type": "web_search"}], "web_search"),
+    ],
+    ids=["typo", "built-in"],
+)
+def test_bind_tools_rejects_a_string_naming_no_bound_function(
+    tools: list[Any], tool_choice: str
+) -> None:
+    """Providers read such a string differently, from an error to a silent drop."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="fake")
+
+    with pytest.raises(
+        ValueError, match=re.escape(f"tool_choice names {tool_choice!r}")
+    ):
+        llm.bind_tools(tools, tool_choice=tool_choice)
 
 
 _CUSTOM_TOOL = Tool(
