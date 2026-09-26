@@ -622,15 +622,12 @@ def _sends_manual_thinking(
     api_base: str | None,
     params: Mapping[str, Any],
 ) -> bool:
-    """Answer whether ``params`` give the call manual thinking.
+    """Ask litellm whether ``params`` reach the provider as manual thinking.
 
-    Anthropic refuses a forced tool beside ``thinking.type == "enabled"``. Manual
-    thinking the caller set counts as given; for the rest litellm is asked, since it
-    maps ``reasoning_effort`` and adaptive thinking to either type per model.
+    Anthropic refuses a forced tool beside ``thinking.type == "enabled"`` but not
+    beside adaptive thinking, and litellm decides per model which one a call sends.
     """
     thinking = litellm.utils.validate_and_fix_thinking_param(params.get("thinking"))
-    if isinstance(thinking, dict) and thinking.get("type") == "enabled":
-        return True
     effort = params.get("reasoning_effort")
     if thinking is None and effort is None:
         return False
@@ -647,6 +644,7 @@ def _sends_manual_thinking(
         drop_params=True,
         thinking=thinking,
         reasoning_effort=effort,
+        max_tokens=params.get("max_tokens"),
     ).get("thinking")
     return isinstance(mapped, dict) and mapped.get("type") == "enabled"
 
@@ -1067,15 +1065,24 @@ class ChatLiteLLM(BaseChatModel):
     max_retries: int = 1
 
     def _thinking_refuses_forced_tools(self, overrides: Mapping[str, Any]) -> bool:
-        """Answer whether ``model_kwargs`` or ``overrides`` give the call manual thinking.
+        """Answer whether the call carries manual thinking, which refuses a forced tool.
 
-        Kwargs passed at invoke time are not known when binding, so they cannot count.
+        Manual thinking in ``model_kwargs`` counts outright, which keeps models that
+        refuse any forced tool working. Every other source counts as litellm sends it,
+        and kwargs passed at invoke time are not known when binding.
         """
+        configured = self.model_kwargs.get("thinking")
+        if isinstance(configured, dict) and configured.get("type") == "enabled":
+            return True
+        return self._litellm_sends_manual_thinking(overrides)
+
+    def _litellm_sends_manual_thinking(self, overrides: Mapping[str, Any]) -> bool:
+        model, provider = self._constructor_destination()
         return _sends_manual_thinking(
-            self.model_name or self.model,
-            self.custom_llm_provider,
-            self.api_base,
-            {**self.model_kwargs, **overrides},
+            overrides.get("model") or model or self.model,
+            overrides.get("custom_llm_provider") or provider,
+            overrides.get("api_base") or self.api_base,
+            {"max_tokens": self.max_tokens, **self.model_kwargs, **overrides},
         )
 
     def _is_claude_model(self) -> bool:

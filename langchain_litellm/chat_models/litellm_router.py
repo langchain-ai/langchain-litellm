@@ -214,20 +214,20 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             deployments.append(deployment)
         return deployments
 
-    def _thinking_refuses_forced_tools(self, overrides: Mapping[str, Any]) -> bool:
+    def _litellm_sends_manual_thinking(self, overrides: Mapping[str, Any]) -> bool:
         """Answer for the Claude deployments the Router may pick.
 
-        A deployment or the Router's defaults can set thinking alone. The caller's
-        params win over the defaults, and litellm's Router decides what they replace
-        on the deployment where it has a rule for it.
+        A deployment or the Router's defaults can set thinking alone. The Router applies
+        the caller's params to each deployment, by litellm's own rule where it has one,
+        and only then fills gaps from its defaults.
         """
         matched = self._group_entries()
         if not matched:
-            return super()._thinking_refuses_forced_tools(overrides)
-        request = {
-            **_without_none(self.router.default_litellm_params),
-            **_without_none({**self.model_kwargs, **overrides}),
-        }
+            return super()._litellm_sends_manual_thinking(overrides)
+        caller = _without_none(
+            {"max_tokens": self.max_tokens, **self.model_kwargs, **overrides}
+        )
+        defaults = _without_none(self.router.default_litellm_params)
         replace = getattr(
             litellm.Router, "_deployment_params_with_request_reasoning_override", None
         )
@@ -238,8 +238,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                 params.get("custom_llm_provider"),
                 params.get("api_base"),
                 {
-                    **_without_none(replace(params, request) if replace else params),
-                    **request,
+                    **_without_none(replace(params, caller) if replace else params),
+                    **defaults,
+                    **caller,
                 },
             )
             for params in (entry.get("litellm_params", {}) for entry in matched)
