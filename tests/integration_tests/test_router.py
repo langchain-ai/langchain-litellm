@@ -32,7 +32,7 @@ class TestChatLiteLLMRouterIntegration(ChatModelIntegrationTests):
 
     @property
     def has_tool_choice(self) -> bool:
-        return False
+        return True
 
     @property
     def has_structured_output(self) -> bool:
