@@ -981,12 +981,20 @@ TOOL_USE = [
     {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}},
     {"type": "input_json_delta", "partial_json": '{"city": "Paris"}'},
 ]
+SECOND_TOOL_USE = [
+    {"type": "tool_use", "id": "toolu_02", "name": "get_weather", "input": {}},
+    {"type": "input_json_delta", "partial_json": '{"city": "Lyon"}'},
+]
 
 
 @pytest.mark.parametrize(
     ("blocks", "replayed"),
-    [((UPDATE, TEXT, TOOL_USE), True), ((TEXT, UPDATE, TOOL_USE), False)],
-    ids=["thinking-first", "thinking-after-text"],
+    [
+        ((UPDATE, TEXT, TOOL_USE), True),
+        ((TEXT, UPDATE, TOOL_USE), False),
+        ((TOOL_USE, UPDATE, SECOND_TOOL_USE), False),
+    ],
+    ids=["thinking-first", "thinking-after-text", "thinking-after-a-tool-call"],
 )
 def test_a_streamed_block_that_followed_the_reply_stays_behind(
     caplog: pytest.LogCaptureFixture,
