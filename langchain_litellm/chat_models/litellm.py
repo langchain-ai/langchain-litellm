@@ -210,6 +210,14 @@ _PRICING_PREFIXES = (
 )
 
 
+# Keys litellm reads for a provider besides <PROVIDER>_API_KEY.
+_KEY_ENV_VARS = {"azure": ("AZURE_OPENAI_API_KEY",)}
+# Headers that choose the account a Responses API request runs under.
+_ACCOUNT_HEADERS = frozenset(
+    {"authorization", "api-key", "openai-organization", "openai-project"}
+)
+
+
 # A bare Bedrock model id, which litellm routes to Bedrock, optionally region-prefixed.
 _BEDROCK_CLAUDE_ID = re.compile(r"^([a-z]+\.)?anthropic\.claude")
 
@@ -288,38 +296,58 @@ def _issuing_endpoint(
     api_base: str | None,
     api_key: str | None,
     organization: str | None,
+    extra_headers: Mapping[str, Any] | None,
 ) -> str | None:
     """A digest naming who could decrypt a request's Responses API reasoning items.
 
-    OpenAI decrypts an item only for the model and the key's organization that
-    issued it, so the name joins the provider, the base, the model and a digest of
-    the key, read where litellm reads it. Only a model named
-    ``<provider>/responses/<model>`` goes through litellm's bridge; others are None.
+    OpenAI decrypts an item only for the model and the account that issued it. The
+    name joins the provider, the model, every base and every credential litellm may
+    read for them, whatever order it reads them in, so any change to one replays
+    nothing. Only a model named ``<provider>/responses/<model>`` goes through
+    litellm's bridge; others are None.
     """
     provider = custom_llm_provider or ""
     name = model or ""
-    if not provider and "/" in name:
+    if provider and name.startswith(f"{provider}/"):
+        name = name.removeprefix(f"{provider}/")
+    elif not provider and "/" in name:
         provider, name = name.split("/", 1)
     if not provider or not name.startswith("responses/"):
         return None
     env = provider.upper()
-    where = _server(
-        api_base
-        or getattr(litellm, "api_base", None)
-        or os.environ.get(f"{env}_API_BASE")
-        or os.environ.get(f"{env}_BASE_URL")
-    )
-    if where is None:
+    bases = [
+        api_base,
+        getattr(litellm, "api_base", None),
+        os.environ.get(f"{env}_BASE_URL"),
+        os.environ.get(f"{env}_API_BASE"),
+    ]
+    servers = [_server(base) for base in bases]
+    if any(server is None for server in servers):
         return None
-    key = (
-        api_key
-        or getattr(litellm, "api_key", None)
-        or os.environ.get(f"{env}_API_KEY")
-        or ""
+    credentials = [
+        api_key,
+        getattr(litellm, "api_key", None),
+        getattr(litellm, f"{provider}_key", None),
+        *(os.environ.get(var) for var in _KEY_ENV_VARS.get(provider, ())),
+        os.environ.get(f"{env}_API_KEY"),
+        organization,
+        # Credentials in a base authenticate the request in place of the key.
+        *(urlsplit(base).netloc.rpartition("@")[0] for base in bases if base),
+        *(
+            f"{header.lower()}={value}"
+            for header, value in sorted((extra_headers or {}).items())
+            if header.lower() in _ACCOUNT_HEADERS
+        ),
+    ]
+    account = "\0".join(str(credential or "") for credential in credentials)
+    issuer = "|".join(
+        [
+            provider,
+            name.removeprefix("responses/").lower(),
+            *[server or "" for server in servers],
+            hashlib.sha256(account.encode()).hexdigest()[:16],
+        ]
     )
-    key_digest = hashlib.sha256(key.encode()).hexdigest()[:16] if key else ""
-    bare = name.removeprefix("responses/").lower()
-    issuer = f"{provider}|{where}|{bare}|{key_digest}|{organization or ''}"
     return hashlib.sha256(issuer.encode()).hexdigest()[:16]
 
 
@@ -666,14 +694,19 @@ def _attach_thinking_blocks(
 
 
 def _marked_reasoning_items(items: Any, origin: str) -> list[dict[str, Any]]:
-    """A reply's reasoning items, each marked with the endpoint that issued it.
+    """A reply's encrypted reasoning items, each marked with the endpoint that issued it.
 
-    The mark goes on every item, not once on the message, so it survives the list
-    concatenation that merges stream chunks.
+    An item without encrypted content resolves only while the server keeps its
+    response, which store=False and zero-retention accounts rule out. The mark goes
+    on every item, so it survives the list concatenation that merges stream chunks.
     """
     if not isinstance(items, list):
         return []
-    return [{**item, _ORIGIN: origin} for item in items if isinstance(item, Mapping)]
+    return [
+        {**item, _ORIGIN: origin}
+        for item in items
+        if isinstance(item, Mapping) and item.get("encrypted_content")
+    ]
 
 
 def _keep_reasoning_items(result: ChatResult, origin: str | None) -> ChatResult:
@@ -683,8 +716,9 @@ def _keep_reasoning_items(result: ChatResult, origin: str | None) -> ChatResult:
         if "reasoning_items" not in kwargs:
             continue
         items = kwargs.pop("reasoning_items")
-        if origin is not None:
-            kwargs["reasoning_items"] = _marked_reasoning_items(items, origin)
+        marked = [] if origin is None else _marked_reasoning_items(items, origin)
+        if marked:
+            kwargs["reasoning_items"] = marked
     return result
 
 
@@ -693,9 +727,10 @@ def _attach_reasoning_items(
     message_dicts: list[dict[str, Any]],
     endpoint: str | None,
 ) -> None:
-    """Hand each turn's reasoning items back to the endpoint that issued them.
+    """Hand each turn's reasoning item back to the endpoint that issued it.
 
-    A turn's items followed one another, so they go back whole or not at all.
+    litellm puts a turn's items ahead of its text and tool calls, which keeps the
+    order of a turn with one item only, so a turn with several goes back without any.
     """
     if len(messages) != len(message_dicts):
         return
@@ -709,6 +744,10 @@ def _attach_reasoning_items(
             continue
         if endpoint is None:
             logger.debug("Not replaying reasoning items: no single issuing endpoint.")
+        elif len(items) > 1:
+            logger.debug(
+                "Not replaying a turn's reasoning items: litellm would move them."
+            )
         elif any(
             not isinstance(item, Mapping) or item.get(_ORIGIN) != endpoint
             for item in items
@@ -1200,11 +1239,13 @@ class ChatLiteLLM(BaseChatModel):
     litellm cannot bridge raises ``ValueError``. ``None`` and ``False`` leave the
     route to litellm, which sends some models, such as ``gpt-5-pro``, there anyway.
 
-    A reply's reasoning items go back on later turns, but only to the model,
-    endpoint and API key that issued them, since only there can they be decrypted.
-    For stateless turns, pass
-    ``extra_body={"store": False, "include": ["reasoning.encrypted_content"]}``.
-    Calls litellm routes there on its own keep no reasoning items."""
+    A reply's reasoning item goes back on later turns when it carries encrypted
+    content, the turn holds no other, and the model, endpoint and credentials are
+    the ones that issued it, since only there can it be decrypted. Ask for the
+    content with ``model_kwargs={"extra_body": {"include":
+    ["reasoning.encrypted_content"]}}``, adding ``"store": False`` for stateless
+    turns. litellm keeps only the last item of a reply it does not stream, and calls
+    it routes to the Responses API on its own keep none."""
     base_model: str | None = None
     extra_headers: dict[str, str] | None = Field(default=None, repr=False)
     request_timeout: float | tuple[float, float] | None = None
@@ -1463,6 +1504,7 @@ class ChatLiteLLM(BaseChatModel):
                 params.get("base_url") or params.get("api_base"),
                 params.get("api_key"),
                 params.get("organization"),
+                params.get("extra_headers"),
             ),
         )
 

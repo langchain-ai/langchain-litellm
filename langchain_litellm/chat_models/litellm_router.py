@@ -69,9 +69,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
     The deployment the Router picks decides which API a call reaches. OpenAI's
     built-in tools, such as ``{"type": "web_search"}``, need its Responses API, so
     name the deployment's model ``<provider>/responses/<model>``. A reply's
-    reasoning items go back on later turns only when the group's deployments share
-    one model, endpoint and API key and no fallback is set, since an item decrypts
-    only where it was issued.
+    reasoning item goes back on later turns only when the group's deployments share
+    one model, endpoint and set of credentials and no fallback is set, since an item
+    decrypts only where it was issued.
 
     Example:
         .. code-block:: python
