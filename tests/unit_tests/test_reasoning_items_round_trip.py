@@ -20,6 +20,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_litellm.chat_models import ChatLiteLLM, ChatLiteLLMRouter
 from langchain_litellm.chat_models.litellm import (
     _ORIGIN,
+    _attach_reasoning_items,
     _convert_message_to_dict,
     _rejoin_split_reply,
 )
@@ -364,6 +365,45 @@ def test_a_router_that_may_answer_elsewhere_keeps_nothing(
     message = _first_turn(llm())
 
     assert "reasoning_items" not in message.additional_kwargs
+
+
+def test_an_unmarked_item_never_reaches_a_request_without_an_issuer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no single issuer, an item without a mark must not count as matching."""
+    requests = serve_http(monkeypatch, REPLY)
+    first = AIMessage(
+        content="Checking.",
+        additional_kwargs={"reasoning_items": [dict(REASONING)]},
+        tool_calls=[
+            {"name": "get_weather", "args": {"city": "Paris"}, "id": "call_Qx7wP2"}
+        ],
+    )
+    split = _router(
+        {"model": DEPLOYMENT, "api_key": KEY},
+        {"model": DEPLOYMENT, "api_key": OTHER_KEY},
+    )
+
+    _second_turn(split, first)
+
+    assert _sent_reasoning(requests[-1]) == []
+
+
+def test_litellm_gets_each_item_as_it_returned_it() -> None:
+    """The mark is the connector's own; litellm receives only the keys it gave."""
+    origin = "a" * 16
+    messages = [
+        HumanMessage("weather?"),
+        AIMessage(
+            content="Checking.",
+            additional_kwargs={"reasoning_items": [{**REASONING, _ORIGIN: origin}]},
+        ),
+    ]
+    message_dicts = [_convert_message_to_dict(m) for m in messages]
+
+    _attach_reasoning_items(messages, message_dicts, origin)
+
+    assert message_dicts[1]["reasoning_items"] == [REASONING]
 
 
 def test_a_message_dict_never_carries_reasoning_items() -> None:
