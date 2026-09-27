@@ -188,8 +188,8 @@ def test_a_kept_item_never_holds_the_api_key(
 def test_a_tool_loop_sends_the_reasoning_item_back(
     monkeypatch: pytest.MonkeyPatch, kind: str, mode: str
 ) -> None:
-    """A fresh instance with the same endpoint and key replays the item, unmarked,
-    ahead of the function call it led to."""
+    """A fresh instance with the same endpoint and key replays the item ahead of
+    the function call it led to."""
     requests = serve_http(monkeypatch, REPLY, EVENTS)
     first = _first_turn(_model(kind), mode)
 
@@ -198,7 +198,44 @@ def test_a_tool_loop_sends_the_reasoning_item_back(
     assert _sent_reasoning(requests[-1]) == [("rs_1", ENCRYPTED)]
     types = [item.get("type") for item in json.loads(requests[-1].content)["input"]]
     assert types.index("reasoning") < types.index("function_call")
-    assert _ORIGIN not in requests[-1].content.decode()
+
+
+@pytest.mark.parametrize(
+    "llm",
+    [
+        pytest.param(
+            lambda: ChatLiteLLM(
+                model="gpt-5-mini",
+                custom_llm_provider="openai",
+                api_key=KEY,
+                use_responses_api=True,
+            ),
+            id="flag-with-provider",
+        ),
+        pytest.param(
+            lambda: ChatLiteLLM(
+                model=DEPLOYMENT, custom_llm_provider="openai", api_key=KEY
+            ),
+            id="named-with-provider",
+        ),
+        pytest.param(
+            lambda: _router(
+                {"model": DEPLOYMENT, "custom_llm_provider": "openai", "api_key": KEY}
+            ),
+            id="router-deployment-with-provider",
+        ),
+    ],
+)
+def test_a_named_provider_still_sends_the_item_back(
+    monkeypatch: pytest.MonkeyPatch, llm: Any
+) -> None:
+    """litellm drops a model prefix that repeats the provider, so the origin must too."""
+    requests = serve_http(monkeypatch, REPLY)
+    first = _first_turn(llm())
+
+    _second_turn(llm(), first)
+
+    assert _sent_reasoning(requests[-1]) == [("rs_1", ENCRYPTED)]
 
 
 def test_stateless_turns_carry_the_encrypted_item(
@@ -218,21 +255,30 @@ def test_stateless_turns_carry_the_encrypted_item(
     assert _sent_reasoning(requests[-1]) == [("rs_1", ENCRYPTED)]
 
 
-def test_an_item_the_server_stored_goes_back_by_id(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "model_kwargs",
+    [
+        pytest.param({}, id="stored"),
+        pytest.param({"extra_body": {"store": False}}, id="store-false"),
+    ],
+)
+def test_an_item_without_encrypted_content_stays_behind(
+    monkeypatch: pytest.MonkeyPatch, model_kwargs: dict[str, Any]
 ) -> None:
-    """With store=True there is no encrypted content; the id alone resolves it."""
-    stored = responses_api_reply(
+    """An id alone resolves only while the server keeps the response, which
+    store=False and zero-retention accounts rule out, so it is never kept."""
+    id_only = responses_api_reply(
         reasoning_item("rs_1", "Need the weather tool."),
         message_item("Checking."),
         CALL,
     )
-    requests = serve_http(monkeypatch, stored)
-    first = _first_turn(_base())
+    requests = serve_http(monkeypatch, id_only)
+    first = _first_turn(_base(model_kwargs=model_kwargs))
 
-    _second_turn(_base(), first)
+    _second_turn(_base(model_kwargs=model_kwargs), first)
 
-    assert _sent_reasoning(requests[-1]) == [("rs_1", None)]
+    assert "reasoning_items" not in first.additional_kwargs
+    assert _sent_reasoning(requests[-1]) == []
 
 
 @pytest.mark.parametrize(
@@ -258,24 +304,105 @@ def test_an_item_never_goes_to_another_issuer(
 
 
 @pytest.mark.parametrize(
-    ("second_key", "replayed"),
+    ("first", "second", "replayed"),
     [
-        pytest.param(KEY, [("rs_1", ENCRYPTED)], id="same-env-key"),
-        pytest.param(OTHER_KEY, [], id="another-env-key"),
+        pytest.param(
+            {"api_key": None, "env:OPENAI_API_KEY": KEY},
+            {"api_key": None, "env:OPENAI_API_KEY": KEY},
+            True,
+            id="same-env-key",
+        ),
+        pytest.param(
+            {"api_key": None, "env:OPENAI_API_KEY": KEY},
+            {"api_key": None, "env:OPENAI_API_KEY": OTHER_KEY},
+            False,
+            id="another-env-key",
+        ),
+        pytest.param(
+            {"api_key": None, "litellm:openai_key": KEY},
+            {"api_key": None, "litellm:openai_key": OTHER_KEY},
+            False,
+            id="another-litellm-openai-key",
+        ),
+        pytest.param(
+            {"api_key": None, "litellm:api_key": KEY},
+            {"api_key": None, "litellm:api_key": OTHER_KEY},
+            False,
+            id="another-litellm-api-key",
+        ),
+        pytest.param(
+            {"env:OPENAI_BASE_URL": "https://a.example/v1"},
+            {"env:OPENAI_BASE_URL": "https://b.example/v1"},
+            False,
+            id="another-base-url-env",
+        ),
+        pytest.param(
+            {"env:OPENAI_API_BASE": "https://a.example/v1"},
+            {"env:OPENAI_API_BASE": "https://b.example/v1"},
+            False,
+            id="another-api-base-env",
+        ),
+        pytest.param(
+            {
+                "env:OPENAI_API_BASE": "https://a.example/v1",
+                "env:OPENAI_BASE_URL": "https://a.example/v1",
+            },
+            {
+                "env:OPENAI_API_BASE": "https://a.example/v1",
+                "env:OPENAI_BASE_URL": "https://b.example/v1",
+            },
+            False,
+            id="another-base-url-env-beside-api-base",
+        ),
+        pytest.param(
+            {"api_base": "https://a:pw@gateway.example/v1"},
+            {"api_base": "https://b:pw@gateway.example/v1"},
+            False,
+            id="another-user-in-the-base",
+        ),
+        pytest.param(
+            {"extra_headers": {"OpenAI-Organization": "org-a"}},
+            {"extra_headers": {"OpenAI-Organization": "org-b"}},
+            False,
+            id="another-organization-header",
+        ),
+        pytest.param(
+            {"extra_headers": {"OpenAI-Project": "proj-a"}},
+            {"extra_headers": {"OpenAI-Project": "proj-b"}},
+            False,
+            id="another-project-header",
+        ),
     ],
 )
-def test_the_origin_follows_a_key_read_from_the_environment(
-    monkeypatch: pytest.MonkeyPatch, second_key: str, replayed: list[Any]
+def test_the_origin_follows_every_credential_litellm_may_read(
+    monkeypatch: pytest.MonkeyPatch,
+    first: dict[str, Any],
+    second: dict[str, Any],
+    replayed: bool,
 ) -> None:
-    """litellm falls back to OPENAI_API_KEY, so the origin must too."""
+    """litellm reads keys and bases from several places, in an order that differs by
+    provider, so a change to any of them replays nothing."""
+    for var in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE"):
+        monkeypatch.delenv(var, raising=False)
     requests = serve_http(monkeypatch, REPLY)
-    monkeypatch.setenv("OPENAI_API_KEY", KEY)
-    first = _first_turn(ChatLiteLLM(model=MODEL, use_responses_api=True))
 
-    monkeypatch.setenv("OPENAI_API_KEY", second_key)
-    _second_turn(ChatLiteLLM(model=MODEL, use_responses_api=True), first)
+    def model(setup: dict[str, Any]) -> ChatLiteLLM:
+        kwargs: dict[str, Any] = {"model": MODEL, "use_responses_api": True}
+        for name, value in setup.items():
+            where, _, attr = name.partition(":")
+            if where == "env":
+                monkeypatch.setenv(attr, value)
+            elif where == "litellm":
+                monkeypatch.setattr(litellm, attr, value)
+            else:
+                kwargs[name] = value
+        kwargs.setdefault("api_key", KEY)
+        return ChatLiteLLM(**kwargs)
 
-    assert _sent_reasoning(requests[-1]) == replayed
+    reply = _first_turn(model(first))
+    _second_turn(model(second), reply)
+
+    assert _sent_reasoning(requests[-1]) == ([("rs_1", ENCRYPTED)] if replayed else [])
 
 
 def test_a_chat_completions_call_never_carries_reasoning_items(
@@ -319,21 +446,43 @@ def test_an_item_from_elsewhere_stays_behind(
     assert _sent_reasoning(requests[-1]) == []
 
 
-def test_a_turn_goes_back_whole_or_not_at_all(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("mode", "kept", "sent"),
+    [
+        pytest.param("invoke", ["rs_2"], [("rs_2", "gAAAAB-2")], id="invoke"),
+        pytest.param("stream", ["rs_1", "rs_2"], [], id="stream"),
+    ],
+)
+def test_a_turn_with_several_items_goes_back_without_them(
+    monkeypatch: pytest.MonkeyPatch, mode: str, kept: list[str], sent: list[Any]
 ) -> None:
-    """Items of one turn followed one another; sending part of them edits the turn."""
-    requests = serve_http(monkeypatch, REPLY)
-    first = _first_turn(_base())
-    kept = first.additional_kwargs["reasoning_items"]
-    first.additional_kwargs["reasoning_items"] = [
-        *kept,
-        {**reasoning_item("rs_2", "Foreign.", "gAAAAB-other"), _ORIGIN: "0" * 16},
-    ]
+    """litellm puts a turn's items ahead of its text and tool calls, which moves all
+    but a lone item. Unstreamed, litellm itself keeps only the last one."""
+    first_item = reasoning_item("rs_1", "Search first.", "gAAAAB-1")
+    second_item = reasoning_item("rs_2", "Now the weather.", "gAAAAB-2")
+    reply = responses_api_reply(first_item, second_item, message_item("On it."), CALL)
+    events = responses_api_events(
+        {
+            "type": "response.created",
+            "response": {**reply, "status": "in_progress", "output": []},
+        },
+        {
+            "type": "response.output_text.delta",
+            "output_index": 2,
+            "item_id": "msg_1",
+            "content_index": 0,
+            "delta": "On it.",
+            "logprobs": [],
+        },
+        {"type": "response.completed", "response": reply},
+    )
+    requests = serve_http(monkeypatch, reply, events)
+    first = _first_turn(_base(), mode)
 
-    _second_turn(_base(), first)
+    _second_turn(_base(), first, mode)
 
-    assert _sent_reasoning(requests[-1]) == []
+    assert [item["id"] for item in first.additional_kwargs["reasoning_items"]] == kept
+    assert _sent_reasoning(requests[-1]) == sent
 
 
 def test_a_call_with_fallbacks_keeps_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
