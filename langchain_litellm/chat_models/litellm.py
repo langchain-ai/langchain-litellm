@@ -1198,7 +1198,13 @@ class ChatLiteLLM(BaseChatModel):
     litellm translates each request and reply, so calls are written as usual, but
     it drops Chat Completions-only params such as ``stop`` and ``n``. A model
     litellm cannot bridge raises ``ValueError``. ``None`` and ``False`` leave the
-    route to litellm, which sends some models, such as ``gpt-5-pro``, there anyway."""
+    route to litellm, which sends some models, such as ``gpt-5-pro``, there anyway.
+
+    A reply's reasoning items go back on later turns, but only to the model,
+    endpoint and API key that issued them, since only there can they be decrypted.
+    For stateless turns, pass
+    ``extra_body={"store": False, "include": ["reasoning.encrypted_content"]}``.
+    Calls litellm routes there on its own keep no reasoning items."""
     base_model: str | None = None
     extra_headers: dict[str, str] | None = Field(default=None, repr=False)
     request_timeout: float | tuple[float, float] | None = None
