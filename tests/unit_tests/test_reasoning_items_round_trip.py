@@ -201,6 +201,23 @@ def test_a_tool_loop_sends_the_reasoning_item_back(
     assert _ORIGIN not in requests[-1].content.decode()
 
 
+def test_stateless_turns_carry_the_encrypted_item(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The documented setup: with store=False, only the encrypted item keeps reasoning."""
+    requests = serve_http(monkeypatch, REPLY)
+    stateless = {
+        "extra_body": {"store": False, "include": ["reasoning.encrypted_content"]}
+    }
+    first = _first_turn(_base(model_kwargs=stateless))
+
+    _second_turn(_base(model_kwargs=stateless), first)
+
+    sent = json.loads(requests[-1].content)
+    assert (sent["store"], sent["include"]) == (False, ["reasoning.encrypted_content"])
+    assert _sent_reasoning(requests[-1]) == [("rs_1", ENCRYPTED)]
+
+
 def test_an_item_the_server_stored_goes_back_by_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
