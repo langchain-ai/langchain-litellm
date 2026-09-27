@@ -1,6 +1,6 @@
 """LiteLLM Router chat model integration for LangChain."""
 
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from typing import Any
 
 import litellm
@@ -28,6 +28,7 @@ from langchain_litellm.chat_models.litellm import (
     _create_retry_decorator,
     _create_usage_metadata,
     _get_field,
+    _keep_reasoning_items,
     _keep_thinking_blocks,
     _rejoin_split_reply,
     _sends_manual_thinking,
@@ -154,7 +155,17 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         )
 
     def _thinking_endpoint(self, params: dict[str, Any]) -> str | None:
-        """The one signing endpoint every deployment this request can reach shares.
+        return self._group_endpoint(params, super()._thinking_endpoint)
+
+    def _reasoning_endpoint(self, params: dict[str, Any]) -> str | None:
+        return self._group_endpoint(params, super()._reasoning_endpoint)
+
+    def _group_endpoint(
+        self,
+        params: dict[str, Any],
+        resolve: Callable[[dict[str, Any]], str | None],
+    ) -> str | None:
+        """The one endpoint every deployment this request can reach shares.
 
         The Router re-sends the same messages to any fallback, and an alias of the
         group points it elsewhere, so either replays nothing. Each deployment then
@@ -177,7 +188,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         deployments = self._deployments(params)
         endpoints = set()
         for deployment in deployments:
-            endpoints.add(super()._thinking_endpoint(deployment))
+            endpoints.add(resolve(deployment))
         views = [{k: d.get(k) for k in _REPLAY_SETTINGS} for d in deployments]
         if len(endpoints) != 1 or any(view != views[0] for view in views):
             return None
@@ -315,13 +326,17 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         params["stream"] = False
         params = {k: v for k, v in params.items() if v is not None}
         self._prepare_params_for_router(params)
+        reasoning = self._bind_reasoning(messages, message_dicts, params)
         binding = self._bind_thinking(messages, message_dicts, params)
 
         response = self.completion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
         )
-        return _keep_thinking_blocks(
-            self._create_chat_result(response, **params), response, binding
+        return _keep_reasoning_items(
+            _keep_thinking_blocks(
+                self._create_chat_result(response, **params), response, binding
+            ),
+            reasoning,
         )
 
     def _stream(
@@ -348,6 +363,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             if value is not None or key == "stream_options"
         }
         self._prepare_params_for_router(params)
+        reasoning = self._bind_reasoning(messages, message_dicts, params)
         binding = self._bind_thinking(messages, message_dicts, params)
         thinking = _ThinkingBlockAssembler(*binding) if binding else None
         first_chunk_yielded = False
@@ -388,7 +404,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             # Read before `chunk` is rebound from the raw mapping to the message.
             finish_reason = chunk["choices"][0].get("finish_reason")
             chunk = _convert_delta_to_message_chunk(
-                delta, default_chunk_class, thinking
+                delta, default_chunk_class, thinking, reasoning
             )
 
             # Attach usage if it exists on a content chunk
@@ -444,6 +460,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             if value is not None or key == "stream_options"
         }
         self._prepare_params_for_router(params)
+        reasoning = self._bind_reasoning(messages, message_dicts, params)
         binding = self._bind_thinking(messages, message_dicts, params)
         thinking = _ThinkingBlockAssembler(*binding) if binding else None
         first_chunk_yielded = False
@@ -484,7 +501,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             # Read before `chunk` is rebound from the raw mapping to the message.
             finish_reason = chunk["choices"][0].get("finish_reason")
             chunk = _convert_delta_to_message_chunk(
-                delta, default_chunk_class, thinking
+                delta, default_chunk_class, thinking, reasoning
             )
 
             if usage_metadata and isinstance(chunk, AIMessageChunk):
@@ -539,13 +556,17 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         params["stream"] = False
         params = {k: v for k, v in params.items() if v is not None}
         self._prepare_params_for_router(params)
+        reasoning = self._bind_reasoning(messages, message_dicts, params)
         binding = self._bind_thinking(messages, message_dicts, params)
 
         response = await self.acompletion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
         )
-        return _keep_thinking_blocks(
-            self._create_chat_result(response, **params), response, binding
+        return _keep_reasoning_items(
+            _keep_thinking_blocks(
+                self._create_chat_result(response, **params), response, binding
+            ),
+            reasoning,
         )
 
     # from

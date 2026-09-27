@@ -250,14 +250,22 @@ def _endpoint_name(
             or os.environ.get("ANTHROPIC_API_BASE")
             or os.environ.get("ANTHROPIC_BASE_URL")
         )
+    where = _server(base)
+    return None if where is None else f"{provider}|{where}|{name}"
+
+
+def _server(base: str | None) -> str | None:
+    """The server ``base`` names, without the credentials or query it may carry.
+
+    None when litellm could not parse it either, since litellm rejects such a base.
+    """
     try:
         url = urlsplit(base or "")
     except ValueError:
-        return None  # litellm rejects a base it cannot parse, and says why.
-    # Neither credentials nor a query string changes which server signs a block.
+        return None
+    # Neither credentials nor a query string changes which server answers.
     host = url.netloc.rpartition("@")[2].lower()
-    where = url._replace(netloc=host, query="", fragment="").geturl()
-    return f"{provider}|{where.rstrip('/')}|{name}"
+    return url._replace(netloc=host, query="", fragment="").geturl().rstrip("/")
 
 
 def _signing_endpoint(
@@ -272,6 +280,79 @@ def _signing_endpoint(
     """
     name = _endpoint_name(model, custom_llm_provider, api_base, base_model)
     return None if name is None else hashlib.sha256(name.encode()).hexdigest()[:16]
+
+
+def _issuing_endpoint(
+    model: str | None,
+    custom_llm_provider: str | None,
+    api_base: str | None,
+    api_key: str | None,
+    organization: str | None,
+) -> str | None:
+    """A digest naming who could decrypt a request's Responses API reasoning items.
+
+    OpenAI decrypts an item only for the model and the key's organization that
+    issued it, so the name joins the provider, the base, the model and a digest of
+    the key, read where litellm reads it. Only a model named
+    ``<provider>/responses/<model>`` goes through litellm's bridge; others are None.
+    """
+    provider = custom_llm_provider or ""
+    name = model or ""
+    if not provider and "/" in name:
+        provider, name = name.split("/", 1)
+    if not provider or not name.startswith("responses/"):
+        return None
+    env = provider.upper()
+    where = _server(
+        api_base
+        or getattr(litellm, "api_base", None)
+        or os.environ.get(f"{env}_API_BASE")
+        or os.environ.get(f"{env}_BASE_URL")
+    )
+    if where is None:
+        return None
+    key = (
+        api_key
+        or getattr(litellm, "api_key", None)
+        or os.environ.get(f"{env}_API_KEY")
+        or ""
+    )
+    key_digest = hashlib.sha256(key.encode()).hexdigest()[:16] if key else ""
+    bare = name.removeprefix("responses/").lower()
+    issuer = f"{provider}|{where}|{bare}|{key_digest}|{organization or ''}"
+    return hashlib.sha256(issuer.encode()).hexdigest()[:16]
+
+
+def _aliased(model: str | None) -> str | None:
+    """The model litellm resolves ``model`` to through its alias map."""
+    aliases = litellm.model_alias_map
+    return aliases[model] if aliases and model in aliases else model
+
+
+def _only_endpoint(params: Mapping[str, Any], endpoint: str | None) -> str | None:
+    """``endpoint``, unless something could answer this request from another one.
+
+    A setting outside ``_NON_ROUTING_PARAMS``, or a litellm-wide fallback, response
+    cache or proxy switch, can answer from elsewhere, so it replays nothing.
+    """
+    unknown = sorted(
+        key
+        for key, value in params.items()
+        if value
+        and key not in _NON_ROUTING_PARAMS
+        and not key.startswith(_PRICING_PREFIXES)
+    )
+    if unknown and endpoint is not None:
+        logger.debug("Not replaying: litellm may route on %s.", ", ".join(unknown))
+    if (
+        unknown
+        or litellm.model_fallbacks
+        or litellm.cache is not None
+        or litellm.use_litellm_proxy is True
+        or litellm.get_secret_bool("USE_LITELLM_PROXY") is True
+    ):
+        return None
+    return endpoint
 
 
 def _signed_thinking_blocks(blocks: Any) -> list[dict[str, Any]]:
@@ -584,6 +665,62 @@ def _attach_thinking_blocks(
     return endpoint, history.digest()
 
 
+def _marked_reasoning_items(items: Any, origin: str) -> list[dict[str, Any]]:
+    """A reply's reasoning items, each marked with the endpoint that issued it.
+
+    The mark goes on every item, not once on the message, so it survives the list
+    concatenation that merges stream chunks.
+    """
+    if not isinstance(items, list):
+        return []
+    return [{**item, _ORIGIN: origin} for item in items if isinstance(item, Mapping)]
+
+
+def _keep_reasoning_items(result: ChatResult, origin: str | None) -> ChatResult:
+    """Mark each reply's reasoning items with ``origin``, or drop them without one."""
+    for generation in result.generations:
+        kwargs = generation.message.additional_kwargs
+        if "reasoning_items" not in kwargs:
+            continue
+        items = kwargs.pop("reasoning_items")
+        if origin is not None:
+            kwargs["reasoning_items"] = _marked_reasoning_items(items, origin)
+    return result
+
+
+def _attach_reasoning_items(
+    messages: Sequence[BaseMessage],
+    message_dicts: list[dict[str, Any]],
+    endpoint: str | None,
+) -> None:
+    """Hand each turn's reasoning items back to the endpoint that issued them.
+
+    A turn's items followed one another, so they go back whole or not at all.
+    """
+    if len(messages) != len(message_dicts):
+        return
+    for message, message_dict in zip(messages, message_dicts, strict=True):
+        items = message.additional_kwargs.get("reasoning_items")
+        if (
+            not isinstance(message, AIMessage)
+            or not isinstance(items, list)
+            or not items
+        ):
+            continue
+        if endpoint is None:
+            logger.debug("Not replaying reasoning items: no single issuing endpoint.")
+        elif any(
+            not isinstance(item, Mapping) or item.get(_ORIGIN) != endpoint
+            for item in items
+        ):
+            logger.debug("Not replaying a turn's reasoning items: issued elsewhere.")
+        else:
+            message_dict["reasoning_items"] = [
+                {key: value for key, value in item.items() if key != _ORIGIN}
+                for item in items
+            ]
+
+
 def _cost_metadata(response: Any) -> dict[str, Any]:
     """Name what a call cost, from whichever field litellm recorded it in.
 
@@ -613,6 +750,9 @@ def _rejoin_split_reply(choices: Sequence[Any], n: int | None) -> Sequence[Any]:
             m.get("reasoning_content") or "" for m in messages
         ),
     }
+    items = [item for m in messages for item in m.get("reasoning_items") or []]
+    if items:
+        message["reasoning_items"] = items
     return [{"message": message, "finish_reason": choices[-1].get("finish_reason")}]
 
 
@@ -703,7 +843,7 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
     elif role == "assistant":
         content = _dict.get("content", "") or ""
 
-        additional_kwargs = {}
+        additional_kwargs: dict[str, Any] = {}
         tool_calls = []
         invalid_tool_calls: list[InvalidToolCall] = []
 
@@ -775,6 +915,9 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
 
         if _dict.get("reasoning_content"):
             additional_kwargs["reasoning_content"] = _dict["reasoning_content"]
+        # Kept only once marked with their issuer: see _keep_reasoning_items.
+        if _dict.get("reasoning_items"):
+            additional_kwargs["reasoning_items"] = list(_dict["reasoning_items"])
 
         # Check standard field first, then fallback to Vertex specific field
         provider_specific_fields = _dict.get("provider_specific_fields")
@@ -805,7 +948,9 @@ def _convert_delta_to_message_chunk(
     delta: Delta | dict[str, Any],
     default_class: type[BaseMessageChunk],
     thinking: _ThinkingBlockAssembler | None = None,
+    reasoning: str | None = None,
 ) -> BaseMessageChunk:
+    """``reasoning`` is the endpoint issuing this stream's reasoning items, if kept."""
     # Handle both Delta objects and dicts
     if isinstance(delta, dict):
         role = delta.get("role")
@@ -844,6 +989,10 @@ def _convert_delta_to_message_chunk(
         )
         if thinking_blocks:
             additional_kwargs["thinking_blocks"] = thinking_blocks
+    if reasoning is not None:
+        items = _marked_reasoning_items(_get_field(delta, "reasoning_items"), reasoning)
+        if items:
+            additional_kwargs["reasoning_items"] = items
 
     if provider_specific_fields is not None:
         additional_kwargs["provider_specific_fields"] = provider_specific_fields
@@ -1285,46 +1434,47 @@ class ChatLiteLLM(BaseChatModel):
         """The one endpoint this request reaches, when it checks replayed thinking.
 
         ``params`` must be the merged per-call params, since a call may redirect.
-        A setting outside ``_NON_ROUTING_PARAMS``, or a litellm-wide fallback,
-        response cache or proxy switch, can answer from another endpoint, so it
-        replays nothing. An alias is named by the model it maps to, as litellm does.
         """
-        model = params.get("model")
-        aliases = litellm.model_alias_map
-        if aliases and model in aliases:
-            model = aliases[model]
-        endpoint = _signing_endpoint(
-            model,
-            params.get("custom_llm_provider"),
-            # litellm sends to base_url over api_base when a caller sets both.
-            params.get("base_url") or params.get("api_base"),
-            params.get("base_model"),
+        return _only_endpoint(
+            params,
+            _signing_endpoint(
+                _aliased(params.get("model")),
+                params.get("custom_llm_provider"),
+                # litellm sends to base_url over api_base when a caller sets both.
+                params.get("base_url") or params.get("api_base"),
+                params.get("base_model"),
+            ),
         )
-        unknown = sorted(
-            key
-            for key, value in params.items()
-            if value
-            and key not in _NON_ROUTING_PARAMS
-            and not key.startswith(_PRICING_PREFIXES)
+
+    def _reasoning_endpoint(self, params: dict[str, Any]) -> str | None:
+        """The one endpoint and key this request reaches, when it replays reasoning
+        items. ``params`` must be the merged per-call params."""
+        return _only_endpoint(
+            params,
+            _issuing_endpoint(
+                _aliased(params.get("model")),
+                params.get("custom_llm_provider"),
+                params.get("base_url") or params.get("api_base"),
+                params.get("api_key"),
+                params.get("organization"),
+            ),
         )
-        if unknown and endpoint is not None:
-            logger.debug(
-                "Not replaying thinking blocks: litellm may route on %s.",
-                ", ".join(unknown),
-            )
-        if (
-            unknown
-            or litellm.model_fallbacks
-            or litellm.cache is not None
-            or litellm.use_litellm_proxy is True
-            or litellm.get_secret_bool("USE_LITELLM_PROXY") is True
-        ):
-            return None
-        return endpoint
 
     def _replay_params(self, params: dict[str, Any]) -> Mapping[str, Any]:
         """The settings this request is sent with, where replay depends on them."""
         return params
+
+    def _bind_reasoning(
+        self,
+        messages: Sequence[BaseMessage],
+        message_dicts: list[dict[str, Any]],
+        params: dict[str, Any],
+    ) -> str | None:
+        """Replay what reasoning items this request may carry back; say who issues
+        its reply's."""
+        endpoint = self._reasoning_endpoint(params)
+        _attach_reasoning_items(messages, message_dicts, endpoint)
+        return endpoint
 
     def _bind_thinking(
         self,
@@ -1449,12 +1599,16 @@ class ChatLiteLLM(BaseChatModel):
         # This branch parses a mapping, so it must not inherit stream=True from a
         # streaming=True instance that the caller overrode with stream=False.
         params["stream"] = False
+        reasoning = self._bind_reasoning(messages, message_dicts, params)
         binding = self._bind_thinking(messages, message_dicts, params)
         response = self.completion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
         )
-        return _keep_thinking_blocks(
-            self._create_chat_result(response, **params), response, binding
+        return _keep_reasoning_items(
+            _keep_thinking_blocks(
+                self._create_chat_result(response, **params), response, binding
+            ),
+            reasoning,
         )
 
     def _create_chat_result(
@@ -1520,6 +1674,7 @@ class ChatLiteLLM(BaseChatModel):
                 if self.stream_options is not None
                 else {"include_usage": True}
             )
+        reasoning = self._bind_reasoning(messages, message_dicts, params)
         binding = self._bind_thinking(messages, message_dicts, params)
         thinking = _ThinkingBlockAssembler(*binding) if binding else None
         default_chunk_class = AIMessageChunk
@@ -1572,7 +1727,7 @@ class ChatLiteLLM(BaseChatModel):
                 delta["provider_specific_fields"] = root_metadata
 
             chunk = _convert_delta_to_message_chunk(
-                delta, default_chunk_class, thinking
+                delta, default_chunk_class, thinking, reasoning
             )
 
             if usage_metadata and isinstance(chunk, AIMessageChunk):
@@ -1615,6 +1770,7 @@ class ChatLiteLLM(BaseChatModel):
                 if self.stream_options is not None
                 else {"include_usage": True}
             )
+        reasoning = self._bind_reasoning(messages, message_dicts, params)
         binding = self._bind_thinking(messages, message_dicts, params)
         thinking = _ThinkingBlockAssembler(*binding) if binding else None
         default_chunk_class = AIMessageChunk
@@ -1666,7 +1822,7 @@ class ChatLiteLLM(BaseChatModel):
                 delta["provider_specific_fields"] = root_metadata
 
             chunk = _convert_delta_to_message_chunk(
-                delta, default_chunk_class, thinking
+                delta, default_chunk_class, thinking, reasoning
             )
 
             if usage_metadata and isinstance(chunk, AIMessageChunk):
@@ -1714,12 +1870,16 @@ class ChatLiteLLM(BaseChatModel):
         # This branch parses a mapping, so it must not inherit stream=True from a
         # streaming=True instance that the caller overrode with stream=False.
         params["stream"] = False
+        reasoning = self._bind_reasoning(messages, message_dicts, params)
         binding = self._bind_thinking(messages, message_dicts, params)
         response = await self.acompletion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
         )
-        return _keep_thinking_blocks(
-            self._create_chat_result(response, **params), response, binding
+        return _keep_reasoning_items(
+            _keep_thinking_blocks(
+                self._create_chat_result(response, **params), response, binding
+            ),
+            reasoning,
         )
 
     def bind_tools(
