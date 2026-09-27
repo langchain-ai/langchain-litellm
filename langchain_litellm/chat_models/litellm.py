@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import functools
 import hashlib
 import json
 import logging
@@ -212,6 +213,8 @@ _PRICING_PREFIXES = (
 
 # Keys litellm reads for a provider besides <PROVIDER>_API_KEY.
 _KEY_ENV_VARS = {"azure": ("AZURE_OPENAI_API_KEY",)}
+# Salts the digest naming who issued a reasoning item, which covers credentials.
+_ISSUER_SALT = b"langchain-litellm reasoning item issuer"
 # Headers that choose the account a Responses API request runs under.
 _ACCOUNT_HEADERS = frozenset(
     {"authorization", "api-key", "openai-organization", "openai-project"}
@@ -339,16 +342,27 @@ def _issuing_endpoint(
             if header.lower() in _ACCOUNT_HEADERS
         ),
     ]
-    account = "\0".join(str(credential or "") for credential in credentials)
-    issuer = "|".join(
+    issuer = "\0".join(
         [
             provider,
             name.removeprefix("responses/").lower(),
             *[server or "" for server in servers],
-            hashlib.sha256(account.encode()).hexdigest()[:16],
+            *[str(credential or "") for credential in credentials],
         ]
     )
-    return hashlib.sha256(issuer.encode()).hexdigest()[:16]
+    return _issuer_digest(issuer)
+
+
+@functools.lru_cache(maxsize=64)
+def _issuer_digest(issuer: str) -> str:
+    """A slow, salted digest of ``issuer``, which holds credentials.
+
+    Saved histories keep it, and a fast hash would let their holder test guesses at
+    a weak key offline. scrypt makes each guess costly; the cache pays once a process.
+    """
+    return hashlib.scrypt(
+        issuer.encode(), salt=_ISSUER_SALT, n=2**14, r=8, p=1, dklen=8
+    ).hex()
 
 
 def _aliased(model: str | None) -> str | None:
