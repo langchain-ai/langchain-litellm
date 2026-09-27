@@ -119,12 +119,17 @@ def web_search_call_item() -> dict[str, Any]:
     }
 
 
-def reasoning_item(item_id: str, summary: str) -> dict[str, Any]:
-    return {
+def reasoning_item(
+    item_id: str, summary: str, encrypted_content: str | None = None
+) -> dict[str, Any]:
+    item: dict[str, Any] = {
         "type": "reasoning",
         "id": item_id,
         "summary": [{"type": "summary_text", "text": summary}],
     }
+    if encrypted_content is not None:
+        item["encrypted_content"] = encrypted_content
+    return item
 
 
 def chat_completion_reply(*contents: str) -> dict[str, Any]:
