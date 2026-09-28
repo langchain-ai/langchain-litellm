@@ -52,12 +52,14 @@ from langchain_core.messages import (
     ToolCall,
     ToolCallChunk,
     ToolMessage,
+    content as types,
 )
 from langchain_core.messages.ai import (
     InputTokenDetails,
     OutputTokenDetails,
     UsageMetadata,
 )
+from langchain_core.messages.block_translators import register_translator
 from langchain_core.messages.tool import invalid_tool_call
 from langchain_core.messages.utils import (
     convert_to_openai_data_block,
@@ -788,6 +790,23 @@ def _cost_metadata(response: Any) -> dict[str, Any]:
     return {"response_cost": cost} if cost is not None else {}
 
 
+def _shifted(annotation: Any, offset: int) -> Any:
+    """``annotation`` with its span moved ``offset`` characters later, in either shape
+    litellm returns: flat, or nested under ``url_citation``."""
+    if not offset or not isinstance(annotation, Mapping):
+        return annotation
+    nested = annotation.get("url_citation")
+    fields = nested if isinstance(nested, Mapping) else annotation
+    moved = {
+        key: fields[key] + offset
+        for key in ("start_index", "end_index")
+        if isinstance(fields.get(key), int)
+    }
+    if nested is fields:
+        return {**annotation, "url_citation": {**fields, **moved}}
+    return {**annotation, **moved}
+
+
 def _rejoin_split_reply(choices: Sequence[Any], n: int | None) -> Sequence[Any]:
     """Rejoin one reply that litellm split across choices, unless ``n`` asked for several.
 
@@ -808,6 +827,13 @@ def _rejoin_split_reply(choices: Sequence[Any], n: int | None) -> Sequence[Any]:
     items = [item for m in messages for item in m.get("reasoning_items") or []]
     if items:
         message["reasoning_items"] = items
+    annotations: list[Any] = []
+    offset = 0
+    for m in messages:
+        annotations += [_shifted(a, offset) for a in m.get("annotations") or []]
+        offset += len(m.get("content") or "")
+    if annotations:
+        message["annotations"] = annotations
     return [{"message": message, "finish_reason": choices[-1].get("finish_reason")}]
 
 
@@ -973,6 +999,10 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
         # Kept only once marked with their issuer: see _keep_reasoning_items.
         if _dict.get("reasoning_items"):
             additional_kwargs["reasoning_items"] = list(_dict["reasoning_items"])
+        # Citations as litellm returns them; content_blocks shows them: see
+        # _content_blocks_with_citations.
+        if _dict.get("annotations"):
+            additional_kwargs["annotations"] = list(_dict["annotations"])
 
         # Check standard field first, then fallback to Vertex specific field
         provider_specific_fields = _dict.get("provider_specific_fields")
@@ -997,6 +1027,65 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
         return ToolMessage(content=_dict["content"], tool_call_id=_dict["tool_call_id"])
     else:
         return ChatMessage(content=_dict["content"], role=role)
+
+
+def _url_citation(annotation: Any) -> dict[str, Any] | None:
+    """A url_citation annotation as a standard citation, or None for anything else."""
+    if not isinstance(annotation, Mapping) or annotation.get("type") != "url_citation":
+        return None
+    nested = annotation.get("url_citation")
+    fields = nested if isinstance(nested, Mapping) else annotation
+    if not isinstance(fields.get("url"), str):
+        return None
+    citation: dict[str, Any] = {"type": "citation", "url": fields["url"]}
+    if isinstance(fields.get("title"), str):
+        citation["title"] = fields["title"]
+    span = [fields.get("start_index"), fields.get("end_index")]
+    if all(isinstance(index, int) for index in span):
+        citation["start_index"], citation["end_index"] = span
+    elif any(index is not None for index in span):
+        return None  # Half a span points nowhere.
+    return citation
+
+
+def _content_blocks_with_citations(
+    message: AIMessage,
+) -> list[types.ContentBlock]:
+    """content_blocks with a reply's url citations on its text.
+
+    Content stays the string litellm returned, so langchain-core's own parsing never
+    sees the citations. It gets the same message with that text as a block carrying
+    them, and builds everything else as it would.
+    """
+    annotations = message.additional_kwargs.get("annotations")
+    citations = [
+        citation
+        for citation in map(
+            _url_citation, annotations if isinstance(annotations, list) else []
+        )
+        if citation is not None
+    ]
+    if not citations or not isinstance(message.content, str) or not message.content:
+        raise NotImplementedError
+    metadata = {
+        key: value
+        for key, value in message.response_metadata.items()
+        if key != "model_provider"
+    }
+    cited = message.model_copy(
+        update={
+            "content": [
+                {"type": "text", "text": message.content, "annotations": citations}
+            ],
+            "response_metadata": metadata,
+        }
+    )
+    return cited.content_blocks
+
+
+register_translator(
+    "litellm", _content_blocks_with_citations, _content_blocks_with_citations
+)
 
 
 def _convert_delta_to_message_chunk(
@@ -1048,6 +1137,8 @@ def _convert_delta_to_message_chunk(
         items = _marked_reasoning_items(_get_field(delta, "reasoning_items"), reasoning)
         if items:
             additional_kwargs["reasoning_items"] = items
+    if annotations := _get_field(delta, "annotations"):
+        additional_kwargs["annotations"] = list(annotations)
 
     if provider_specific_fields is not None:
         additional_kwargs["provider_specific_fields"] = provider_specific_fields
@@ -1159,6 +1250,16 @@ def _convert_message_to_dict(message: BaseMessage) -> dict[str, Any]:
                 elif _is_skipped_content_block(item):
                     continue
 
+                # Citations are output only, and providers reject a key they do not know.
+                elif item.get("type") == "text" and "annotations" in item:
+                    new_content.append(
+                        {
+                            key: value
+                            for key, value in item.items()
+                            if key != "annotations"
+                        }
+                    )
+
                 # Pass through standard text blocks or other unrecognized dict formats unchanged
                 else:
                     new_content.append(item)
@@ -1220,7 +1321,14 @@ def _convert_message_to_dict(message: BaseMessage) -> dict[str, Any]:
 
 
 class ChatLiteLLM(BaseChatModel):
-    """Chat model that uses the LiteLLM API."""
+    """Chat model that uses the LiteLLM API.
+
+    A reply's web-search citations stay as litellm returns them in
+    ``additional_kwargs["annotations"]``, while ``content`` stays a string;
+    ``content_blocks``, and ``output_version="v1"``, show them as standard
+    citations on the text. A reply streamed through litellm's Responses API bridge
+    carries none, since litellm drops them there.
+    """
 
     client: Any = None  #: :meta private:
     model: str = "gpt-3.5-turbo"
