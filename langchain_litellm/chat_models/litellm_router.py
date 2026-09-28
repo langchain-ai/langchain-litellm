@@ -592,7 +592,11 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             message = _convert_dict_to_message(res["message"])
             if isinstance(message, AIMessage):
                 message.response_metadata = {
-                    "model_name": self.model_name or self.model,
+                    # The Router can silently fall back to another deployment;
+                    # the raw response names the model that actually answered.
+                    "model_name": response.get("model")
+                    or self.model_name
+                    or self.model,
                     "model_provider": "litellm",
                     **_deployment_metadata(response),
                     **_cost_metadata(response),

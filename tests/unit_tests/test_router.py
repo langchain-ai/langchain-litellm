@@ -844,6 +844,34 @@ def test_router_create_chat_result_names_the_cost_and_deployment() -> None:
     }
 
 
+def test_router_create_chat_result_names_the_model_that_actually_answered() -> None:
+    """A fallback silently swaps in another deployment.
+
+    `response["model"]` is set from the provider's own reply, so this must win
+    over the alias the caller configured, and a response without it must still
+    fall back to that alias rather than raise.
+    """
+    llm = ChatLiteLLMRouter(router=make_router())
+    mock_response = {
+        "choices": [
+            {"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        "model": "claude-3-5-haiku-20241022",
+    }
+
+    result = llm._create_chat_result(mock_response, metadata={})
+    metadata = result.generations[0].message.response_metadata
+
+    assert metadata["model_name"] == "claude-3-5-haiku-20241022"
+
+    del mock_response["model"]
+    result = llm._create_chat_result(mock_response, metadata={})
+    assert result.generations[0].message.response_metadata["model_name"] == (
+        llm.model_name or llm.model
+    )
+
+
 def _completion_filling_router_metadata() -> Callable[..., Any]:
     """Answer the way litellm does, by filling the caller's `metadata` dict in place.
 
