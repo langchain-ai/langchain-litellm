@@ -70,7 +70,8 @@ def responses_api_reply(*output: dict[str, Any]) -> dict[str, Any]:
         "tools": [],
         "usage": {
             "input_tokens": 1,
-            "input_tokens_details": {"cached_tokens": 0},
+            # Required since openai 2.45.0; older SDKs keep it as an extra.
+            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
             "output_tokens": 1,
             "output_tokens_details": {"reasoning_tokens": 0},
             "total_tokens": 2,
