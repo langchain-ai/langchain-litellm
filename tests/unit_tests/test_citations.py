@@ -336,6 +336,10 @@ def test_citations_leave_the_rest_of_content_blocks_to_core() -> None:
         pytest.param([{"type": "url_citation", "title": "no url"}], id="no-url"),
         pytest.param([{"type": "file_citation", "file_id": "f"}], id="other-kind"),
         pytest.param(
+            [{"type": "file_citation", "url": "https://a", "file_id": "f"}],
+            id="other-kind-with-a-url",
+        ),
+        pytest.param(
             [{"type": "url_citation", "url": "https://a", "start_index": 3}],
             id="half-a-span",
         ),

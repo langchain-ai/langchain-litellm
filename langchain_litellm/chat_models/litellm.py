@@ -791,19 +791,17 @@ def _cost_metadata(response: Any) -> dict[str, Any]:
 
 
 def _shifted(annotation: Any, offset: int) -> Any:
-    """``annotation`` with its span moved ``offset`` characters later, in either shape
-    litellm returns: flat, or nested under ``url_citation``."""
+    """``annotation`` with its span moved ``offset`` characters later.
+
+    Only litellm's Responses API bridge splits a reply, and it returns the flat shape.
+    """
     if not offset or not isinstance(annotation, Mapping):
         return annotation
-    nested = annotation.get("url_citation")
-    fields = nested if isinstance(nested, Mapping) else annotation
     moved = {
-        key: fields[key] + offset
+        key: annotation[key] + offset
         for key in ("start_index", "end_index")
-        if isinstance(fields.get(key), int)
+        if isinstance(annotation.get(key), int)
     }
-    if nested is fields:
-        return {**annotation, "url_citation": {**fields, **moved}}
     return {**annotation, **moved}
 
 
@@ -1067,17 +1065,12 @@ def _content_blocks_with_citations(
     ]
     if not citations or not isinstance(message.content, str) or not message.content:
         raise NotImplementedError
-    metadata = {
-        key: value
-        for key, value in message.response_metadata.items()
-        if key != "model_provider"
-    }
+    # List content comes straight back here and is declined, so core parses the copy.
     cited = message.model_copy(
         update={
             "content": [
                 {"type": "text", "text": message.content, "annotations": citations}
-            ],
-            "response_metadata": metadata,
+            ]
         }
     )
     return cited.content_blocks
