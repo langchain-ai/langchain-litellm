@@ -1033,11 +1033,12 @@ def _url_citation(annotation: Any) -> dict[str, Any] | None:
         return None
     nested = annotation.get("url_citation")
     fields = nested if isinstance(nested, Mapping) else annotation
-    if not isinstance(fields.get("url"), str):
+    url, title = fields.get("url"), fields.get("title")
+    if not isinstance(url, str) or not url:
         return None
-    citation: dict[str, Any] = {"type": "citation", "url": fields["url"]}
-    if isinstance(fields.get("title"), str):
-        citation["title"] = fields["title"]
+    citation: dict[str, Any] = {"type": "citation", "url": url}
+    if isinstance(title, str) and title:
+        citation["title"] = title
     span = [fields.get("start_index"), fields.get("end_index")]
     if all(isinstance(index, int) for index in span):
         citation["start_index"], citation["end_index"] = span
@@ -1063,7 +1064,11 @@ def _content_blocks_with_citations(
         )
         if citation is not None
     ]
-    if not citations or not isinstance(message.content, str) or not message.content:
+    if not citations or not isinstance(message.content, str):
+        raise NotImplementedError
+    # A reply needs text to cite, but a stream's delta can carry the citations alone:
+    # core's v1 merge joins that block onto the text before it.
+    if not message.content and not isinstance(message, AIMessageChunk):
         raise NotImplementedError
     # List content comes straight back here and is declined, so core parses the copy.
     cited = message.model_copy(
@@ -1163,6 +1168,13 @@ def _convert_delta_to_message_chunk(
             content=content,
             additional_kwargs=additional_kwargs,
             tool_call_chunks=tool_call_chunks,
+            # Only the first chunk carries the label otherwise, and without it core
+            # never shows this chunk's citations: see _content_blocks_with_citations.
+            response_metadata=(
+                {"model_provider": "litellm"}
+                if "annotations" in additional_kwargs
+                else {}
+            ),
         )
     elif role == "system" or default_class == SystemMessageChunk:
         return SystemMessageChunk(content=content)
@@ -1316,11 +1328,13 @@ def _convert_message_to_dict(message: BaseMessage) -> dict[str, Any]:
 class ChatLiteLLM(BaseChatModel):
     """Chat model that uses the LiteLLM API.
 
-    A reply's web-search citations stay as litellm returns them in
-    ``additional_kwargs["annotations"]``, while ``content`` stays a string;
-    ``content_blocks``, and ``output_version="v1"``, show them as standard
-    citations on the text. A reply streamed through litellm's Responses API bridge
-    carries none, since litellm drops them there.
+    A reply's url citations that litellm returns as ``annotations`` are kept in
+    ``additional_kwargs["annotations"]``, with a split reply's later spans shifted
+    onto the joined text, and ``content`` stays a string. ``content_blocks``, and
+    ``output_version="v1"``, show them as standard citations on the text, streamed
+    or not, in any process that imports ``langchain_litellm``. Spans are the offsets
+    litellm reports, which for Gemini grounding are bytes within a part. A reply
+    streamed through litellm's Responses API bridge carries none: litellm drops them.
     """
 
     client: Any = None  #: :meta private:
