@@ -36,6 +36,7 @@ from langchain_litellm.chat_models.litellm import (
     _cost_metadata,
     _create_usage_metadata,
     _provider_api_key_field,
+    _stream_cost_metadata,
 )
 from tests.utils import (
     OPUS_4_7_THINKS_ADAPTIVELY,
@@ -2244,23 +2245,33 @@ def test_cost_is_read_from_either_shape_litellm_hands_over() -> None:
     as_dict = {"usage": {"cost": 2.4e-06}}
     as_model = SimpleNamespace(usage=SimpleNamespace(cost=2.4e-06))
 
-    assert _cost_metadata(as_dict) == {"response_cost": 2.4e-06}
-    assert _cost_metadata(as_model) == {"response_cost": 2.4e-06}
+    assert _stream_cost_metadata(as_dict) == {"response_cost": 2.4e-06}
+    assert _stream_cost_metadata(as_model) == {"response_cost": 2.4e-06}
 
-    # A complete response holds the settled figure; `usage` is the stream's fallback.
+    # A complete response holds the settled figure; `usage` is the fallback.
     both = {"_hidden_params": {"response_cost": 1.0}, "usage": {"cost": 2.0}}
     assert _cost_metadata(both) == {"response_cost": 1.0}
+
+
+def test_a_stream_chunk_names_only_the_cost_on_its_usage() -> None:
+    """A Router fallback copies a 0.0 priced before any token into every chunk."""
+    fell_back = {"_hidden_params": {"response_cost": 0.0}, "usage": {"cost": 9e-06}}
+
+    assert _stream_cost_metadata(fell_back) == {"response_cost": 9e-06}
+    assert _stream_cost_metadata({"_hidden_params": {"response_cost": 0.0}}) == {}
 
 
 def test_a_zero_cost_is_a_figure_rather_than_an_absence() -> None:
     """A free call costs 0.0, and a truthiness check would report it as unknown."""
     assert _cost_metadata({"usage": {"cost": 0.0}}) == {"response_cost": 0.0}
+    assert _stream_cost_metadata({"usage": {"cost": 0.0}}) == {"response_cost": 0.0}
 
 
 def test_a_response_that_names_no_cost_adds_no_key() -> None:
     """A key present and None reads as a real figure of zero value downstream."""
     assert _cost_metadata({}) == {}
     assert _cost_metadata({"usage": None, "_hidden_params": {}}) == {}
+    assert _stream_cost_metadata({"usage": None}) == {}
 
 
 def test_credentials_are_not_shown_in_repr() -> None:

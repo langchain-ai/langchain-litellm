@@ -35,6 +35,7 @@ from langchain_litellm.chat_models.litellm import (
     _responses_api_gap,
     _sends_manual_thinking,
     _sends_to_responses_api,
+    _stream_cost_metadata,
     _ThinkingBlockAssembler,
 )
 
@@ -520,7 +521,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             # Read while `chunk` is still the raw response: both the usage-only
             # branch below and the content path need these. A cost named on two
             # chunks cannot be merged, since langchain raises on two floats.
-            cost_metadata = {} if cost_named else _cost_metadata(chunk)
+            cost_metadata = {} if cost_named else _stream_cost_metadata(chunk)
             deployment_metadata = _deployment_metadata(chunk)
 
             if len(chunk["choices"]) == 0:
@@ -618,7 +619,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             # Read while `chunk` is still the raw response: both the usage-only
             # branch below and the content path need these. A cost named on two
             # chunks cannot be merged, since langchain raises on two floats.
-            cost_metadata = {} if cost_named else _cost_metadata(chunk)
+            cost_metadata = {} if cost_named else _stream_cost_metadata(chunk)
             deployment_metadata = _deployment_metadata(chunk)
 
             # Check for empty choices

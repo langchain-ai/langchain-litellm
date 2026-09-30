@@ -808,14 +808,23 @@ def _attach_reasoning_items(
 
 
 def _cost_metadata(response: Any) -> dict[str, Any]:
-    """Name what a call cost, from whichever field litellm recorded it in.
+    """Name what a complete response cost, from whichever field litellm recorded it in.
 
-    A complete response carries the figure in `_hidden_params`; a stream leaves it
-    there unset and reports it under `usage` on the trailing usage chunk.
+    litellm settles the figure in `_hidden_params`; `usage` is the fallback.
     """
     cost = _get_field(_get_field(response, "_hidden_params"), "response_cost")
     if cost is None:
         cost = _get_field(_get_field(response, "usage"), "cost")
+    return {"response_cost": cost} if cost is not None else {}
+
+
+def _stream_cost_metadata(chunk: Any) -> dict[str, Any]:
+    """Name what a stream cost, from the `usage` litellm puts on its usage chunk.
+
+    A chunk's `_hidden_params` is no source: litellm leaves its cost unset, and a
+    Router fallback copies in a 0.0 priced before any token arrived.
+    """
+    cost = _get_field(_get_field(chunk, "usage"), "cost")
     return {"response_cost": cost} if cost is not None else {}
 
 
@@ -1903,7 +1912,7 @@ class ChatLiteLLM(BaseChatModel):
             # Read while `chunk` is still the raw response: both the usage-only
             # branch below and the content path need it. A cost named on two
             # chunks cannot be merged, since langchain raises on two floats.
-            cost_metadata = {} if cost_named else _cost_metadata(chunk)
+            cost_metadata = {} if cost_named else _stream_cost_metadata(chunk)
 
             # Handle empty choices (usage-only chunks)
             if len(chunk["choices"]) == 0:
@@ -1999,7 +2008,7 @@ class ChatLiteLLM(BaseChatModel):
             # Read while `chunk` is still the raw response: both the usage-only
             # branch below and the content path need it. A cost named on two
             # chunks cannot be merged, since langchain raises on two floats.
-            cost_metadata = {} if cost_named else _cost_metadata(chunk)
+            cost_metadata = {} if cost_named else _stream_cost_metadata(chunk)
 
             # Handle empty choices (usage-only chunks)
             if len(chunk["choices"]) == 0:
