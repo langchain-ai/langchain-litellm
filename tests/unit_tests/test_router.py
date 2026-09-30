@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any
 from unittest.mock import patch
 
+import httpx
 import litellm
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
@@ -24,6 +25,8 @@ from tests.utils import (
     responses_api_events,
     responses_api_reply,
     serve_http,
+    serve_requests,
+    stream_reply,
     web_search_call_item,
 )
 
@@ -841,6 +844,53 @@ def test_a_router_streamed_reply_costs_what_the_invoked_reply_costs(
 
     assert invoked > 0
     assert _collect(llm, mode).response_metadata["response_cost"] == invoked
+
+
+@pytest.mark.parametrize("mode", ["stream", "astream"])
+def test_a_router_stream_that_falls_back_costs_what_its_reply_costs(
+    monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    """litellm prices a fallback stream at 0.0 before any token arrives.
+
+    It copies that onto every fallback chunk; the reply's cost is on its usage chunk.
+    """
+    failed: list[httpx.Request] = []
+
+    def _reply(request: httpx.Request) -> httpx.Response:
+        if not json.loads(request.content).get("stream"):
+            reply = chat_completion_reply("Hi", usage=_USAGE)
+            return httpx.Response(200, json=reply, request=request)
+        if request.url.host == "primary.example" and not failed:
+            # Failing before the first chunk hands the stream to the fallback.
+            failed.append(request)
+            error = {"message": "overloaded", "type": "server_error", "code": 500}
+            return stream_reply(request, [{"error": error}])
+        return stream_reply(request, chat_completion_events("Hi", _USAGE))
+
+    serve_requests(monkeypatch, _reply)
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "k",
+                    "api_base": f"https://{group}.example/v1",
+                },
+            }
+            for group in ("primary", "backup")
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+    llm = ChatLiteLLMRouter(router=router, model_name="primary")
+
+    invoked = llm.invoke("hi").response_metadata["response_cost"]
+    streamed = _collect(llm, mode).response_metadata["response_cost"]
+
+    assert failed
+    assert invoked > 0
+    assert streamed == invoked
 
 
 def test_deployment_is_read_from_either_shape_litellm_hands_over() -> None:

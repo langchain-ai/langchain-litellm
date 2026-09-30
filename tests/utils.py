@@ -1,5 +1,5 @@
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -213,6 +213,37 @@ def make_router() -> Router:
         },
     ]
     return Router(model_list)
+
+
+def serve_requests(
+    monkeypatch: pytest.MonkeyPatch,
+    reply: Callable[[httpx.Request], httpx.Response],
+) -> None:
+    """Answer every request litellm sends with ``reply(request)``, in-process.
+
+    Unlike ``serve_http``, the answer can depend on the request.
+    """
+
+    def _reply(_: object, request: httpx.Request) -> httpx.Response:
+        return reply(request)
+
+    async def _areply(_: object, request: httpx.Request) -> httpx.Response:
+        return reply(request)
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", _reply)
+    monkeypatch.setattr(LiteLLMAiohttpTransport, "handle_async_request", _areply)
+
+
+def stream_reply(
+    request: httpx.Request, events: Sequence[dict[str, Any]]
+) -> httpx.Response:
+    """``events`` as the server-sent events answering ``request``."""
+    return httpx.Response(
+        200,
+        content="".join(f"data: {json.dumps(event)}\n\n" for event in events).encode(),
+        headers={"content-type": "text/event-stream"},
+        request=request,
+    )
 
 
 def make_embedding_router() -> Router:
