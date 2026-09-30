@@ -28,6 +28,7 @@ from langchain_litellm.chat_models.litellm import (
     _cost_metadata,
     _create_retry_decorator,
     _create_usage_metadata,
+    _extract_root_provider_specific_fields,
     _get_field,
     _keep_reasoning_items,
     _keep_thinking_blocks,
@@ -544,6 +545,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             delta = chunk["choices"][0]["delta"]
             # Read before `chunk` is rebound from the raw mapping to the message.
             finish_reason = chunk["choices"][0].get("finish_reason")
+            root_metadata = _extract_root_provider_specific_fields(chunk)
             chunk = _convert_delta_to_message_chunk(
                 delta, default_chunk_class, thinking, reasoning
             )
@@ -565,6 +567,10 @@ class ChatLiteLLMRouter(ChatLiteLLM):
 
             if finish_reason is not None and isinstance(chunk, AIMessageChunk):
                 chunk.response_metadata["finish_reason"] = finish_reason
+
+            # Response-level, so here as on invoke, where llm_output lands them.
+            if root_metadata and isinstance(chunk, AIMessageChunk):
+                chunk.response_metadata["provider_specific_fields"] = root_metadata
 
             # Some providers attach the usage, and so the cost, to a content chunk.
             if cost_metadata and isinstance(chunk, AIMessageChunk):
@@ -641,6 +647,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             delta = chunk["choices"][0]["delta"]
             # Read before `chunk` is rebound from the raw mapping to the message.
             finish_reason = chunk["choices"][0].get("finish_reason")
+            root_metadata = _extract_root_provider_specific_fields(chunk)
             chunk = _convert_delta_to_message_chunk(
                 delta, default_chunk_class, thinking, reasoning
             )
@@ -661,6 +668,10 @@ class ChatLiteLLMRouter(ChatLiteLLM):
 
             if finish_reason is not None and isinstance(chunk, AIMessageChunk):
                 chunk.response_metadata["finish_reason"] = finish_reason
+
+            # Response-level, so here as on invoke, where llm_output lands them.
+            if root_metadata and isinstance(chunk, AIMessageChunk):
+                chunk.response_metadata["provider_specific_fields"] = root_metadata
 
             # Some providers attach the usage, and so the cost, to a content chunk.
             if cost_metadata and isinstance(chunk, AIMessageChunk):

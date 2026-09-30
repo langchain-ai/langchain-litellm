@@ -19,12 +19,14 @@ from tests.utils import (
     chat_completion_events,
     chat_completion_reply,
     function_call_item,
+    gemini_reply,
     make_router,
     message_item,
     responses_api_events,
     responses_api_reply,
     serve_http,
     web_search_call_item,
+    whole_reply,
 )
 
 
@@ -660,6 +662,46 @@ def test_router_stream_sets_model_provider_in_response_metadata() -> None:
 
     assert chunks[0].message.response_metadata.get("model_provider") == "litellm"
     assert chunks[1].message.response_metadata == {}
+
+
+def test_router_stream_root_provider_specific_fields_in_response_metadata() -> None:
+    """Response-level fields go to response_metadata, where invoke puts them."""
+    llm = ChatLiteLLMRouter(router=make_router())
+    citations = {"citations": [{"source": "vertex"}]}
+    fake_chunks = [
+        {
+            "choices": [{"delta": {"role": "assistant", "content": "hi"}}],
+            "usage": None,
+            "provider_specific_fields": citations,
+        },
+    ]
+    with patch.object(llm.router, "completion", return_value=iter(fake_chunks)):
+        chunks = list(llm._stream([]))
+
+    first = chunks[0].message
+    assert first.response_metadata["provider_specific_fields"] == citations
+    assert "provider_specific_fields" not in first.additional_kwargs
+
+
+_GROUNDING = {
+    "webSearchQueries": ["tallest mountain"],
+    "groundingChunks": [{"web": {"uri": "https://example.com", "title": "example"}}],
+}
+
+
+@pytest.mark.parametrize("method", ["invoke", "ainvoke", "stream", "astream"])
+async def test_router_grounding_reaches_response_metadata_streamed_or_not(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    """Router chunks stay litellm objects, so the fields are read by attribute."""
+    reply = gemini_reply("Everest.", _GROUNDING)
+    serve_http(monkeypatch, reply, [reply])
+    llm = ChatLiteLLMRouter(router=_router_serving("gemini/gemini-2.5-flash"))
+
+    message = await whole_reply(llm, method)
+
+    assert message.response_metadata["provider_specific_fields"] == [_GROUNDING]
+    assert "provider_specific_fields" not in message.additional_kwargs
 
 
 def _router_chunks_with_cost() -> list[dict[str, Any]]:
