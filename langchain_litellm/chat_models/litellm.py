@@ -1924,14 +1924,7 @@ class ChatLiteLLM(BaseChatModel):
 
             delta = chunk["choices"][0]["delta"]
             finish_reason = chunk["choices"][0].get("finish_reason")
-
-            # Inject Root Metadata into Delta
-            root_metadata = chunk.get("provider_specific_fields")
-            if not root_metadata:
-                root_metadata = chunk.get("vertex_ai_grounding_metadata")
-
-            if root_metadata:
-                delta["provider_specific_fields"] = root_metadata
+            root_metadata = _extract_root_provider_specific_fields(chunk)
 
             chunk = _convert_delta_to_message_chunk(
                 delta, default_chunk_class, thinking, reasoning
@@ -1950,6 +1943,10 @@ class ChatLiteLLM(BaseChatModel):
 
             if finish_reason is not None and isinstance(chunk, AIMessageChunk):
                 chunk.response_metadata["finish_reason"] = finish_reason
+
+            # Response-level, so here as on invoke, where llm_output lands them.
+            if root_metadata and isinstance(chunk, AIMessageChunk):
+                chunk.response_metadata["provider_specific_fields"] = root_metadata
 
             # Some providers attach the usage, and so the cost, to a content chunk.
             if cost_metadata and isinstance(chunk, AIMessageChunk):
@@ -2019,14 +2016,7 @@ class ChatLiteLLM(BaseChatModel):
 
             delta = chunk["choices"][0]["delta"]
             finish_reason = chunk["choices"][0].get("finish_reason")
-
-            # Inject Root Metadata into Delta
-            root_metadata = chunk.get("provider_specific_fields")
-            if not root_metadata:
-                root_metadata = chunk.get("vertex_ai_grounding_metadata")
-
-            if root_metadata:
-                delta["provider_specific_fields"] = root_metadata
+            root_metadata = _extract_root_provider_specific_fields(chunk)
 
             chunk = _convert_delta_to_message_chunk(
                 delta, default_chunk_class, thinking, reasoning
@@ -2045,6 +2035,10 @@ class ChatLiteLLM(BaseChatModel):
 
             if finish_reason is not None and isinstance(chunk, AIMessageChunk):
                 chunk.response_metadata["finish_reason"] = finish_reason
+
+            # Response-level, so here as on invoke, where llm_output lands them.
+            if root_metadata and isinstance(chunk, AIMessageChunk):
+                chunk.response_metadata["provider_specific_fields"] = root_metadata
 
             # Some providers attach the usage, and so the cost, to a content chunk.
             if cost_metadata and isinstance(chunk, AIMessageChunk):
@@ -2354,6 +2348,13 @@ class ChatLiteLLM(BaseChatModel):
     @property
     def _llm_type(self) -> str:
         return "litellm-chat"
+
+
+def _extract_root_provider_specific_fields(response: Any) -> Any:
+    """The response's own provider_specific_fields, else Vertex's grounding metadata."""
+    return _get_field(response, "provider_specific_fields") or _get_field(
+        response, "vertex_ai_grounding_metadata"
+    )
 
 
 def _create_usage_metadata(token_usage: Any) -> UsageMetadata:

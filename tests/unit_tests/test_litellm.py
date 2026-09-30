@@ -42,11 +42,13 @@ from tests.utils import (
     chat_completion_events,
     chat_completion_reply,
     function_call_item,
+    gemini_reply,
     make_router,
     message_item,
     reasoning_item,
     responses_api_reply,
     serve_http,
+    whole_reply,
 )
 
 
@@ -2434,6 +2436,154 @@ async def test_astream_sets_finish_reason_in_response_metadata() -> None:
 
     assert chunks[0].message.response_metadata.get("finish_reason") is None
     assert chunks[1].message.response_metadata.get("finish_reason") == "stop"
+
+
+# ── response-level provider_specific_fields ────────────────────────────────────
+
+
+def test_stream_root_provider_specific_fields_in_response_metadata() -> None:
+    """Response-level fields go to response_metadata, where invoke puts them."""
+    llm = ChatLiteLLM(model="gpt-4", api_key="fake")
+    citations = {"citations": [{"source": "Wikipedia"}]}
+    fake_chunks = [
+        {
+            "choices": [{"delta": {"role": "assistant", "content": "hi"}}],
+            "usage": None,
+            "provider_specific_fields": citations,
+        },
+        {
+            "choices": [],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        },
+    ]
+    with patch.object(
+        ChatLiteLLM, "completion_with_retry", return_value=iter(fake_chunks)
+    ):
+        chunks = list(llm._stream([]))
+
+    first = chunks[0].message
+    assert first.response_metadata["provider_specific_fields"] == citations
+    assert "provider_specific_fields" not in first.additional_kwargs
+
+
+def test_stream_keeps_delta_provider_specific_fields_apart_from_root_ones() -> None:
+    """A delta's own fields stay in additional_kwargs beside the response's."""
+    llm = ChatLiteLLM(model="gpt-4", api_key="fake")
+    citations = {"citations": [{"source": "Wikipedia"}]}
+    own = {"thought_signature": "sig"}
+    fake_chunks = [
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "role": "assistant",
+                        "content": "hi",
+                        "provider_specific_fields": own,
+                    }
+                }
+            ],
+            "usage": None,
+            "provider_specific_fields": citations,
+        },
+    ]
+    with patch.object(
+        ChatLiteLLM, "completion_with_retry", return_value=iter(fake_chunks)
+    ):
+        chunks = list(llm._stream([]))
+
+    message = chunks[0].message
+    assert message.additional_kwargs["provider_specific_fields"] == own
+    assert message.response_metadata["provider_specific_fields"] == citations
+
+
+def test_stream_vertex_grounding_metadata_in_response_metadata() -> None:
+    """Vertex grounding metadata takes the same response-level place."""
+    llm = ChatLiteLLM(model="gemini/gemini-2.5-flash", api_key="fake")
+    grounding = [{"webSearchQueries": ["tallest mountain"]}]
+    fake_chunks = [
+        {
+            "choices": [{"delta": {"role": "assistant", "content": "hi"}}],
+            "usage": None,
+            "vertex_ai_grounding_metadata": grounding,
+        },
+    ]
+    with patch.object(
+        ChatLiteLLM, "completion_with_retry", return_value=iter(fake_chunks)
+    ):
+        chunks = list(llm._stream([]))
+
+    assert chunks[0].message.response_metadata["provider_specific_fields"] == grounding
+
+
+def test_stream_root_metadata_on_later_chunk_survives_aggregation() -> None:
+    """Fields on a later chunk survive the merge beside the first chunk's."""
+    llm = ChatLiteLLM(model="gpt-4", api_key="fake")
+    citations = {"citations": [{"source": "docs"}]}
+    fake_chunks = [
+        {"choices": [{"delta": {"role": "assistant", "content": "a"}}], "usage": None},
+        {
+            "choices": [{"delta": {"content": "b"}}],
+            "usage": None,
+            "provider_specific_fields": citations,
+        },
+    ]
+    with patch.object(
+        ChatLiteLLM, "completion_with_retry", return_value=iter(fake_chunks)
+    ):
+        chunks = list(llm._stream([]))
+
+    merged = chunks[0].message + chunks[1].message
+    assert merged.response_metadata["provider_specific_fields"] == citations
+    assert merged.response_metadata["model_provider"] == "litellm"
+
+
+async def test_astream_root_provider_specific_fields_in_response_metadata() -> None:
+    """Async streaming places them the same way."""
+    llm = ChatLiteLLM(model="gpt-4", api_key="fake")
+    citations = {"citations": [{"source": "Wikipedia"}]}
+    fake_chunks = [
+        {
+            "choices": [{"delta": {"role": "assistant", "content": "hi"}}],
+            "usage": None,
+            "provider_specific_fields": citations,
+        },
+    ]
+
+    async def _fake_async_stream():
+        for c in fake_chunks:
+            yield c
+
+    with patch.object(
+        ChatLiteLLM,
+        "acompletion_with_retry",
+        new=AsyncMock(return_value=_fake_async_stream()),
+    ):
+        chunks = [chunk async for chunk in llm._astream([])]
+
+    first = chunks[0].message
+    assert first.response_metadata["provider_specific_fields"] == citations
+    assert "provider_specific_fields" not in first.additional_kwargs
+
+
+_GROUNDING = {
+    "webSearchQueries": ["tallest mountain"],
+    "groundingChunks": [{"web": {"uri": "https://example.com", "title": "example"}}],
+}
+
+
+@pytest.mark.parametrize("method", ["invoke", "ainvoke", "stream", "astream"])
+async def test_grounding_reaches_response_metadata_streamed_or_not(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    """Gemini's grounding is in response_metadata however the reply is read."""
+    reply = gemini_reply("Everest.", _GROUNDING)
+    serve_http(monkeypatch, reply, [reply])
+    llm = ChatLiteLLM(model="gemini/gemini-2.5-flash", api_key="k")
+
+    message = await whole_reply(llm, method)
+
+    assert message.response_metadata["provider_specific_fields"] == [_GROUNDING]
+    assert "provider_specific_fields" not in message.additional_kwargs
 
 
 # ── Responses API routing ──────────────────────────────────────────────────────

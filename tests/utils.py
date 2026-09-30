@@ -6,6 +6,8 @@ from unittest.mock import MagicMock
 import httpx
 import litellm
 import pytest
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import BaseMessage
 from litellm import Router
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
@@ -39,7 +41,10 @@ def serve_http(
 
     def _reply(_: object, request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        if json.loads(request.content).get("stream"):
+        # Gemini asks to stream in its URL rather than its body.
+        if json.loads(request.content).get("stream") or request.url.path.endswith(
+            ":streamGenerateContent"
+        ):
             return httpx.Response(
                 200,
                 content=stream,
@@ -181,6 +186,40 @@ def chat_completion_events(content: str, usage: dict[str, int]) -> list[dict[str
     ]
     TypeAdapter(list[ChatCompletionChunk]).validate_python(events)
     return events
+
+
+def gemini_reply(text: str, grounding: dict[str, Any]) -> dict[str, Any]:
+    """A Gemini reply grounded by web search; a stream sends it as its one event."""
+    return {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": text}], "role": "model"},
+                "finishReason": "STOP",
+                "groundingMetadata": grounding,
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 1,
+            "candidatesTokenCount": 1,
+            "totalTokenCount": 2,
+        },
+    }
+
+
+async def whole_reply(llm: BaseChatModel, method: str) -> BaseMessage:
+    """The reply to "hi" read through ``method``, with a stream's chunks merged."""
+    if method == "invoke":
+        return llm.invoke("hi")
+    if method == "ainvoke":
+        return await llm.ainvoke("hi")
+    if method == "stream":
+        chunks = list(llm.stream("hi"))
+    else:
+        chunks = [chunk async for chunk in llm.astream("hi")]
+    merged = chunks[0]
+    for chunk in chunks[1:]:
+        merged += chunk
+    return merged
 
 
 def make_router() -> Router:
