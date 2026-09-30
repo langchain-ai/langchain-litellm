@@ -487,3 +487,136 @@ def test_another_group_s_fallbacks_leave_the_call_alone(
     llm.invoke("hi")
 
     assert _urls(requests) == ["https://api.openai.com/v1/responses"]
+
+
+@pytest.mark.parametrize(
+    ("config", "call"),
+    [
+        pytest.param({}, {"litellm_metadata": TEAM["metadata"]}, id="per-call"),
+        pytest.param(
+            {"model_kwargs": {"litellm_metadata": TEAM["metadata"]}},
+            {},
+            id="model_kwargs",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_team_caller_named_in_litellm_metadata_is_refused(
+    config: dict[str, Any], call: dict[str, Any]
+) -> None:
+    """The Router reads the team from either metadata bucket."""
+    router = litellm.Router(
+        model_list=[
+            _deployment("openai/responses/gpt-4o-mini", group="g"),
+            {
+                **_deployment("openai/gpt-4o-mini", group="g_t"),
+                "model_info": {"team_id": "t", "team_public_model_name": "g"},
+            },
+        ]
+    )
+    llm = ChatLiteLLMRouter(
+        router=router, model_name="g", use_responses_api=True, **copy.deepcopy(config)
+    )
+
+    assert "team" in await _refused(llm, "invoke", **copy.deepcopy(call))
+
+
+GROQ = "https://api.groq.com/openai/v1"
+
+
+@pytest.mark.parametrize(
+    ("deployment", "settings", "call"),
+    [
+        pytest.param({"base_url": GROQ}, {}, {}, id="deployment"),
+        pytest.param({}, {}, {"base_url": GROQ}, id="per-call"),
+        pytest.param(
+            {}, {"default_litellm_params": {"base_url": GROQ}}, {}, id="router-defaults"
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_base_url_decides_the_provider_before_api_base(
+    deployment: dict[str, Any], settings: dict[str, Any], call: dict[str, Any]
+) -> None:
+    """litellm sends to base_url over api_base, so Groq answers over its chat API."""
+    llm = ChatLiteLLMRouter(
+        router=_router({"model": "gpt-5-pro", **deployment}, **copy.deepcopy(settings)),
+        use_responses_api=True,
+    )
+
+    assert "'gpt-5-pro'" in await _refused(llm, "invoke", **call)
+
+
+@pytest.mark.asyncio
+async def test_a_stored_credential_s_endpoint_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """litellm fills a deployment's missing api_base from its named credential."""
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="groq",
+                credential_values={"api_base": GROQ},
+                credential_info={},
+            )
+        ],
+    )
+    llm = ChatLiteLLMRouter(
+        router=_router({"model": "gpt-5-pro", "litellm_credential_name": "groq"}),
+        use_responses_api=True,
+    )
+
+    assert "'gpt-5-pro'" in await _refused(llm, "invoke")
+
+
+@pytest.mark.parametrize(
+    ("deployment", "call"),
+    [
+        pytest.param({"deployment_id": "gpt5-dep"}, {}, id="deployment"),
+        pytest.param({}, {"deployment_id": "gpt5-dep"}, id="per-call"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_deployment_id_replaces_the_model(
+    deployment: dict[str, Any], call: dict[str, Any]
+) -> None:
+    """litellm then sends that Azure deployment name to Azure's chat API."""
+    llm = ChatLiteLLMRouter(
+        router=_router({"model": "azure/responses/gpt-5", **AZURE, **deployment}),
+        use_responses_api=True,
+    )
+
+    assert "'azure/responses/gpt-5'" in await _refused(llm, "invoke", **call)
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_that_mirrors_the_call_is_refused() -> None:
+    """The Router also sends the call to the silent_model group, unchecked."""
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                {"model": "openai/responses/gpt-4o-mini", "silent_model": "chat"},
+                group="g",
+            ),
+            _deployment("openai/gpt-4o-mini", group="chat"),
+        ]
+    )
+    llm = ChatLiteLLMRouter(router=router, model_name="g", use_responses_api=True)
+
+    assert "silent_model" in await _refused(llm, "invoke")
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_whose_prompt_names_its_model_is_named() -> None:
+    """litellm cannot place it before the prompt loads, so it cannot pass."""
+    try:
+        router = _router("bitbucket/openai/responses/gpt-4o-mini")
+    except litellm.BadRequestError:
+        pytest.skip("this litellm's Router rejects a prompt-management deployment")
+    llm = ChatLiteLLMRouter(router=router, use_responses_api=True)
+
+    assert "'bitbucket/openai/responses/gpt-4o-mini'" in await _refused(llm, "invoke")
