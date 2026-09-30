@@ -8,7 +8,7 @@ import litellm
 import pytest
 from litellm import Router
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
-from openai.types.chat import ChatCompletion
+from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai.types.responses import Response, ResponseStreamEvent
 from pydantic import TypeAdapter
 
@@ -133,9 +133,11 @@ def reasoning_item(
     return item
 
 
-def chat_completion_reply(*contents: str) -> dict[str, Any]:
+def chat_completion_reply(
+    *contents: str, usage: dict[str, int] | None = None
+) -> dict[str, Any]:
     """A Chat Completions reply with one choice per content, checked by the openai SDK."""
-    reply = {
+    reply: dict[str, Any] = {
         "id": "chatcmpl-1",
         "object": "chat.completion",
         "created": 0,
@@ -149,8 +151,36 @@ def chat_completion_reply(*contents: str) -> dict[str, Any]:
             for index, content in enumerate(contents)
         ],
     }
+    if usage is not None:
+        reply["usage"] = usage
     ChatCompletion.model_validate(reply)
     return reply
+
+
+def chat_completion_events(content: str, usage: dict[str, int]) -> list[dict[str, Any]]:
+    """``content`` streamed as Chat Completions chunks, then OpenAI's trailing usage chunk."""
+    chunk = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "gpt-4o-mini",
+    }
+    events = [
+        {
+            **chunk,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": content},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {**chunk, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {**chunk, "choices": [], "usage": usage},
+    ]
+    TypeAdapter(list[ChatCompletionChunk]).validate_python(events)
+    return events
 
 
 def make_router() -> Router:

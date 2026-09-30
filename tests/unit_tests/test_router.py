@@ -1,5 +1,6 @@
 """Test router chat model integration."""
 
+import asyncio
 import json
 import logging
 from collections.abc import Callable
@@ -15,6 +16,7 @@ from langchain_litellm.chat_models import ChatLiteLLMRouter
 from langchain_litellm.chat_models.litellm_router import _deployment_metadata
 from tests.utils import (
     OPUS_4_7_THINKS_ADAPTIVELY,
+    chat_completion_events,
     chat_completion_reply,
     function_call_item,
     make_router,
@@ -796,6 +798,49 @@ async def test_router_names_an_astreamed_cost_once() -> None:
     naming = [c for c in chunks if "response_cost" in c.response_metadata]
     assert len(naming) == 1
     assert _merge(chunks).response_metadata["response_cost"] == 1.0e-06
+
+
+_USAGE = {"prompt_tokens": 12, "completion_tokens": 12, "total_tokens": 24}
+
+
+def _collect(llm: Any, mode: str) -> Any:
+    """``llm``'s reply streamed through ``mode``, merged the way a caller merges it."""
+    if mode == "stream":
+        return _merge(list(llm.stream("hi")))
+
+    async def collect() -> list[Any]:
+        return [chunk async for chunk in llm.astream("hi")]
+
+    return _merge(asyncio.run(collect()))
+
+
+@pytest.mark.parametrize("mode", ["stream", "astream"])
+def test_a_router_streamed_reply_costs_what_the_invoked_reply_costs(
+    monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    """Through real litellm, which puts the cost on a stream's usage chunk from 1.101.0.
+
+    Hand-built chunks carry a cost whatever litellm sends, so they cannot show it.
+    """
+    serve_http(
+        monkeypatch,
+        chat_completion_reply("Hi", usage=_USAGE),
+        chat_completion_events("Hi", _USAGE),
+    )
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "k"},
+            }
+        ]
+    )
+    llm = ChatLiteLLMRouter(router=router, model_name="mini")
+
+    invoked = llm.invoke("hi").response_metadata["response_cost"]
+
+    assert invoked > 0
+    assert _collect(llm, mode).response_metadata["response_cost"] == invoked
 
 
 def test_deployment_is_read_from_either_shape_litellm_hands_over() -> None:
