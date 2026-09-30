@@ -1110,7 +1110,7 @@ def test_router_set_default_model_changes_the_model_sent() -> None:
         ({}, {"use_responses_api": True}),
     ],
 )
-def test_router_refuses_use_responses_api(
+def test_router_refuses_use_responses_api_for_a_chat_deployment(
     config: dict[str, Any], call: dict[str, Any]
 ) -> None:
     """The Router picks the deployment, so only a deployment can name the route."""
