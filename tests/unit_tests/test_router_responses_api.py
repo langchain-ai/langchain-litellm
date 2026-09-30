@@ -341,9 +341,11 @@ def test_a_wildcard_beside_the_group_s_own_entry_is_never_picked(
     )
     llm = ChatLiteLLMRouter(router=router, model_name="g", use_responses_api=True)
 
-    llm.invoke("hi")
+    # The Router picks at random among the deployments it serves a group from.
+    for _ in range(8):
+        llm.invoke("hi")
 
-    assert _urls(requests) == ["https://api.openai.com/v1/responses"]
+    assert _urls(requests) == ["https://api.openai.com/v1/responses"] * 8
 
 
 def test_litellm_s_switch_for_every_openai_call_is_followed(
@@ -365,13 +367,89 @@ def test_litellm_s_switch_for_every_openai_call_is_followed(
 async def test_a_deployment_that_asks_for_chat_completions_is_named(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """litellm sends it to Chat Completions even under that switch."""
+    """litellm 1.102 and later send it to Chat Completions even under that switch."""
     monkeypatch.setattr(litellm, "route_all_chat_openai_to_responses", True)
     llm = ChatLiteLLMRouter(
         router=_router("openai/chat_completions/gpt-5-pro"), use_responses_api=True
     )
 
     assert "'openai/chat_completions/gpt-5-pro'" in await _refused(llm, "invoke")
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_s_own_fallbacks_refuse_the_call() -> None:
+    """litellm falls back to them inside the Router's call, and a call cannot clear
+    them: the Router keeps the call's fallbacks for itself."""
+    fallback = {"model": "openai/responses/gpt-4o-mini", "fallbacks": ["gpt-4o"]}
+    llm = ChatLiteLLMRouter(router=_router(fallback), use_responses_api=True)
+
+    assert "fallbacks" in await _refused(llm, "invoke", fallbacks=[])
+
+
+@pytest.mark.asyncio
+async def test_default_fallbacks_a_call_clears_still_refuse_it() -> None:
+    """The Router hands its default fallbacks to litellm whatever the call says."""
+    llm = ChatLiteLLMRouter(
+        router=_router(
+            "openai/responses/gpt-4o-mini",
+            default_litellm_params={"fallbacks": ["gpt-4o"]},
+        ),
+        use_responses_api=True,
+    )
+
+    assert "fallbacks" in await _refused(llm, "invoke", fallbacks=[])
+
+
+@pytest.mark.asyncio
+async def test_a_call_for_a_specific_deployment_is_refused() -> None:
+    """The Router then picks by litellm model name, outside the group."""
+    router = litellm.Router(
+        model_list=[
+            _deployment("openai/responses/gpt-4o-mini", group="gpt-4o-mini"),
+            _deployment("gpt-4o-mini", group="cheap"),
+        ]
+    )
+    llm = ChatLiteLLMRouter(
+        router=router, model_name="gpt-4o-mini", use_responses_api=True
+    )
+
+    assert "specific_deployment" in await _refused(
+        llm, "invoke", specific_deployment=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_id_named_like_the_group_refuses_the_call() -> None:
+    """The Router reads the name as that deployment's id before any group's."""
+    router = litellm.Router(
+        model_list=[
+            _deployment("openai/responses/gpt-4o-mini", group="g"),
+            {
+                **_deployment("openai/gpt-4o-mini", group="cheap"),
+                "model_info": {"id": "g"},
+            },
+        ]
+    )
+    llm = ChatLiteLLMRouter(router=router, model_name="g", use_responses_api=True)
+
+    assert "model_info id" in await _refused(llm, "invoke")
+
+
+@pytest.mark.asyncio
+async def test_litellm_s_model_aliases_apply_to_each_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """litellm swaps an aliased deployment model before it picks the route."""
+    monkeypatch.setattr(
+        litellm,
+        "model_alias_map",
+        {"openai/responses/gpt-4o-mini": "openai/gpt-4o-mini"},
+    )
+    llm = ChatLiteLLMRouter(
+        router=_router("openai/responses/gpt-4o-mini"), use_responses_api=True
+    )
+
+    assert "'openai/responses/gpt-4o-mini'" in await _refused(llm, "invoke")
 
 
 @pytest.mark.asyncio
