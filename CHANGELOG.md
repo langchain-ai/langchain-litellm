@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.11.0](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.10.0...langchain-litellm==0.11.0) (2026-09-30)
+
+
+### ⚠ BREAKING CHANGES
+
+* **chat_models:** a streamed reply carries response-level provider_specific_fields, including Vertex grounding metadata, in response_metadata rather than additional_kwargs, as invoke does. Read message.response_metadata["provider_specific_fields"] on both paths.
+* LiteLLMEmbeddingsRouter raises ValueError for a set api_base or base_url, which it used to accept and silently ignore. Configure the endpoint on the Router deployment instead.
+
+### Features
+
+* **chat_models:** carry Responses API reasoning items across turns ([#318](https://github.com/langchain-ai/langchain-litellm/issues/318)) ([53bce51](https://github.com/langchain-ai/langchain-litellm/commit/53bce51ab06a06a58d4f1c36f8feef1bb0cbf728)), closes [#303](https://github.com/langchain-ai/langchain-litellm/issues/303)
+* **chat_models:** make use_responses_api on ChatLiteLLMRouter a check ([#333](https://github.com/langchain-ai/langchain-litellm/issues/333)) ([892fae6](https://github.com/langchain-ai/langchain-litellm/commit/892fae610766676d821f0f22b74b0f558f1095ac)), closes [#324](https://github.com/langchain-ai/langchain-litellm/issues/324)
+* **chat_models:** surface url_citation annotations on replies ([#325](https://github.com/langchain-ai/langchain-litellm/issues/325)) ([1efb90a](https://github.com/langchain-ai/langchain-litellm/commit/1efb90acb2cee5945941a20ff2151a3c40b87785)), closes [#304](https://github.com/langchain-ai/langchain-litellm/issues/304)
+
+
+### Bug Fixes
+
+* **chat_models:** report a Router stream's real cost after a fallback ([#341](https://github.com/langchain-ai/langchain-litellm/issues/341)) ([03694b2](https://github.com/langchain-ai/langchain-litellm/commit/03694b22dee1865cd31f2fa9e82e3d3a3698117d))
+* **chat_models:** stream response-level provider_specific_fields in response_metadata ([#342](https://github.com/langchain-ai/langchain-litellm/issues/342)) ([f94c52e](https://github.com/langchain-ai/langchain-litellm/commit/f94c52e63a78ce887cfb45883c756c34fa0c449c))
+* **deps:** raise the pydantic and typing-extensions floors to installable ones ([#345](https://github.com/langchain-ai/langchain-litellm/issues/345)) ([9ac3bef](https://github.com/langchain-ai/langchain-litellm/commit/9ac3bef65981055c96d04909ec0ce7eef4192aab))
+* **deps:** require litellm 1.101.0 for a streamed reply's cost ([#339](https://github.com/langchain-ai/langchain-litellm/issues/339)) ([5bf9edd](https://github.com/langchain-ai/langchain-litellm/commit/5bf9eddaf0eea8b4f3748195b91aab6656e5cc77))
+* **document_loaders:** read null page dimensions as absent in LiteLLMOCRLoader ([#332](https://github.com/langchain-ai/langchain-litellm/issues/332)) ([86bf2b5](https://github.com/langchain-ai/langchain-litellm/commit/86bf2b5a78a9248d0d45dcae1dc7608f00944fc9)), closes [#331](https://github.com/langchain-ai/langchain-litellm/issues/331)
+* standardize endpoint URL handling ([#320](https://github.com/langchain-ai/langchain-litellm/issues/320)) ([513a3af](https://github.com/langchain-ai/langchain-litellm/commit/513a3af2fa8bff59a761075302ce0be247830335)), closes [#288](https://github.com/langchain-ai/langchain-litellm/issues/288)
+
 ## [0.10.0](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.9.0...langchain-litellm==0.10.0) (2026-09-27)
 
 
