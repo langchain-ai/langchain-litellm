@@ -171,14 +171,22 @@ async def test_each_deployment_outside_a_responses_api_is_named(method: str) -> 
     # One line per deployment, with its reason and, where litellm would take one,
     # the name that fixes it.
     assert refusal.splitlines() == [
-        "use_responses_api=True, but litellm would not send every deployment of "
-        "model group 'g' to a Responses API:",
-        "- 'openai/gpt-4o-mini': litellm sends it to Chat Completions; "
-        "name it 'openai/responses/gpt-4o-mini'",
-        "- 'azure/my-dep': litellm sends it to Chat Completions; "
-        "name it 'azure/responses/my-dep'",
-        "- 'anthropic/responses/claude-sonnet-4-5': litellm has no Responses API "
-        "for provider 'anthropic'",
+        (
+            "use_responses_api=True, but litellm would not send every deployment of "
+            "model group 'g' to a Responses API:"
+        ),
+        (
+            "- 'openai/gpt-4o-mini': litellm sends it to Chat Completions; "
+            "name it 'openai/responses/gpt-4o-mini'"
+        ),
+        (
+            "- 'azure/my-dep': litellm sends it to Chat Completions; "
+            "name it 'azure/responses/my-dep'"
+        ),
+        (
+            "- 'anthropic/responses/claude-sonnet-4-5': litellm has no Responses API "
+            "for provider 'anthropic'"
+        ),
     ]
 
 
@@ -492,7 +500,14 @@ async def test_litellm_s_model_aliases_apply_to_each_deployment(
         router=_router("openai/responses/gpt-4o-mini"), use_responses_api=True
     )
 
-    assert "'openai/responses/gpt-4o-mini'" in await _refused(llm, "invoke")
+    refusal = await _refused(llm, "invoke")
+
+    assert refusal.splitlines()[1:] == [
+        (
+            "- 'openai/responses/gpt-4o-mini': litellm sends it to Chat Completions, "
+            "since litellm.model_alias_map renames it 'openai/gpt-4o-mini'"
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -633,7 +648,15 @@ async def test_a_deployment_id_replaces_the_model(
         use_responses_api=True,
     )
 
-    assert "'azure/responses/gpt-5'" in await _refused(llm, "invoke", **call)
+    refusal = await _refused(llm, "invoke", **call)
+
+    # Renaming cannot help once litellm replaces the model, so none is suggested.
+    assert refusal.splitlines()[1:] == [
+        (
+            "- 'azure/responses/gpt-5': litellm sends it to Chat Completions, since "
+            "its deployment_id 'gpt5-dep' replaces the model name"
+        )
+    ]
 
 
 @pytest.mark.asyncio
