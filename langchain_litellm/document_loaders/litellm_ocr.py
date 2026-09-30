@@ -375,9 +375,9 @@ class LiteLLMOCRLoader(BaseLoader):
                     "page": page.get("index", 0),
                 }
 
-                # Add dimensions if available
-                if "dimensions" in page:
-                    dimensions = page["dimensions"]
+                # Add dimensions if available; the proxy sends null when unknown
+                dimensions = page.get("dimensions")
+                if dimensions is not None:
                     metadata["width"] = dimensions.get("width")
                     metadata["height"] = dimensions.get("height")
 

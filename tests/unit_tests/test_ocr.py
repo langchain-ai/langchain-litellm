@@ -241,6 +241,29 @@ class TestLiteLLMOCRLoaderResponseProcessing:
         assert documents[1].page_content == "# Page 2\n\nThis is the second page."
         assert documents[1].metadata["page"] == 1
 
+    @pytest.mark.parametrize(
+        "page",
+        [
+            {"index": 0, "markdown": "text", "images": None, "dimensions": None},
+            {"index": 0, "markdown": "text"},
+        ],
+        ids=["null", "absent"],
+    )
+    def test_a_page_without_dimensions_loads_without_size_metadata(
+        self, page: dict[str, Any]
+    ) -> None:
+        """The proxy sends ``"dimensions": null`` for providers without page sizes."""
+        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", mode="page")
+        documents = loader._process_response({"pages": [page], "model": "ocr"})
+
+        assert len(documents) == 1
+        assert documents[0].page_content == "text"
+        assert documents[0].metadata == {
+            "page": 0,
+            "source": "https://example.com/doc.pdf",
+            "model": "ocr",
+        }
+
     def test_process_response_single_mode(
         self, mock_ocr_response: dict[str, Any]
     ) -> None:
