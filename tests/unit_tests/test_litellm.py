@@ -2260,6 +2260,9 @@ def test_a_stream_chunk_names_only_the_cost_on_its_usage() -> None:
     fell_back = {"_hidden_params": {"response_cost": 0.0}, "usage": {"cost": 9e-06}}
 
     assert _stream_cost_metadata(fell_back) == {"response_cost": 9e-06}
+    # Any figure there is ignored, so a check that skips only a falsy 0.0 fails too.
+    both = {"_hidden_params": {"response_cost": 1.0}, "usage": {"cost": 2.0}}
+    assert _stream_cost_metadata(both) == {"response_cost": 2.0}
     assert _stream_cost_metadata({"_hidden_params": {"response_cost": 0.0}}) == {}
 
 
