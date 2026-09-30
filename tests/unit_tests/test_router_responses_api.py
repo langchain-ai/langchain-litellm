@@ -168,11 +168,18 @@ async def test_each_deployment_outside_a_responses_api_is_named(method: str) -> 
 
     refusal = await _refused(llm, method)
 
-    assert "'openai/gpt-4o-mini'" in refusal
-    assert "'azure/my-dep'" in refusal
-    assert "'anthropic/responses/claude-sonnet-4-5'" in refusal
-    assert "'openai/responses/gpt-4o-mini'" not in refusal
-    assert "<provider>/responses/<model>" in refusal
+    # One line per deployment, with its reason and, where litellm would take one,
+    # the name that fixes it.
+    assert refusal.splitlines() == [
+        "use_responses_api=True, but litellm would not send every deployment of "
+        "model group 'g' to a Responses API:",
+        "- 'openai/gpt-4o-mini': litellm sends it to Chat Completions; "
+        "name it 'openai/responses/gpt-4o-mini'",
+        "- 'azure/my-dep': litellm sends it to Chat Completions; "
+        "name it 'azure/responses/my-dep'",
+        "- 'anthropic/responses/claude-sonnet-4-5': litellm has no Responses API "
+        "for provider 'anthropic'",
+    ]
 
 
 def test_only_the_group_the_call_reaches_is_checked() -> None:
@@ -212,7 +219,11 @@ async def test_a_group_no_model_list_entry_names_is_refused() -> None:
 
     refusal = await _refused(llm, "invoke")
 
-    assert "'openai/responses/gpt-4o-mini'" in refusal
+    assert refusal == (
+        "use_responses_api=True, but no model_list entry has model_name "
+        "'openai/responses/gpt-4o-mini', so ChatLiteLLMRouter cannot tell which "
+        "deployments serve it, such as a wildcard one."
+    )
 
 
 TEAM = {"metadata": {"user_api_key_team_id": "t"}}
@@ -222,66 +233,86 @@ FALLBACK = {"fallbacks": [{"g": ["h"]}]}
 @pytest.mark.parametrize(
     ("settings", "config", "call", "reason"),
     [
-        pytest.param(FALLBACK, {}, {}, "fallbacks", id="fallbacks"),
+        pytest.param(FALLBACK, {}, {}, "the Router sets fallbacks", id="fallbacks"),
         pytest.param(
-            {"default_fallbacks": ["h"]}, {}, {}, "fallbacks", id="default_fallbacks"
+            {"default_fallbacks": ["h"]},
+            {},
+            {},
+            "the Router sets fallbacks",
+            id="default_fallbacks",
         ),
         pytest.param(
             {"context_window_fallbacks": [{"g": ["h"]}]},
             {},
             {},
-            "context_window_fallbacks",
+            "the Router sets context_window_fallbacks",
             id="context_window_fallbacks",
         ),
         pytest.param(
             {"content_policy_fallbacks": [{"g": ["h"]}]},
             {},
             {},
-            "content_policy_fallbacks",
+            "the Router sets content_policy_fallbacks",
             id="content_policy_fallbacks",
         ),
         pytest.param(
             {"default_litellm_params": FALLBACK},
             {},
             {},
-            "fallbacks",
+            "the Router's default_litellm_params set fallbacks",
             id="fallbacks-in-router-defaults",
         ),
-        pytest.param({}, {}, FALLBACK, "fallbacks", id="fallbacks-per-call"),
         pytest.param(
-            {}, {}, {"fallbacks": ["h"]}, "fallbacks", id="fallback-groups-per-call"
+            {}, {}, FALLBACK, "the call sets fallbacks", id="fallbacks-per-call"
+        ),
+        pytest.param(
+            {},
+            {},
+            {"fallbacks": ["h"]},
+            "the call sets fallbacks",
+            id="fallback-groups-per-call",
         ),
         pytest.param(
             {},
             {},
             {"context_window_fallbacks": [{"g": ["h"]}]},
-            "context_window_fallbacks",
+            "the call sets context_window_fallbacks",
             id="context_window_fallbacks-per-call",
         ),
         pytest.param(
             {},
             {"model_kwargs": FALLBACK},
             {},
-            "fallbacks",
+            "the call sets fallbacks",
             id="fallbacks-in-model_kwargs",
         ),
         pytest.param(
             {"model_group_alias": {"g": "h"}},
             {},
             {},
-            "model_group_alias",
+            "the Router's model_group_alias sends 'g' to another group",
             id="model_group_alias",
         ),
         pytest.param(
             {"model_group_alias": {"g": {"model": "h", "hidden": True}}},
             {},
             {},
-            "model_group_alias",
+            "the Router's model_group_alias sends 'g' to another group",
             id="hidden-model_group_alias",
         ),
-        pytest.param({}, {"model_kwargs": TEAM}, {}, "team", id="team-caller"),
         pytest.param(
-            {"default_litellm_params": TEAM}, {}, {}, "team", id="team-default"
+            {},
+            {"model_kwargs": TEAM},
+            {},
+            "the caller is a team, and the Router serves a team its own deployments",
+            id="team-caller",
+        ),
+        pytest.param(
+            {"default_litellm_params": TEAM},
+            {},
+            {},
+            "the caller is a team, and the Router serves a team its own deployments",
+            id="team-default",
         ),
     ],
 )
@@ -309,7 +340,14 @@ async def test_a_call_that_may_reach_another_group_is_refused(
         router=router, model_name="g", use_responses_api=True, **config
     )
 
-    assert reason in await _refused(llm, "invoke", **call)
+    refusal = await _refused(llm, "invoke", **call)
+
+    assert refusal == (
+        f"use_responses_api=True, but {reason}, so a call to model group 'g' may "
+        "reach deployments ChatLiteLLMRouter cannot check. The flag only checks: "
+        "without it, a deployment named '<provider>/responses/<model>' still reaches "
+        "the Responses API."
+    )
 
 
 @pytest.mark.asyncio
@@ -373,7 +411,12 @@ async def test_a_deployment_that_asks_for_chat_completions_is_named(
         router=_router("openai/chat_completions/gpt-5-pro"), use_responses_api=True
     )
 
-    assert "'openai/chat_completions/gpt-5-pro'" in await _refused(llm, "invoke")
+    assert await _refused(llm, "invoke") == (
+        "use_responses_api=True, but litellm would not send every deployment of "
+        "model group 'g' to a Responses API:\n"
+        "- 'openai/chat_completions/gpt-5-pro': its name asks for Chat Completions; "
+        "name it 'openai/responses/gpt-5-pro'"
+    )
 
 
 @pytest.mark.asyncio
@@ -607,7 +650,11 @@ async def test_a_deployment_that_mirrors_the_call_is_refused() -> None:
     )
     llm = ChatLiteLLMRouter(router=router, model_name="g", use_responses_api=True)
 
-    assert "silent_model" in await _refused(llm, "invoke")
+    assert await _refused(llm, "invoke") == (
+        "use_responses_api=True, but a deployment of model group 'g' sets "
+        "silent_model, so the Router also sends each call to 'chat', which "
+        "ChatLiteLLMRouter does not check."
+    )
 
 
 @pytest.mark.asyncio

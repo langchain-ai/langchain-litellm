@@ -1118,7 +1118,9 @@ def test_router_refuses_use_responses_api_for_a_chat_deployment(
 
     with (
         patch.object(llm.router, "completion") as completion,
-        pytest.raises(ValueError, match="<provider>/responses/<model>"),
+        pytest.raises(
+            ValueError, match="name it 'azure/responses/fake-deployment-name-1'"
+        ),
     ):
         llm.invoke("hi", **call)
 
