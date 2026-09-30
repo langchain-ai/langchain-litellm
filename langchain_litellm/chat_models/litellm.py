@@ -376,8 +376,8 @@ def _sends_to_responses_api(model: str, provider: str) -> bool:
     Whether litellm bridges a name hangs on its model map, and a provider without a
     Responses API is answered over its chat API instead, so litellm is asked both.
     """
-    # litellm answers a name that asks for Chat Completions there, even when told to
-    # route every OpenAI call to the Responses API.
+    # litellm 1.102 and later answer a name that asks for Chat Completions there, even
+    # when told to route every OpenAI call to the Responses API.
     if model.startswith("chat_completions/"):
         return False
     bridge, _ = litellm.main.responses_api_bridge_check(

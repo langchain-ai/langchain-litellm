@@ -466,3 +466,24 @@ async def test_a_deployment_placed_by_its_api_base_is_named() -> None:
     llm = ChatLiteLLMRouter(router=router, use_responses_api=True)
 
     assert "'responses/llama-3.3-70b'" in await _refused(llm, "invoke")
+
+
+def test_another_group_s_fallbacks_leave_the_call_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """litellm falls back only from the deployment the Router picked."""
+    requests = serve_http(monkeypatch, REPLY)
+    router = litellm.Router(
+        model_list=[
+            _deployment("openai/responses/gpt-4o-mini", group="g"),
+            _deployment(
+                {"model": "openai/responses/gpt-4o", "fallbacks": ["gpt-4o-mini"]},
+                group="h",
+            ),
+        ]
+    )
+    llm = ChatLiteLLMRouter(router=router, model_name="g", use_responses_api=True)
+
+    llm.invoke("hi")
+
+    assert _urls(requests) == ["https://api.openai.com/v1/responses"]

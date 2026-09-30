@@ -22,6 +22,7 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from langchain_litellm.chat_models.litellm import (
     _REPLAY_SETTINGS,
     ChatLiteLLM,
+    _aliased,
     _convert_delta_to_message_chunk,
     _convert_dict_to_message,
     _cost_metadata,
@@ -49,9 +50,13 @@ def _without_none(params: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _deployment_sends_to_responses_api(deployment: Mapping[str, Any]) -> bool:
-    """Whether litellm sends a deployment, as named, to a Responses API."""
+    """Whether litellm sends a deployment, as named, to a Responses API.
+
+    litellm swaps in a model's alias before it picks the route, so this does too.
+    """
+    model: str = deployment["model"]
     named, provider, _, _ = litellm.get_llm_provider(
-        model=deployment["model"],
+        model=_aliased(model) or model,
         custom_llm_provider=deployment.get("custom_llm_provider"),
         api_base=deployment.get("api_base"),
     )
@@ -89,9 +94,10 @@ class ChatLiteLLMRouter(ChatLiteLLM):
     litellm sends every deployment of the called group to a Responses API, and
     raises ``ValueError`` before any request otherwise, naming each deployment that
     is not. It also raises when the call may reach deployments outside the group,
-    through a fallback, a ``model_group_alias`` or a team's own deployments, and
-    when no ``model_list`` entry is named after the group, as for one only a
-    wildcard deployment serves. A deployment litellm sends there on its own, such as
+    through a fallback, a ``model_group_alias``, a deployment id or a specific
+    deployment of the group's name, or a team's own deployments, and when no
+    ``model_list`` entry is named after the group, as for one only a wildcard
+    deployment serves. A deployment litellm sends there on its own, such as
     ``openai/gpt-5-pro``, passes, but its reasoning items do not go back; name it
     ``openai/responses/gpt-5-pro`` for that.
 
@@ -201,9 +207,10 @@ class ChatLiteLLMRouter(ChatLiteLLM):
     def _unknown_reach(self, params: Mapping[str, Any]) -> str | None:
         """Why this call may reach deployments other than its group's own, or None.
 
-        The Router re-sends the same messages to any fallback, whether the Router,
-        its defaults or the call sets it, and litellm to its own. An alias of the
-        group points it elsewhere, and a team caller gets the team's own deployments.
+        The Router re-sends the same messages to any fallback: its own, the call's,
+        and those its defaults or a deployment hand to litellm, which a call cannot
+        clear. An alias or a deployment id of the group's name points it elsewhere,
+        as does a specific deployment, and a team caller gets the team's own.
         """
         group = params.get("model")
         router = self.router
@@ -213,8 +220,17 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                 return f"{key} is set"
         if litellm.model_fallbacks:
             return "litellm.model_fallbacks is set"
+        if params.get("specific_deployment"):
+            return "specific_deployment is set"
         if group in (getattr(router, "model_group_alias", None) or {}):
             return f"the Router's model_group_alias maps {group!r}"
+        for entry in getattr(router, "model_list", None) or []:
+            if (entry.get("model_info") or {}).get("id") == group:
+                return f"a deployment's model_info id is {group!r}"
+            own = entry.get("litellm_params") or {}
+            for key in _FALLBACK_SETTINGS:
+                if entry.get("model_name") == group and own.get(key):
+                    return f"a deployment of {group!r} sets {key}"
         if any(
             isinstance(metadata, Mapping) and metadata.get("user_api_key_team_id")
             for metadata in (params.get("metadata"), defaults.get("metadata"))
@@ -227,7 +243,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         Responses API, and send the call unchanged.
 
         The Router picks the deployment on each call, so there is no one model name
-        to route: each deployment has to be named for the Responses API already.
+        to route: each deployment has to be one litellm sends there already.
         """
         group = params["model"]
         sent = _without_none(params)
@@ -252,8 +268,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             names = ", ".join(repr(model) for model in dict.fromkeys(outside))
             raise ValueError(
                 f"use_responses_api=True, but litellm does not send {names} in "
-                f"{group!r} to a Responses API; name each deployment's model "
-                "'<provider>/responses/<model>'."
+                f"{group!r} to a Responses API. It sends a deployment there when its "
+                "provider has one and its model is named '<provider>/responses/<model>'."
             )
         return group
 
