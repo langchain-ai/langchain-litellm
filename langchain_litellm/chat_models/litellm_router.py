@@ -50,16 +50,32 @@ def _without_none(params: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _deployment_sends_to_responses_api(deployment: Mapping[str, Any]) -> bool:
-    """Whether litellm sends a deployment, as named, to a Responses API.
+    """Whether litellm sends a deployment to a Responses API.
 
-    litellm swaps in a model's alias before it picks the route, so this does too.
+    The deployment is resolved in the order ``litellm.completion`` resolves it
+    before it picks the route: the named credential fills what is missing,
+    ``base_url`` replaces ``api_base``, the model alias applies, and the ``azure``
+    flag or a ``deployment_id`` forces Azure.
     """
-    model: str = deployment["model"]
-    named, provider, _, _ = litellm.get_llm_provider(
-        model=_aliased(model) or model,
-        custom_llm_provider=deployment.get("custom_llm_provider"),
-        api_base=deployment.get("api_base"),
-    )
+    resolved = dict(deployment)
+    litellm.utils.load_credentials_from_list(resolved)
+    model: str = resolved["model"]
+    model = _aliased(model) or model
+    provider = resolved.get("custom_llm_provider")
+    if resolved.get("azure") is True:
+        provider = "azure"
+    if resolved.get("deployment_id") is not None:
+        model, provider = resolved["deployment_id"], "azure"
+    base_url = resolved.get("base_url")
+    try:
+        named, provider, _, _ = litellm.get_llm_provider(
+            model=model,
+            custom_llm_provider=provider,
+            api_base=base_url if base_url is not None else resolved.get("api_base"),
+        )
+    except litellm.BadRequestError:
+        # A prompt-management deployment names its model only once the prompt loads.
+        return False
     return _sends_to_responses_api(named, provider)
 
 
@@ -95,9 +111,10 @@ class ChatLiteLLMRouter(ChatLiteLLM):
     raises ``ValueError`` before any request otherwise, naming each deployment that
     is not. It also raises when the call may reach deployments outside the group,
     through a fallback, a ``model_group_alias``, a deployment id or a specific
-    deployment of the group's name, or a team's own deployments, and when no
-    ``model_list`` entry is named after the group, as for one only a wildcard
-    deployment serves. A deployment litellm sends there on its own, such as
+    deployment of the group's name, a team's own deployments or a deployment's
+    ``silent_model``, and when no ``model_list`` entry is named after the group, as
+    for one only a wildcard deployment serves. A deployment litellm sends there on
+    its own, such as
     ``openai/gpt-5-pro``, passes, but its reasoning items do not go back; name it
     ``openai/responses/gpt-5-pro`` for that.
 
@@ -231,9 +248,15 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             for key in _FALLBACK_SETTINGS:
                 if entry.get("model_name") == group and own.get(key):
                     return f"a deployment of {group!r} sets {key}"
+        # The Router reads a caller's team from either bucket before it picks.
+        buckets = (
+            params.get("metadata"),
+            params.get("litellm_metadata"),
+            defaults.get("metadata"),
+        )
         if any(
             isinstance(metadata, Mapping) and metadata.get("user_api_key_team_id")
-            for metadata in (params.get("metadata"), defaults.get("metadata"))
+            for metadata in buckets
         ):
             return "the Router swaps in a team's own deployments for a team caller"
         return None
@@ -259,6 +282,13 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                 f"use_responses_api=True, but no model_list entry is named {group!r}, "
                 "so ChatLiteLLMRouter cannot check the deployments that serve it."
             )
+        # Replay ignores this one: the mirrored reply never reaches the caller.
+        if any(deployment.get("silent_model") for deployment in deployments):
+            raise ValueError(
+                f"use_responses_api=True, but a deployment of {group!r} sets "
+                "silent_model, which mirrors the call to a group ChatLiteLLMRouter "
+                "does not check."
+            )
         outside = [
             deployment["model"]
             for deployment in deployments
@@ -267,9 +297,10 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         if outside:
             names = ", ".join(repr(model) for model in dict.fromkeys(outside))
             raise ValueError(
-                f"use_responses_api=True, but litellm does not send {names} in "
-                f"{group!r} to a Responses API. It sends a deployment there when its "
-                "provider has one and its model is named '<provider>/responses/<model>'."
+                "use_responses_api=True, but ChatLiteLLMRouter cannot confirm that "
+                f"litellm sends {names} in {group!r} to a Responses API. It sends a "
+                "deployment there when its provider has one and its model is named "
+                "'<provider>/responses/<model>'."
             )
         return group
 

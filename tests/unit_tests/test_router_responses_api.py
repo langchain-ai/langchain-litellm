@@ -620,3 +620,16 @@ async def test_a_deployment_whose_prompt_names_its_model_is_named() -> None:
     llm = ChatLiteLLMRouter(router=router, use_responses_api=True)
 
     assert "'bitbucket/openai/responses/gpt-4o-mini'" in await _refused(llm, "invoke")
+
+
+@pytest.mark.asyncio
+async def test_litellm_s_azure_flag_forces_azure() -> None:
+    """litellm then takes the whole name as an Azure deployment on its chat API."""
+    llm = ChatLiteLLMRouter(
+        router=_router(
+            {"model": "openai/responses/gpt-4o-mini", "azure": True, **AZURE}
+        ),
+        use_responses_api=True,
+    )
+
+    assert "'openai/responses/gpt-4o-mini'" in await _refused(llm, "invoke")
