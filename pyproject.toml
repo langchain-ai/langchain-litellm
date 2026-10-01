@@ -32,10 +32,14 @@ dependencies = [
     # 1.101.0 is the first litellm that puts a streamed reply's cost on the stream.
     "litellm>=1.101.0,<2.0.0",
     "httpx>=0.28.1,<0.29.0",
-    # litellm 1.101.0 through 1.102.2 fail to import on pydantic 2.10.
-    "pydantic>=2.11.0,<3.0.0",
-    # langchain-core 1.6.1 needs 4.13.0, through langchain-protocol.
-    "typing-extensions>=4.13.0,<5.0.0",
+    # litellm 1.101.0 through 1.102.2 fail to import on pydantic 2.10, and 2.12.0 is
+    # the first pydantic that installs on Python 3.14.
+    "pydantic>=2.11.0,<3.0.0; python_version < '3.14'",
+    "pydantic>=2.12.0,<3.0.0; python_version >= '3.14'",
+    # langchain-core 1.6.1 needs 4.13.0, through langchain-protocol; pydantic 2.12.0
+    # needs 4.14.1.
+    "typing-extensions>=4.13.0,<5.0.0; python_version < '3.14'",
+    "typing-extensions>=4.14.1,<5.0.0; python_version >= '3.14'",
 ]
 
 [project.urls]
