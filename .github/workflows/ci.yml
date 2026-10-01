@@ -89,3 +89,37 @@ jobs:
 
       - name: Run unit tests
         run: uv run python -m pytest tests/unit_tests/ --disable-socket --allow-unix-socket -q
+
+  test-floors:
+    name: "Test dependency floors (Python ${{ matrix.python-version }})"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --group test
+
+      # Each runtime dependency at the lower bound pyproject.toml declares, over the
+      # locked test tools. --no-sync keeps uv run from restoring the lock.
+      - name: Install the declared floors
+        run: |
+          uv run --no-sync python scripts/dependency_floors.py > floors.txt
+          uv pip install -r floors.txt
+          uv run --no-sync python scripts/dependency_floors.py --check
+
+      - name: Run unit tests
+        run: uv run --no-sync python -m pytest tests/unit_tests/ --disable-socket --allow-unix-socket -q
