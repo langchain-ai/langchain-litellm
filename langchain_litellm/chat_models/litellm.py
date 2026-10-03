@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 import copy
 import functools
 import hashlib
@@ -10,6 +9,7 @@ import json
 import logging
 import os
 import re
+import warnings
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from operator import itemgetter
 from typing import (
