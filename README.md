@@ -62,6 +62,8 @@ As an open-source project in a rapidly developing field, we are extremely open t
 
 For detailed information on how to contribute, see the [Contributing Guide](https://docs.langchain.com/oss/python/contributing/overview).
 
+Unsorted imports do not block a pull request: before merging, a maintainer runs the **Sort imports** workflow, which commits the fix to the PR branch. On a fork, keep **Allow edits by maintainers** checked so it can push.
+
 ## 👤 Maintainer
 
 Created and maintained by [Akshay Dongare](https://akshaydongare.com).
