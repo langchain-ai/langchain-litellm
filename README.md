@@ -62,7 +62,7 @@ As an open-source project in a rapidly developing field, we are extremely open t
 
 For detailed information on how to contribute, see the [Contributing Guide](https://docs.langchain.com/oss/python/contributing/overview).
 
-Imports in a pull request are sorted automatically: the `autofix.ci` check runs ruff's import sorter and commits any fix to the PR branch. On a fork, keep **Allow edits by maintainers** checked so it can push.
+Unsorted imports do not block a pull request: before merging, a maintainer runs the **Sort imports** workflow, which commits the fix to the PR branch. On a fork, keep **Allow edits by maintainers** checked so it can push.
 
 ## 👤 Maintainer
 
