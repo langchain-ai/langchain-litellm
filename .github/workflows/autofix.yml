@@ -1,0 +1,38 @@
+# Sorts the imports of every pull request. The autofix.ci GitHub App commits the result to the
+# PR branch, forks included, and the commit runs CI like any other push.
+name: autofix.ci # the app accepts fixes only from a workflow with exactly this name
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  UV_FROZEN: "true"
+
+jobs:
+  autofix:
+    name: "Sort imports"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      # The locked ruff alone, without installing the project, so no pull request code runs.
+      - run: uv run --only-group lint ruff check --select I001 --fix-only .
+
+      - uses: autofix-ci/action@c5b2d67aa2274e7b5a18224e8171550871fc7e4a # v1.3.4
+        with:
+          commit-message: "style: sort imports"
