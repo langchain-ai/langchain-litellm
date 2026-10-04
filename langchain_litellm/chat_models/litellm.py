@@ -128,6 +128,25 @@ def _get_field(source: Any, name: str) -> Any:
     return getattr(source, name, None)
 
 
+def _resolve_model_alias(model: str) -> str:
+    """Resolve a LiteLLM model alias for local capability checks."""
+
+    aliases = getattr(litellm, "model_alias_map", None) or {}
+    seen: set[str] = set()
+
+    while model in aliases:
+        if model in seen:
+            break
+        seen.add(model)
+
+        target = aliases[model]
+        if not isinstance(target, str):
+            break
+        model = target
+
+    return model
+
+
 # Hosts that serve Claude through litellm's Anthropic message format. An
 # `anthropic/` route always does, including Anthropic-compatible endpoints like Kimi's.
 _CLAUDE_HOSTS = frozenset({"bedrock", "vertex_ai", "azure_ai"})
@@ -893,8 +912,21 @@ def _sends_manual_thinking(
             model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
         )
     except litellm.BadRequestError:
-        # An alias or routed name that litellm resolves only when the call is made.
-        return False
+        resolved_model = _resolve_model_alias(model)
+
+        if resolved_model == model:
+            return False
+
+        try:
+            bare_model, provider, _, _ = litellm.get_llm_provider(
+                model=resolved_model,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+            )
+
+        except litellm.BadRequestError:
+            return False
+
     mapped = litellm.get_optional_params(
         model=bare_model,
         custom_llm_provider=provider,
@@ -1465,7 +1497,9 @@ class ChatLiteLLM(BaseChatModel):
         )
 
     def _is_claude_model(self) -> bool:
-        return "claude" in (self.model_name or self.model).lower()
+        model, _ = self._constructor_destination()
+        model = _resolve_model_alias(model) if model else model
+        return "claude" in (model or "").lower()
 
     @property
     def _default_params(self) -> dict[str, Any]:

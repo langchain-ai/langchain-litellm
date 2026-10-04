@@ -1157,6 +1157,99 @@ def test_bind_tools_downgraded_wherever_thinking_is_set(
     assert "incompatible with thinking" in caplog.text
 
 
+def test_bind_tools_downgrades_for_a_claude_alias_with_manual_thinking(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A local LiteLLM alias must still expose Claude's manual-thinking behavior."""
+    monkeypatch.setitem(
+        litellm.model_alias_map,
+        "my-claude-alias",
+        "anthropic/claude-sonnet-4-5",
+    )
+
+    llm = ChatLiteLLM(
+        model="my-claude-alias",
+        api_key="fake",
+        model_kwargs={"reasoning_effort": "high"},
+    )
+
+    with caplog.at_level(
+        logging.WARNING, logger="langchain_litellm.chat_models.litellm"
+    ):
+        bound = llm.bind_tools([_dummy_tool], tool_choice="required")
+
+        assert bound.kwargs["tool_choice"] == "auto"  # type: ignore[attr-defined]
+        assert "incompatible with thinking" in caplog.text
+
+
+def test_bind_tools_downgrades_when_alias_required_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A model alias should be resolved when LiteLLM cannot resolve it directly."""
+    monkeypatch.setitem(
+        litellm.model_alias_map,
+        "my-claude-alias",
+        "anthropic/claude-sonnet-4-5",
+    )
+
+    original_get_llm_provider = litellm.get_llm_provider
+
+    def get_llm_provider_with_alias_failure(*args: Any, **kwargs: Any) -> Any:
+        model = kwargs.get("model")
+
+        if model == "my-claude-alias":
+            raise litellm.BadRequestError(
+                message="Unknown model",
+                model=model,
+                llm_provider="",
+            )
+        return original_get_llm_provider(*args, **kwargs)
+
+    monkeypatch.setattr(
+        litellm,
+        "get_llm_provider",
+        get_llm_provider_with_alias_failure,
+    )
+
+    llm = ChatLiteLLM(
+        model="my-claude-alias",
+        api_key="fake",
+        model_kwargs={"reasoning_effort": "high"},
+    )
+
+    with caplog.at_level(
+        logging.WARNING,
+        logger="langchain_litellm.chat_models.litellm",
+    ):
+        bound = llm.bind_tools([_dummy_tool], tool_choice="required")
+
+    assert bound.kwargs["tool_choice"] == "auto"  # type: ignore[attr-defined]
+    assert "incompatible with thinking" in caplog.text
+
+
+def test_bind_tools_keeps_required_for_a_non_claude_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-claude alias must not downgrade a forced tool choice."""
+    monkeypatch.setitem(
+        litellm.model_alias_map,
+        "my-gpt-alias",
+        "openai/gpt-4o",
+    )
+
+    llm = ChatLiteLLM(
+        model="my-gpt-alias",
+        api_key="fake",
+        model_kwargs={"reasoning_effort": "high"},
+    )
+
+    bound = llm.bind_tools([_dummy_tool], tool_choice="required")
+
+    assert bound.kwargs["tool_choice"] == "required"  # type: ignore[attr-defined]
+
+
 @pytest.mark.skipif(
     not OPUS_4_7_THINKS_ADAPTIVELY, reason="this litellm sends it manual thinking"
 )
