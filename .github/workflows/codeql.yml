@@ -5,6 +5,8 @@ name: "CodeQL"
 # read-only token and still reports results on PRs from forks — which
 # GitHub's default (Basic) setup does not, leaving fork PRs stuck on
 # "Code scanning is waiting for results from CodeQL".
+# Code scanning only. "Code quality results are pending" is GitHub Code Quality,
+# a managed scan no workflow here can feed, so never add analysis-kinds for it.
 on:
   push:
     branches: [main]

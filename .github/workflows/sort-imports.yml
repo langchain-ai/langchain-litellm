@@ -1,0 +1,113 @@
+# Sorts one pull request's imports and pushes the fix to its branch. Start it from the Actions tab,
+# or with `gh workflow run sort-imports.yml -f pr=<number>`.
+# Needs a GitHub App with Contents write on this repository; its SORT_IMPORTS_CLIENT_ID variable
+# and SORT_IMPORTS_PRIVATE_KEY secret live in a sort-imports environment limited to main.
+name: Sort imports
+run-name: "Sort imports in #${{ inputs.pr }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Pull request number"
+        required: true
+        type: number
+
+concurrency:
+  group: sort-imports-${{ inputs.pr }}
+
+permissions:
+  contents: read
+  pull-requests: read # to look up the pull request
+
+env:
+  UV_FROZEN: "true"
+
+jobs:
+  sort:
+    name: "Sort imports"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: sort-imports
+    steps:
+      # main supplies the locked ruff; the pull request supplies only its files and ruff settings.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: main
+          persist-credentials: false
+
+      - name: Look up the pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" > "$RUNNER_TEMP/pr.json"
+          field() { jq -r "$1" "$RUNNER_TEMP/pr.json"; }
+          state=$(field .state)
+          head_repo=$(field '.head.repo.full_name // ""')
+          if [ "$state" != open ]; then
+            echo "::error::#$PR is $state."
+            exit 1
+          fi
+          if [ -z "$head_repo" ]; then
+            echo "::error::#$PR's head repository no longer exists."
+            exit 1
+          fi
+          if [ "$head_repo" != "$GITHUB_REPOSITORY" ] && [ "$(field .maintainer_can_modify)" != true ]; then
+            echo "::error::#$PR does not allow edits by maintainers, so nothing can push to $head_repo."
+            exit 1
+          fi
+          {
+            echo "head-repo=$head_repo"
+            echo "head-ref=$(field .head.ref)"
+            echo "head-sha=$(field .head.sha)"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.pr.outputs.head-sha }}
+          path: pr
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          working-directory: main
+          enable-cache: false
+
+      - name: Sort imports
+        id: sort
+        working-directory: pr
+        run: |
+          uv run --project ../main --only-group lint ruff check --select I001 --fix-only .
+          if git diff --quiet; then
+            echo "Imports are already sorted."
+          else
+            git diff --stat
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        if: steps.sort.outputs.changed == 'true'
+        id: app
+        with:
+          client-id: ${{ vars.SORT_IMPORTS_CLIENT_ID }}
+          private-key: ${{ secrets.SORT_IMPORTS_PRIVATE_KEY }}
+          permission-contents: write
+
+      # A plain push, so a branch that moved since the lookup rejects it instead of losing work.
+      - name: Push the fix
+        if: steps.sort.outputs.changed == 'true'
+        working-directory: pr
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          HEAD_REPO: ${{ steps.pr.outputs.head-repo }}
+          HEAD_REF: ${{ steps.pr.outputs.head-ref }}
+        run: |
+          bot_id=$(gh api "users/${APP_SLUG}[bot]" --jq .id)
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          git commit --quiet --all --message "style: sort imports"
+          gh auth setup-git
+          git push "https://github.com/${HEAD_REPO}.git" "HEAD:refs/heads/${HEAD_REF}"
