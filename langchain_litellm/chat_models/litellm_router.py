@@ -492,7 +492,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         default_chunk_class = AIMessageChunk
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**self._merge_call_params(params, kwargs), "stream": True}
-        if "stream_options" not in kwargs:
+        # `params` already carries `model_kwargs`, so checking only `kwargs`
+        # would overwrite a `stream_options` supplied there with the default.
+        if "stream_options" not in kwargs and "stream_options" not in params:
             params["stream_options"] = (
                 self.stream_options
                 if self.stream_options is not None
@@ -594,7 +596,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         default_chunk_class = AIMessageChunk
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**self._merge_call_params(params, kwargs), "stream": True}
-        if "stream_options" not in kwargs:
+        # `params` already carries `model_kwargs`, so checking only `kwargs`
+        # would overwrite a `stream_options` supplied there with the default.
+        if "stream_options" not in kwargs and "stream_options" not in params:
             params["stream_options"] = (
                 self.stream_options
                 if self.stream_options is not None
