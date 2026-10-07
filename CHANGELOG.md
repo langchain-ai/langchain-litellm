@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.11.0...langchain-litellm==0.11.1) (2026-10-07)
+
+
+### Bug Fixes
+
+* **deps:** declare the Python 3.14 floors for pydantic and typing-extensions ([#346](https://github.com/langchain-ai/langchain-litellm/issues/346)) ([b01226d](https://github.com/langchain-ai/langchain-litellm/commit/b01226dbcc057c8ba368abaeaf79ff903d704aa3))
+
 ## [0.11.0](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.10.0...langchain-litellm==0.11.0) (2026-09-30)
 
 
