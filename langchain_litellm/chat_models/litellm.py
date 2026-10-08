@@ -321,6 +321,21 @@ def _lc_tool_call_to_openai_tool_call(tool_call: ToolCall) -> Dict[str, Any]:
     }
 
 
+def _collapse_text_only_content(content: List[Any]) -> Union[str, List[Any]]:
+    """Collapse a text-only content list into a plain string.
+
+    If the content list contains only strings, joins them into a single string.
+    Otherwise, wraps bare strings as text blocks guarded by isinstance(item, str)
+    while preserving structured blocks and other non-dict items untouched.
+    """
+    if all(isinstance(item, str) for item in content):
+        return "".join(content)
+    return [
+        {"type": "text", "text": item} if isinstance(item, str) else item
+        for item in content
+    ]
+
+
 def _convert_message_to_dict(message: BaseMessage) -> Dict[str, Any]:
     # Capture the original content from the message
     content = message.content
@@ -356,17 +371,12 @@ def _convert_message_to_dict(message: BaseMessage) -> Dict[str, Any]:
                     new_content.append(item)
             else:
                 # Append non-dict items (like strings) directly
-                new_content.append(
-                    {
-                        "type": "text",
-                        "text": item,
-                    }
-                )
+                new_content.append(item)
 
         # Update content with the processed list.
         # If filtering removed all blocks, collapse to empty string so the
         # provider doesn't receive an empty list.
-        content = new_content or ""
+        content = _collapse_text_only_content(new_content) if new_content else ""
 
     # Initialize the message dictionary with the processed content
     message_dict: Dict[str, Any] = {"content": content}

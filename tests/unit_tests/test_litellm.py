@@ -9,7 +9,7 @@ from unittest.mock import patch
 import litellm
 import pytest
 from langchain_core.exceptions import OutputParserException
-from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableLambda
 from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function
 from pydantic import BaseModel
@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from langchain_litellm._version import __version__
 from langchain_litellm.chat_models import ChatLiteLLM
 from langchain_litellm.chat_models.litellm import (
+    _collapse_text_only_content,
     _convert_delta_to_message_chunk,
     _convert_dict_to_message,
     _convert_message_to_dict,
@@ -605,17 +606,90 @@ def test_convert_message_to_dict_strips_thinking_blocks() -> None:
     assert d["reasoning_content"] == "internal reasoning"
 
 
-def test_convert_message_to_dict_wraps_bare_string_content() -> None:
+def test_convert_message_to_dict_plain_string_content() -> None:
+    msg = AIMessage(content="hello")
+    d = _convert_message_to_dict(msg)
+    assert d["content"] == "hello"
+
+
+def test_convert_message_to_dict_collapses_text_only_list() -> None:
+    msg_single = AIMessage(content=["hello"])
+    assert _convert_message_to_dict(msg_single)["content"] == "hello"
+
+    msg_multi = AIMessage(content=["hello", " world"])
+    assert _convert_message_to_dict(msg_multi)["content"] == "hello world"
+
+    msg_user = HumanMessage(content=["user query"])
+    assert _convert_message_to_dict(msg_user)["content"] == "user query"
+
+
+def test_convert_message_to_dict_wraps_bare_string_with_structured_block() -> None:
+    image_block = {
+        "type": "image_url",
+        "image_url": {
+            "url": "https://example.com/image.png",
+        },
+    }
+
+    # Bare string after structured block
+    msg_after = AIMessage(content=[image_block, "some assistant text"])
+    d_after = _convert_message_to_dict(msg_after)
+    assert d_after["content"] == [
+        image_block,
+        {"type": "text", "text": "some assistant text"},
+    ]
+    assert "some assistant text" not in d_after["content"]
+
+    # Bare string before structured block
+    msg_before = AIMessage(content=["some assistant text", image_block])
+    d_before = _convert_message_to_dict(msg_before)
+    assert d_before["content"] == [
+        {"type": "text", "text": "some assistant text"},
+        image_block,
+    ]
+    assert "some assistant text" not in d_before["content"]
+
+
+def test_convert_message_to_dict_preserves_structured_content() -> None:
+    typed_text_block = {"type": "text", "text": "already typed"}
+    image_block = {
+        "type": "image_url",
+        "image_url": {"url": "https://example.com/image.png"},
+    }
+    msg = AIMessage(content=[image_block, typed_text_block])
+    d = _convert_message_to_dict(msg)
+    assert d["content"] == [image_block, typed_text_block]
+
+    # Single structured text block is not collapsed or re-wrapped
+    msg_single_typed = AIMessage(content=[typed_text_block])
+    d_single = _convert_message_to_dict(msg_single_typed)
+    assert d_single["content"] == [typed_text_block]
+
+
+def test_convert_message_to_dict_preserves_other_non_dict_items() -> None:
+    msg = AIMessage.model_construct(content=[123, "hello"])
+    d = _convert_message_to_dict(msg)
+    assert d["content"] == [123, {"type": "text", "text": "hello"}]
+
+
+def test_convert_message_to_dict_collapses_text_after_stripping_thinking() -> None:
     msg = AIMessage(
         content=[
             {"type": "thinking", "thinking": "internal reasoning"},
             "hello",
         ]
     )
-
     d = _convert_message_to_dict(msg)
+    assert d["content"] == "hello"
 
-    assert d["content"] == [
+
+def test_collapse_text_only_content_helper() -> None:
+    assert _collapse_text_only_content(["hello"]) == "hello"
+    assert _collapse_text_only_content(["hello", " world"]) == "hello world"
+    assert _collapse_text_only_content([]) == ""
+    block = {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}
+    assert _collapse_text_only_content([block, "hello"]) == [
+        block,
         {"type": "text", "text": "hello"},
     ]
 
