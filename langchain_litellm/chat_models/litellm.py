@@ -80,6 +80,7 @@ from langchain_core.runnables import Runnable, RunnablePassthrough
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import TypeBaseModel, is_basemodel_subclass
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.types.utils import Delta
 from pydantic import BaseModel, Field, model_validator
 from typing_extensions import is_typeddict
@@ -1455,6 +1456,31 @@ class ChatLiteLLM(BaseChatModel):
             return True
         return self._litellm_sends_manual_thinking(overrides)
 
+    def _model_refuses_forced_tools(self, overrides: Mapping[str, Any]) -> bool:
+        """Ask LiteLLM whether the effective model rejects forced tool use."""
+        unsupported = getattr(AnthropicModelInfo, "forced_tool_use_unsupported", None)
+        if unsupported is None:
+            # Older supported LiteLLM versions do not expose this capability.
+            return False
+
+        model, provider = self._constructor_destination()
+        effective_model = overrides.get("model") or model or self.model
+        effective_provider = overrides.get("custom_llm_provider") or provider
+        effective_api_base = overrides.get("api_base") or self.api_base
+
+        try:
+            resolved_model, _, _, _ = litellm.get_llm_provider(
+                model=effective_model,
+                custom_llm_provider=effective_provider,
+                api_base=effective_api_base,
+            )
+
+        except litellm.BadRequestError:
+            # An unresolved alias has no concrete capability to check here.
+            return False
+
+        return bool(unsupported(resolved_model))
+
     def _litellm_sends_manual_thinking(self, overrides: Mapping[str, Any]) -> bool:
         model, provider = self._constructor_destination()
         return _sends_manual_thinking(
@@ -2167,29 +2193,35 @@ class ChatLiteLLM(BaseChatModel):
                     f"but the bound function tools are {tool_names}."
                 )
 
-        # Claude refuses a forced tool beside manual thinking, so downgrade to "auto"
-        # there; other providers and adaptive thinking keep the forced choice.
-        # Prior art: langchain-ai/langchain#35544, langchain-ai/langchain-aws#927.
+        # Downgrade forced choices when the model rejects forced tool use or
+        # when Claude manual thinking makes the choice incompatible.
         # "any" is already mapped to "required" above, and litellm reads
         # {"type": "required"} as that same string.
+
         tool_choice_is_forced = (
             tool_choice == "required"
             or function_choice is not None
             or (isinstance(tool_choice, dict) and tool_choice.get("type") == "required")
         )
-        if (
-            tool_choice_is_forced
-            and self._is_claude_model()
-            and self._thinking_refuses_forced_tools(kwargs)
-        ):
-            logger.warning(
-                "tool_choice=%r is incompatible with thinking/extended "
-                "thinking on Claude models. Downgrading tool_choice to 'auto' "
-                "so the model can produce chain-of-thought reasoning before "
-                "calling tools.",
-                tool_choice,
-            )
-            tool_choice = "auto"
+        if tool_choice_is_forced:
+            if self._model_refuses_forced_tools(kwargs):
+                logger.warning(
+                    "tool_choice=%r is unsupported by this model. "
+                    "Downgrading tool_choice to 'auto'; tool calls may be omitted.",
+                    tool_choice,
+                )
+                tool_choice = "auto"
+            elif self._is_claude_model() and self._thinking_refuses_forced_tools(
+                kwargs
+            ):
+                logger.warning(
+                    "tool_choice=%r is incompatible with thinking/extended "
+                    "thinking on Claude models. Downgrading tool_choice to 'auto' "
+                    "so the model can produce chain-of-thought reasoning before "
+                    "calling tools.",
+                    tool_choice,
+                )
+                tool_choice = "auto"
 
         return super().bind(tools=formatted_tools, tool_choice=tool_choice, **kwargs)
 
@@ -2217,14 +2249,28 @@ class ChatLiteLLM(BaseChatModel):
             tool_choice_value = "required"
             bind_kwargs = {"tool_choice": tool_choice_value}
 
-            if self._is_claude_model() and self._thinking_refuses_forced_tools({}):
-                warning_message = (
-                    "Structured output via function calling is not guaranteed on "
-                    "Claude models when `thinking` is enabled. Tool calls may be "
-                    "omitted; this runnable will raise OutputParserException when "
-                    "no tool call is returned. Consider disabling `thinking` or "
-                    'using `method="json_schema"`.'
-                )
+            model_refuses_forced_tools = self._model_refuses_forced_tools({})
+            thinking_refuses_forced_tools = (
+                self._is_claude_model() and self._thinking_refuses_forced_tools({})
+            )
+
+            if model_refuses_forced_tools or thinking_refuses_forced_tools:
+                if model_refuses_forced_tools:
+                    warning_message = (
+                        "Structured output via function calling is not guaranteed "
+                        "because this model does not support forced tool use. "
+                        "Tool calls may be omitted; this runnable will raise "
+                        "OutputParserException when no tool call is returned. "
+                        'Consider using `method="json_schema"` where supported.'
+                    )
+                else:
+                    warning_message = (
+                        "Structured output via function calling is not guaranteed on "
+                        "Claude models when `thinking` is enabled. Tool calls may be "
+                        "omitted; this runnable will raise OutputParserException when "
+                        "no tool call is returned. Consider disabling `thinking` or "
+                        'using `method="json_schema"`.'
+                    )
                 warnings.warn(warning_message, stacklevel=2)
                 bind_kwargs = {}
 
