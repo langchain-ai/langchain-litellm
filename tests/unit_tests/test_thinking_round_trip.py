@@ -1349,6 +1349,48 @@ def _router(deployments: list[tuple[str, str]], **settings: Any) -> litellm.Rout
             [("main", CLAUDE), ("backup", CLAUDE)],
             {"default_fallbacks": ["backup"]},
             {},
+            True,
+        ),
+        (
+            [("main", CLAUDE), ("refusal", CLAUDE)],
+            {"content_policy_fallbacks": [{"main": ["refusal"]}]},
+            {},
+            True,
+        ),
+        (
+            [("main", CLAUDE), ("backup", CLAUDE), ("gpt", "openai/gpt-4o")],
+            {"fallbacks": [{"main": ["backup"]}, {"backup": ["gpt"]}]},
+            {},
+            False,
+        ),
+        (
+            [("main", CLAUDE), ("backup", CLAUDE), ("gpt", "openai/gpt-4o")],
+            {
+                "fallbacks": [{"main": ["backup"]}],
+                "context_window_fallbacks": [{"main": ["gpt"]}],
+            },
+            {},
+            False,
+        ),
+        (
+            [("main", CLAUDE), ("backup", CLAUDE)],
+            {"fallbacks": [{"main": [{"model": "backup", "temperature": 0}]}]},
+            {},
+            False,
+        ),
+        (
+            [("main", CLAUDE), ("backup", CLAUDE), ("gpt", "openai/gpt-4o")],
+            {
+                "fallbacks": [{"main": ["backup"]}],
+                "model_group_alias": {"backup": "gpt"},
+            },
+            {},
+            False,
+        ),
+        (
+            [("main", CLAUDE), ("backup", CLAUDE)],
+            {"fallbacks": [{"main": ["backup"]}]},
+            {"fallbacks": ["backup"]},
             False,
         ),
         (
@@ -1379,7 +1421,13 @@ def _router(deployments: list[tuple[str, str]], **settings: Any) -> litellm.Rout
         "another-group-differs",
         "falls-back-to-openai",
         "falls-back-to-a-wildcard",
-        "default-fallback",
+        "default-fallback-to-the-same-endpoint",
+        "content-policy-fallback-to-the-same-endpoint",
+        "a-fallback-s-own-fallback-differs",
+        "another-fallback-setting-differs",
+        "fallback-overrides-params",
+        "fallback-is-an-alias",
+        "per-call-fallback",
         "per-call-context-window-fallback",
         "router-context-window-fallback",
         "per-call-api-base",
@@ -1925,7 +1973,7 @@ def test_a_captured_origin_carries_nothing_of_the_api_base(
             [_entry("main", CLAUDE), _entry("safe", CLAUDE)],
             {"content_policy_fallbacks": [{"main": ["safe"]}]},
             ANTHROPIC,
-            False,
+            True,
         ),
         (
             [_entry("main", CLAUDE, fallbacks=["gemini/gemini-2.5-pro"])],
@@ -1937,7 +1985,7 @@ def test_a_captured_origin_carries_nothing_of_the_api_base(
             [_entry("main", CLAUDE), _entry("other", CLAUDE), _entry("x", CLAUDE)],
             {"fallbacks": [{"other": ["x"]}]},
             ANTHROPIC,
-            False,
+            True,
         ),
         (
             [
@@ -2036,9 +2084,9 @@ def test_a_captured_origin_carries_nothing_of_the_api_base(
         ),
     ],
     ids=[
-        "content-policy-fallback",
+        "content-policy-fallback-to-the-same-endpoint",
         "deployment-level-fallback",
-        "any-router-fallback",
+        "any-router-fallback-to-the-same-endpoint",
         "deployment-base-url",
         "deployment-provider",
         "model-info-base-model",
