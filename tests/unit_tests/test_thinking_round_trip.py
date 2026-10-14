@@ -60,6 +60,14 @@ GATEWAY = "http://gateway.internal:4000"
 KIMI_BASE = "https://api.kimi.com/coding/"
 
 
+@pytest.fixture(autouse=True)
+def _no_anthropic_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A base set where the tests run would make every bare Claude route third-party."""
+    for name in ("ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
+
+
 def endpoint(model: str, api_base: str | None = None) -> str:
     """The stored origin of a block this model signed at this base."""
     origin = _signing_endpoint(model, None, api_base)
@@ -67,7 +75,7 @@ def endpoint(model: str, api_base: str | None = None) -> str:
     return origin
 
 
-ANTHROPIC = endpoint(CLAUDE)
+ANTHROPIC = endpoint(CLAUDE, "https://api.anthropic.com")
 KIMI = endpoint("anthropic/kimi-for-coding", "https://api.kimi.com/coding/")
 
 
@@ -157,18 +165,11 @@ def _asked_after(*earlier: Any, tools: Any = None) -> str:
 # ── which endpoints check replayed thinking ──────────────────────────────────
 
 
-@pytest.fixture
-def _no_anthropic_base(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(litellm, "api_base", None)
-
-
 ARN = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc"
 CLAUDE_ON_BEDROCK = "anthropic.claude-sonnet-4-20250514-v1:0"
+FIRST_PARTY = "anthropic|first-party"
 
 
-@pytest.mark.usefixtures("_no_anthropic_base")
 @pytest.mark.parametrize(
     ("model", "provider", "api_base", "base_model", "expected"),
     [
@@ -177,21 +178,21 @@ CLAUDE_ON_BEDROCK = "anthropic.claude-sonnet-4-20250514-v1:0"
             None,
             None,
             None,
-            "anthropic||claude-sonnet-4-20250514",
+            FIRST_PARTY,
         ),
         (
             "claude-sonnet-4-20250514",
             None,
             None,
             None,
-            "anthropic||claude-sonnet-4-20250514",
+            FIRST_PARTY,
         ),
         (
             "Claude-Sonnet-4-20250514",
             None,
             None,
             None,
-            "anthropic||claude-sonnet-4-20250514",
+            FIRST_PARTY,
         ),
         (
             "anthropic/kimi-for-coding",
@@ -223,25 +224,53 @@ CLAUDE_ON_BEDROCK = "anthropic.claude-sonnet-4-20250514-v1:0"
         ),
         ("anthropic/claude-x", None, "https://[::1/v1", None, None),
         (
+            "anthropic/claude-x",
+            None,
+            "https://API.anthropic.com/v1/",
+            None,
+            FIRST_PARTY,
+        ),
+        (
+            "anthropic/claude-x",
+            None,
+            "http://api.anthropic.com",
+            None,
+            "anthropic|http://api.anthropic.com|claude-x",
+        ),
+        (
+            "anthropic/claude-x",
+            None,
+            "https://api.anthropic.com.evil.example",
+            None,
+            "anthropic|https://api.anthropic.com.evil.example|claude-x",
+        ),
+        (
+            f"bedrock/{CLAUDE_ON_BEDROCK}",
+            None,
+            "https://bedrock.vpce.example",
+            None,
+            f"bedrock|https://bedrock.vpce.example|{CLAUDE_ON_BEDROCK}",
+        ),
+        (
             "bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0",
             None,
             None,
             None,
-            "bedrock||converse/us.anthropic.claude-sonnet-4-20250514-v1:0",
+            FIRST_PARTY,
         ),
         (
             "us.anthropic.claude-sonnet-4-20250514-v1:0",
             None,
             None,
             None,
-            "bedrock||us.anthropic.claude-sonnet-4-20250514-v1:0",
+            FIRST_PARTY,
         ),
         (
             f"bedrock/converse/{ARN}",
             None,
             None,
             "anthropic.claude-sonnet-4-20250514-v1:0",
-            f"bedrock||converse/{ARN}",
+            FIRST_PARTY,
         ),
         (f"bedrock/converse/{ARN}", None, None, None, None),
         (
@@ -249,7 +278,7 @@ CLAUDE_ON_BEDROCK = "anthropic.claude-sonnet-4-20250514-v1:0"
             None,
             None,
             None,
-            "vertex_ai||claude-3-7-sonnet@20250219",
+            FIRST_PARTY,
         ),
         ("azure_ai/claude-sonnet-4", None, None, None, "azure_ai||claude-sonnet-4"),
         ("gemini/gemini-2.5-pro", None, None, None, None),
@@ -271,11 +300,11 @@ def test_only_anthropic_format_routes_name_a_signing_endpoint(
     base_model: str | None,
     expected: str | None,
 ) -> None:
-    """Kimi and Anthropic both speak the Anthropic format but sign differently."""
+    """Kimi and Anthropic both speak the Anthropic format but sign differently, while
+    Anthropic's own platforms accept each other's signatures for any model."""
     assert _endpoint_name(model, provider, api_base, base_model) == expected
 
 
-@pytest.mark.usefixtures("_no_anthropic_base")
 def test_an_unset_base_names_where_litellm_actually_sends(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -284,9 +313,7 @@ def test_an_unset_base_names_where_litellm_actually_sends(
     assert _endpoint_name("anthropic/claude-x", None, None) == (
         "anthropic|https://gw.example|claude-x"
     )
-    assert _endpoint_name(f"bedrock/{CLAUDE_ON_BEDROCK}", None, None) == (
-        f"bedrock||{CLAUDE_ON_BEDROCK}"
-    )
+    assert _endpoint_name(f"bedrock/{CLAUDE_ON_BEDROCK}", None, None) == FIRST_PARTY
 
 
 def test_a_stored_origin_never_carries_the_api_base() -> None:
@@ -1234,7 +1261,6 @@ def test_a_block_and_text_in_one_delta_count_the_block_first() -> None:
     assert chunk.additional_kwargs["thinking_blocks"] == signed_at(ANTHROPIC, SIGNED)
 
 
-@pytest.mark.usefixtures("_no_anthropic_base")
 def test_stored_marks_keep_the_values_saved_histories_hold() -> None:
     """Checkpoints keep these digests, so changing what goes into them strands every
     saved block: a new format needs a way to read the old one, not an edit."""
@@ -1243,7 +1269,7 @@ def test_stored_marks_keep_the_values_saved_histories_hold() -> None:
 
     binding = _attach_thinking_blocks([QUESTION], message_dicts, origin, {})
 
-    assert binding == ("059c009c6c12e1bd", "0148c3026491315a")
+    assert binding == ("4aa6cabbbc815dc3", "0148c3026491315a")
 
 
 def test_a_changed_history_is_named_when_it_holds_blocks_back(
@@ -1327,6 +1353,18 @@ def _router(deployments: list[tuple[str, str]], **settings: Any) -> litellm.Rout
                 ("main", CLAUDE),
                 ("main", "bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0"),
             ],
+            {},
+            {},
+            True,
+        ),
+        (
+            [("main", CLAUDE), ("backup", "vertex_ai/claude-3-7-sonnet@20250219")],
+            {"fallbacks": [{"main": ["backup"]}]},
+            {},
+            True,
+        ),
+        (
+            [("main", CLAUDE), ("main", "azure_ai/claude-sonnet-4")],
             {},
             {},
             False,
@@ -1417,6 +1455,8 @@ def _router(deployments: list[tuple[str, str]], **settings: Any) -> litellm.Rout
         "claude",
         "same-endpoint-twice",
         "anthropic-and-bedrock",
+        "falls-back-to-vertex",
+        "anthropic-and-azure",
         "mixed-group",
         "another-group-differs",
         "falls-back-to-openai",
@@ -1761,7 +1801,6 @@ def test_an_alias_map_litellm_tolerates_is_tolerated(
     assert captured["model"] == "openai/gpt-4o"
 
 
-@pytest.mark.usefixtures("_no_anthropic_base")
 def test_the_unset_base_comes_from_where_litellm_looks_first(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1779,7 +1818,6 @@ def test_the_unset_base_comes_from_where_litellm_looks_first(
     )
 
 
-@pytest.mark.usefixtures("_no_anthropic_base")
 @pytest.mark.parametrize(
     "setting", ["litellm.api_base", "ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"]
 )
@@ -2281,7 +2319,7 @@ def test_a_group_whose_deployments_differ_has_no_endpoint() -> None:
     router = _router_of(
         [
             _entry("main", CLAUDE),
-            _entry("main", "bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0"),
+            _entry("main", "anthropic/kimi-for-coding", api_base=KIMI_BASE),
         ]
     )
 

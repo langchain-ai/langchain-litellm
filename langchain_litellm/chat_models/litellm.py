@@ -131,6 +131,10 @@ def _get_field(source: Any, name: str) -> Any:
 # Hosts that serve Claude through litellm's Anthropic message format. An
 # `anthropic/` route always does, including Anthropic-compatible endpoints like Kimi's.
 _CLAUDE_HOSTS = frozenset({"bedrock", "vertex_ai", "azure_ai"})
+# Anthropic's own platforms, whose signatures hold on each other and across models.
+_FIRST_PARTY = frozenset({"anthropic", "bedrock", "vertex_ai"})
+# The one name every first-party route shares.
+_FIRST_PARTY_FAMILY = "anthropic|first-party"
 # Where a stored thinking block records the endpoint that signed it.
 _ORIGIN = "origin"
 # Where it records the history it followed, which a replay must send unchanged.
@@ -241,9 +245,12 @@ def _endpoint_name(
     ``thinking_blocks`` entry and checks its signature, and a signature holds only
     where it was issued: Kimi's are not Anthropic's, and one gateway URL can serve
     several models. So the name joins the provider, the base litellm sends to and
-    the model. Anything this cannot place is None, which leaves the request as it
-    was. The provider comes from the model prefix, not ``litellm.get_llm_provider``,
-    which authenticates some providers while it resolves them.
+    the model. Anthropic's own platforms are the exception: the Claude API, Bedrock
+    and Vertex accept each other's signatures, for any model, and drop a block a
+    model can't read, so they share one name. Anything this cannot place is None,
+    which leaves the request as it was. The provider comes from the model prefix,
+    not ``litellm.get_llm_provider``, which authenticates some providers while it
+    resolves them.
     """
     provider = custom_llm_provider or ""
     # litellm routes a bare model to Anthropic whatever the case of "claude".
@@ -266,7 +273,26 @@ def _endpoint_name(
             or os.environ.get("ANTHROPIC_BASE_URL")
         )
     where = _server(base)
-    return None if where is None else f"{provider}|{where}|{name}"
+    if where is None:
+        return None
+    if provider in _FIRST_PARTY and _first_party_server(provider, where):
+        return _FIRST_PARTY_FAMILY
+    return f"{provider}|{where}|{name}"
+
+
+def _first_party_server(provider: str, where: str) -> bool:
+    """Whether a request goes to Anthropic's own platform for ``provider``.
+
+    A Bedrock or Vertex request with a base of its own may reach a proxy, so only the
+    default counts there.
+    """
+    if not where:
+        return True
+    url = urlsplit(where)
+    return provider == "anthropic" and (url.scheme, url.netloc) == (
+        "https",
+        "api.anthropic.com",
+    )
 
 
 def _server(base: str | None) -> str | None:
