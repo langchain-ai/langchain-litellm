@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.11.1](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.11.0...langchain-litellm==0.11.1) (2026-10-14)
+
+
+### Bug Fixes
+
+* **deps:** declare the Python 3.14 floors for pydantic and typing-extensions ([#346](https://github.com/langchain-ai/langchain-litellm/issues/346)) ([b01226d](https://github.com/langchain-ai/langchain-litellm/commit/b01226dbcc057c8ba368abaeaf79ff903d704aa3))
+* **litellm:** keepy replaying thinking blocks stored before the first-party key from [#364](https://github.com/langchain-ai/langchain-litellm/issues/364) ([#365](https://github.com/langchain-ai/langchain-litellm/issues/365)) ([41d904b](https://github.com/langchain-ai/langchain-litellm/commit/41d904b59fb8a67d501edde2ae1c29dd66b318fb))
+* **litellm:** replay thinking across router fallbacks ([#364](https://github.com/langchain-ai/langchain-litellm/issues/364)) ([ce91aa9](https://github.com/langchain-ai/langchain-litellm/commit/ce91aa908b446984e998342896ac99900265e08b))
+
 ## [0.11.0](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.10.0...langchain-litellm==0.11.0) (2026-09-30)
 
 
