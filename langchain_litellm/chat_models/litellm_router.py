@@ -1,6 +1,7 @@
 """LiteLLM Router chat model integration for LangChain."""
 
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from functools import partial
 from typing import Any
 
 import litellm
@@ -214,8 +215,12 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             for entry in matched
         )
 
-    def _thinking_endpoint(self, params: dict[str, Any]) -> str | None:
-        return self._group_endpoint(params, super()._thinking_endpoint)
+    def _thinking_endpoint(
+        self, params: dict[str, Any], *, legacy: bool = False
+    ) -> str | None:
+        return self._group_endpoint(
+            params, partial(super()._thinking_endpoint, legacy=legacy)
+        )
 
     def _reasoning_endpoint(self, params: dict[str, Any]) -> str | None:
         return self._group_endpoint(params, super()._reasoning_endpoint)

@@ -1270,6 +1270,54 @@ def test_stored_marks_keep_the_values_saved_histories_hold() -> None:
     binding = _attach_thinking_blocks([QUESTION], message_dicts, origin, {})
 
     assert binding == ("4aa6cabbbc815dc3", "0148c3026491315a")
+    # What blocks stored before the first-party family carry.
+    assert _signing_endpoint(CLAUDE, None, None, legacy=True) == "059c009c6c12e1bd"
+
+
+# Where a block from before the first-party family says CLAUDE signed it.
+LEGACY = "059c009c6c12e1bd"
+CLAUDE_ON_BEDROCK_ROUTE = f"bedrock/{CLAUDE_ON_BEDROCK}"
+
+
+@pytest.mark.parametrize(
+    ("model", "forwarded"),
+    [
+        (CLAUDE, True),
+        ("anthropic/claude-opus-4-1-20250805", False),
+        (CLAUDE_ON_BEDROCK_ROUTE, False),
+    ],
+    ids=["same-route", "another-model", "another-platform"],
+)
+def test_a_block_stored_before_the_family_replays_only_where_it_used_to(
+    monkeypatch: pytest.MonkeyPatch, model: str, forwarded: bool
+) -> None:
+    captured = _capture_calls(monkeypatch, ChatLiteLLM)
+
+    reply = ChatLiteLLM(model=model, api_key="fake").invoke(_history(LEGACY))
+
+    assert ("thinking_blocks" in _assistant_sent(captured)) is forwarded
+    assert reply.additional_kwargs["thinking_blocks"][0][_ORIGIN] == ANTHROPIC
+
+
+@pytest.mark.parametrize(
+    ("deployments", "forwarded"),
+    [
+        ([("main", CLAUDE), ("main", CLAUDE)], True),
+        ([("main", CLAUDE), ("main", CLAUDE_ON_BEDROCK_ROUTE)], False),
+    ],
+    ids=["one-route", "routes-that-used-to-differ"],
+)
+def test_a_router_replays_a_stored_block_only_where_every_deployment_used_to(
+    monkeypatch: pytest.MonkeyPatch,
+    deployments: list[tuple[str, str]],
+    forwarded: bool,
+) -> None:
+    captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
+    llm = ChatLiteLLMRouter(router=_router(deployments), model_name="main")
+
+    llm.invoke(_history(LEGACY))
+
+    assert ("thinking_blocks" in _assistant_sent(captured)) is forwarded
 
 
 def test_a_changed_history_is_named_when_it_holds_blocks_back(
