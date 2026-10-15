@@ -2727,6 +2727,114 @@ class _Sent(Exception):
     """Stops a call once litellm has received it."""
 
 
+@pytest.mark.parametrize("in_model_kwargs", [False, True])
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"base_url": "https://api.groq.com/openai/v1"},
+        {"litellm_credential_name": "groq"},
+        {"deployment_id": "gpt5-dep", "model": "azure/gpt-5"},
+        {"azure": True, "model": "openai/gpt-4o-mini"},
+        {"litellm_credential_name": "azure"},
+        {"model": "fast"},
+    ],
+)
+async def test_responses_rejects_resolved_chat_routes(
+    monkeypatch: pytest.MonkeyPatch,
+    override: dict[str, Any],
+    in_model_kwargs: bool,
+) -> None:
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(litellm, "model_alias_map", {"fast": "groq/llama-3.3-70b"})
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="groq",
+                credential_info={},
+                credential_values={"api_base": "https://api.groq.com/openai/v1"},
+            ),
+            CredentialItem(
+                credential_name="azure",
+                credential_info={},
+                credential_values={"azure": True},
+            ),
+        ],
+    )
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="k",
+        use_responses_api=True,
+        model_kwargs=override if in_model_kwargs else {},
+    )
+    call = {} if in_model_kwargs else override
+    with (
+        patch.object(llm.client, "completion") as completion,
+        patch.object(llm.client, "acompletion") as acompletion,
+    ):
+        with pytest.raises(ValueError, match="cannot send"):
+            llm.invoke("hi", **call)
+        with pytest.raises(ValueError, match="cannot send"):
+            list(llm.stream("hi", **call))
+        with pytest.raises(ValueError, match="cannot send"):
+            await llm.ainvoke("hi", **call)
+        with pytest.raises(ValueError, match="cannot send"):
+            [chunk async for chunk in llm.astream("hi", **call)]
+    completion.assert_not_called()
+    acompletion.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"model": "fast"},
+        {
+            "api_base": "https://api.groq.com/openai/v1",
+            "base_url": "https://api.openai.com/v1",
+        },
+        {"litellm_credential_name": "openai"},
+        {
+            "litellm_credential_name": "groq",
+            "base_url": "https://api.openai.com/v1",
+        },
+        {"azure": False, "deployment_id": None},
+    ],
+)
+def test_responses_resolves_params_before_renaming(
+    monkeypatch: pytest.MonkeyPatch,
+    _responses_endpoint: list[httpx.Request],
+    override: dict[str, Any],
+) -> None:
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(litellm, "model_alias_map", {"fast": "openai/gpt-4o-mini"})
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="openai",
+                credential_info={},
+                credential_values={"base_url": "https://api.openai.com/v1"},
+            ),
+            CredentialItem(
+                credential_name="groq",
+                credential_info={},
+                credential_values={"api_base": "https://api.groq.com/openai/v1"},
+            ),
+        ],
+    )
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_responses_api=True)
+    assert llm.invoke("hi", **override).content == "ok"
+    assert [str(r.url) for r in _responses_endpoint] == [
+        "https://api.openai.com/v1/responses"
+    ]
+    assert json.loads(_responses_endpoint[0].content)["model"] == "gpt-4o-mini"
+    assert llm.model == "gpt-4o-mini"
+
+
 async def test_use_responses_api_routes_every_entry_point() -> None:
     """A route applied in one entry point leaves the others on Chat Completions."""
     llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_responses_api=True)
