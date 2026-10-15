@@ -122,9 +122,7 @@ module = "tests.*"
 disallow_untyped_defs = false
 
 [tool.ruff]
-# Pins the rule set to ruff 0.16; any other minor refuses to run. Patch releases can
-# still change a verdict, so `make lint`'s locked ruff is the authority.
-required-version = ">=0.16.0,<0.17.0"
+required-version = ">=0.16.0,<0.18.0"
 
 [tool.ruff.format]
 docstring-code-format = true  # Formats code blocks in docstrings
