@@ -1934,6 +1934,8 @@ class ChatLiteLLM(BaseChatModel):
     ) -> Iterator[ChatGenerationChunk]:
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**self._merge_call_params(params, kwargs), "stream": True}
+        if params.get("n") is not None and params["n"] > 1:
+            raise ValueError("n must be 1 when streaming.")
         if "stream_options" not in kwargs:
             params["stream_options"] = (
                 self.stream_options
@@ -2027,6 +2029,8 @@ class ChatLiteLLM(BaseChatModel):
     ) -> AsyncIterator[ChatGenerationChunk]:
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**self._merge_call_params(params, kwargs), "stream": True}
+        if params.get("n") is not None and params["n"] > 1:
+            raise ValueError("n must be 1 when streaming.")
         if "stream_options" not in kwargs:
             params["stream_options"] = (
                 self.stream_options
