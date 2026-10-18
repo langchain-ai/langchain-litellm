@@ -2818,14 +2818,14 @@ def test_use_responses_api_is_read_like_a_destination_and_never_sent(
 )
 def test_use_responses_api_rejects_fallbacks(key: str, in_model_kwargs: bool) -> None:
     """A fallback would reach Chat Completions, so the call fails before any request."""
-    fallback = {key: ["openai/gpt-4.1-nano"]}
+    fallback: dict[str, Any] = {key: ["openai/gpt-4.1-nano"]}
     llm = ChatLiteLLM(
         model="gpt-4o-mini",
         api_key="k",
         use_responses_api=True,
         model_kwargs=fallback if in_model_kwargs else {},
     )
-    call = {} if in_model_kwargs else fallback
+    call: dict[str, Any] = {} if in_model_kwargs else fallback
 
     with (
         patch.object(llm.client, "completion") as completion,
