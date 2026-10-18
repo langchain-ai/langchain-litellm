@@ -2812,6 +2812,45 @@ def test_use_responses_api_is_read_like_a_destination_and_never_sent(
     assert "use_responses_api" not in completion.call_args.kwargs
 
 
+@pytest.mark.parametrize("in_model_kwargs", [False, True])
+@pytest.mark.parametrize(
+    "key", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"]
+)
+def test_use_responses_api_rejects_fallbacks(key: str, in_model_kwargs: bool) -> None:
+    """A fallback would reach Chat Completions, so the call fails before any request."""
+    fallback: dict[str, Any] = {key: ["openai/gpt-4.1-nano"]}
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="k",
+        use_responses_api=True,
+        model_kwargs=fallback if in_model_kwargs else {},
+    )
+    call: dict[str, Any] = {} if in_model_kwargs else fallback
+
+    with (
+        patch.object(llm.client, "completion") as completion,
+        pytest.raises(ValueError, match=key),
+    ):
+        llm.invoke("hi", **call)
+
+    completion.assert_not_called()
+
+
+def test_use_responses_api_rejects_litellm_model_fallbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "model_fallbacks", ["openai/gpt-4.1-nano"])
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_responses_api=True)
+
+    with (
+        patch.object(llm.client, "completion") as completion,
+        pytest.raises(ValueError, match="model_fallbacks"),
+    ):
+        llm.invoke("hi")
+
+    completion.assert_not_called()
+
+
 def test_use_responses_api_keeps_its_own_cache_entries() -> None:
     """A cached Chat Completions reply must not answer a call meant for Responses."""
     cache = InMemoryCache()

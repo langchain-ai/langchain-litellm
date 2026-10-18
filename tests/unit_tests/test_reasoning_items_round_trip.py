@@ -485,13 +485,14 @@ def test_a_turn_with_several_items_goes_back_without_them(
     assert _sent_reasoning(requests[-1]) == sent
 
 
-def test_a_call_with_fallbacks_keeps_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A fallback may answer from another model, whose items no issuer accepts."""
-    serve_http(monkeypatch, REPLY)
+def test_a_call_with_fallbacks_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A fallback would be sent to Chat Completions, so the call fails up front."""
+    requests = serve_http(monkeypatch, REPLY)
 
-    message = _first_turn(_base(model_kwargs={"fallbacks": ["openai/gpt-5"]}))
+    with pytest.raises(ValueError, match="fallbacks"):
+        _first_turn(_base(model_kwargs={"fallbacks": ["openai/gpt-5"]}))
 
-    assert "reasoning_items" not in message.additional_kwargs
+    assert not requests
 
 
 @pytest.mark.parametrize(

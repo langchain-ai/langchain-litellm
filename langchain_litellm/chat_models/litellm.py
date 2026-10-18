@@ -439,6 +439,14 @@ def _aliased(model: str | None) -> str | None:
     return aliases[model] if aliases and model in aliases else model
 
 
+# Call params that make litellm re-send a failed request to another model.
+_FALLBACK_PARAMS = (
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+)
+
+
 def _only_endpoint(params: Mapping[str, Any], endpoint: str | None) -> str | None:
     """``endpoint``, unless something could answer this request from another one.
 
@@ -1614,6 +1622,17 @@ class ChatLiteLLM(BaseChatModel):
     def _route_to_responses_api(self, params: Mapping[str, Any]) -> str:
         """The model to send so litellm's own bridge carries the call to a Responses
         API: ``params["model"]`` named ``<provider>/responses/<model>``."""
+        for key in _FALLBACK_PARAMS:
+            if params.get(key):
+                raise ValueError(
+                    f"use_responses_api=True, but the call sets {key}, and litellm "
+                    "would send a fallback to Chat Completions."
+                )
+        if litellm.model_fallbacks:
+            raise ValueError(
+                "use_responses_api=True, but litellm.model_fallbacks is set, and "
+                "litellm would send a fallback to Chat Completions."
+            )
         model = params["model"]
         named, provider, _, _ = litellm.get_llm_provider(
             model=model,
