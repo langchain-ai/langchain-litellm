@@ -825,6 +825,94 @@ def test_router_names_a_streamed_cost_once() -> None:
     assert _merge(chunks).response_metadata["response_cost"] == 1.0e-06
 
 
+def test_router_names_answering_model_once_across_stream() -> None:
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "model_info": {"id": "primary-id"},
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key",
+                },
+            },
+            {
+                "model_name": "backup",
+                "model_info": {"id": "deployment-A"},
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                    "api_key": "fake-key",
+                },
+            },
+        ],
+    )
+    llm = ChatLiteLLMRouter(router=router, model="primary")
+
+    with patch.object(
+        llm.router,
+        "completion",
+        return_value=iter(_router_chunks_with_cost()),
+    ):
+        chunks = [chunk.message for chunk in llm._stream([])]
+
+        merged = _merge(chunks)
+
+        assert merged.response_metadata["model_id"] == "deployment-A"
+        assert merged.response_metadata["model_name"] == "openai/gpt-3.5-turbo"
+
+        naming = [chunk for chunk in chunks if "model_name" in chunk.response_metadata]
+
+        assert len(naming) == 1
+
+
+@pytest.mark.asyncio
+async def test_router_names_answering_model_once_across_astream() -> None:
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "model_info": {"id": "primary-id"},
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key",
+                },
+            },
+            {
+                "model_name": "backup",
+                "model_info": {"id": "deployment-A"},
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                    "api_key": "fake-key",
+                },
+            },
+        ],
+    )
+    llm = ChatLiteLLMRouter(router=router, model="primary")
+
+    async def _acompletion(**kwargs: Any) -> Any:
+        async def _aiter() -> Any:
+            for chunk in _router_chunks_with_cost():
+                yield chunk
+
+        return _aiter()
+
+    with patch.object(
+        llm.router,
+        "acompletion",
+        side_effect=_acompletion,
+    ):
+        chunks = [chunk.message async for chunk in llm._astream([])]
+
+        merged = _merge(chunks)
+
+        assert merged.response_metadata["model_id"] == "deployment-A"
+        assert merged.response_metadata["model_name"] == "openai/gpt-3.5-turbo"
+
+        naming = [chunk for chunk in chunks if "model_name" in chunk.response_metadata]
+
+        assert len(naming) == 1
+
+
 @pytest.mark.asyncio
 async def test_router_names_an_astreamed_cost_once() -> None:
     """The async loop merges the same way, so it needs the same guarantee."""
@@ -944,10 +1032,33 @@ def test_deployment_is_read_from_either_shape_litellm_hands_over() -> None:
     from types import SimpleNamespace
 
     named = {"model_id": "deployment-A"}
-    assert _deployment_metadata({"_hidden_params": named}) == named
-    assert _deployment_metadata(SimpleNamespace(_hidden_params=named)) == named
-    assert _deployment_metadata({"_hidden_params": {"model_id": None}}) == {}
-    assert _deployment_metadata({}) == {}
+    assert _deployment_metadata({"_hidden_params": named}, []) == named
+    assert _deployment_metadata(SimpleNamespace(_hidden_params=named), []) == named
+    assert _deployment_metadata({"_hidden_params": {"model_id": None}}, []) == {}
+    assert _deployment_metadata({}, []) == {}
+
+
+def test_deployment_metadata_resolves_model_name() -> None:
+    model_list = [
+        {
+            "model_name": "primary",
+            "model_info": {"id": "deployment-A"},
+            "litellm_params": {"model": "openai/gpt-4o-mini"},
+        },
+        {
+            "model_name": "fallback_0",
+            "model_info": {"id": "deployment-B"},
+            "litellm_params": {"model": "openai/gpt-3.5-turbo"},
+        },
+    ]
+    response = {"_hidden_params": {"model_id": "deployment-B"}}
+
+    metadata = _deployment_metadata(response, model_list)
+
+    assert metadata == {
+        "model_id": "deployment-B",
+        "model_name": "openai/gpt-3.5-turbo",
+    }
 
 
 def test_router_create_chat_result_names_the_cost_and_deployment() -> None:
@@ -979,6 +1090,106 @@ def test_router_create_chat_result_names_the_cost_and_deployment() -> None:
         "response_cost": 1.35e-05,
         "model_id": "deployment-A",
     }
+
+
+def test_router_Chat_result_uses_answering_deployment_name() -> None:
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "model_info": {"id": "deployment-A"},
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake_key",
+                },
+            },
+            {
+                "model_name": "primary",
+                "model_info": {"id": "deployment-B"},
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                    "api_key": "fake_key",
+                },
+            },
+        ],
+    )
+    llm = ChatLiteLLMRouter(router=router, model="primary")
+
+    mock_response = {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+        },
+        "_hidden_params": {"model_id": "deployment-B"},
+    }
+
+    result = llm._create_chat_result(mock_response, metadata={})
+    metadata = result.generations[0].message.response_metadata
+
+    assert metadata["model_name"] == "openai/gpt-3.5-turbo"
+    assert metadata["model_id"] == "deployment-B"
+    assert llm.model == "primary"
+
+
+@pytest.mark.asyncio
+async def test_a_router_ainvoke_uses_answering_deployment_name() -> None:
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "model_info": {"id": "deployment-A"},
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake_key",
+                },
+            },
+            {
+                "model_name": "primary",
+                "model_info": {"id": "deployment-B"},
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                    "api_key": "fake_key",
+                },
+            },
+        ],
+    )
+    llm = ChatLiteLLMRouter(router=router, model="primary")
+
+    mock_response = {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+        },
+        "_hidden_params": {"model_id": "deployment-B"},
+    }
+
+    async def _acompletion(**kwargs: Any) -> Any:
+        return mock_response
+
+    with patch.object(
+        llm.router,
+        "acompletion",
+        side_effect=_acompletion,
+    ):
+        message = await llm.ainvoke("hi")
+
+    assert message.response_metadata["model_name"] == "openai/gpt-3.5-turbo"
+    assert message.response_metadata["model_id"] == "deployment-B"
+    assert llm.model == "primary"
 
 
 def _completion_filling_router_metadata() -> Callable[..., Any]:
