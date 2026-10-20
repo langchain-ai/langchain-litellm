@@ -2446,10 +2446,39 @@ def _create_usage_metadata(token_usage: Any) -> UsageMetadata:
             if cache_creation is None:
                 cache_creation = _get_field(prompt_details, "cache_creation_tokens")
 
+    prompt_details = _get_field(token_usage, "prompt_tokens_details")
+    input_audio = (
+        _get_field(prompt_details, "audio_tokens")
+        if prompt_details is not None
+        else None
+    )
+
     input_token_details: dict = {
+        "audio": int(input_audio) if input_audio is not None else None,
         "cache_read": int(cache_read) if cache_read is not None else None,
         "cache_creation": int(cache_creation) if cache_creation is not None else None,
     }
+
+    # Anthropic prices a 1h cache write at 2x base input and a 5m write at
+    # 1.25x, so a single `cache_creation` total cannot be costed. litellm keeps
+    # the split in `cache_creation_token_details`.
+    cache_ttl_details = (
+        _get_field(prompt_details, "cache_creation_token_details")
+        if prompt_details is not None
+        else None
+    )
+    if cache_ttl_details is not None:
+        ephemeral = {
+            key: _get_field(cache_ttl_details, key)
+            for key in ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens")
+        }
+        ephemeral = {k: int(v) for k, v in ephemeral.items() if v is not None}
+        if any(ephemeral.values()):
+            input_token_details.update(ephemeral)
+            # The split already accounts for every cache-write token, so
+            # leaving `cache_creation` alongside it would double count. This
+            # matches `langchain-anthropic` and `langchain-aws`.
+            input_token_details["cache_creation"] = 0
 
     # ── output token details (reasoning) ──────────────────────────────────
     completion_details = _get_field(token_usage, "completion_tokens_details")
@@ -2458,7 +2487,13 @@ def _create_usage_metadata(token_usage: Any) -> UsageMetadata:
         if completion_details is not None
         else None
     )
+    output_audio = (
+        _get_field(completion_details, "audio_tokens")
+        if completion_details is not None
+        else None
+    )
     output_token_details: dict = {
+        "audio": int(output_audio) if output_audio is not None else None,
         "reasoning": int(reasoning) if reasoning is not None else None,
     }
 
