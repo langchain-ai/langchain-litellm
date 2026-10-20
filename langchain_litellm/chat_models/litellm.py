@@ -2460,7 +2460,7 @@ def _create_usage_metadata(token_usage: Any) -> UsageMetadata:
         cache_lifetimes
         and all(type(count) is int and count >= 0 for count in cache_lifetimes.values())
         and input_token_details["cache_creation"]
-        in (None, 0, sum(cache_lifetimes.values()))
+        in (None, sum(cache_lifetimes.values()))
     ):
         input_token_details.update(cache_lifetimes)
         # Token-detail categories are additive; the split replaces the aggregate.

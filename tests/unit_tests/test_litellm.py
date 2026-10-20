@@ -942,7 +942,7 @@ def test_cache_lifetime_details_replace_aggregate(
     "lifetimes",
     [{"ephemeral_5m_input_tokens": 100}, {"ephemeral_1h_input_tokens": 100}],
 )
-def test_cache_lifetime_details_do_not_invent_missing_fields(
+def test_cache_lifetime_details_do_not_default_missing_lifetimes(
     lifetimes: dict[str, int],
 ) -> None:
     metadata = _create_usage_metadata(_cache_lifetime_usage(lifetimes))
@@ -950,6 +950,51 @@ def test_cache_lifetime_details_do_not_invent_missing_fields(
         "cache_read": 400,
         "cache_creation": 0,
         **lifetimes,
+    }
+
+
+@pytest.mark.parametrize("as_model", [False, True])
+def test_cache_lifetime_details_without_aggregate_use_additive_categories(
+    as_model: bool,
+) -> None:
+    lifetimes = {"ephemeral_5m_input_tokens": 40, "ephemeral_1h_input_tokens": 60}
+    usage: Any = _cache_lifetime_usage(lifetimes)
+    del usage["prompt_tokens_details"]["cache_creation_tokens"]
+    if as_model:
+        usage = litellm.Usage(**usage)
+    metadata = _create_usage_metadata(usage)
+    assert metadata["input_token_details"] == {
+        "cache_read": 400,
+        "cache_creation": 0,
+        **lifetimes,
+    }
+
+
+@pytest.mark.parametrize("as_model", [False, True])
+@pytest.mark.parametrize(
+    "nested_total,top_level_total,expected_total",
+    [(0, None, 0), (100, 0, 0), (100, 90, 90), (90, None, 90)],
+)
+def test_cache_lifetime_details_conflicting_totals_preserve_aggregate(
+    as_model: bool,
+    nested_total: int,
+    top_level_total: int | None,
+    expected_total: int,
+) -> None:
+    usage: Any = _cache_lifetime_usage(
+        {"ephemeral_5m_input_tokens": 40, "ephemeral_1h_input_tokens": 60}
+    )
+    usage["prompt_tokens_details"]["cache_creation_tokens"] = nested_total
+    if top_level_total is not None:
+        usage["cache_creation_input_tokens"] = top_level_total
+    if as_model:
+        usage = litellm.Usage(**usage)
+    metadata = _create_usage_metadata(usage)
+    assert metadata["input_tokens"] == 1000
+    assert metadata["output_tokens"] == 200
+    assert metadata["input_token_details"] == {
+        "cache_read": 400,
+        "cache_creation": expected_total,
     }
 
 
