@@ -2913,3 +2913,80 @@ def test_a_per_call_base_url_overrides_the_constructor_api_base(
     llm.invoke("hi", base_url="https://call.example/v1")
 
     assert requests[-1].url.host == "call.example"
+
+
+def _streamed_stream_options(llm: ChatLiteLLM, **call_kwargs: Any) -> Any:
+    """The `stream_options` actually handed to `litellm.completion`."""
+    with patch("litellm.completion", return_value=iter([])) as completion:
+        try:
+            list(llm.stream("hi", **call_kwargs))
+        except Exception:  # noqa: BLE001, S110
+            # The mock streams nothing; only the outgoing kwargs matter here.
+            pass
+    return completion.call_args.kwargs.get("stream_options")
+
+
+def test_stream_options_from_model_kwargs_is_not_overwritten() -> None:
+    """`model_kwargs` already lands in `params`, so the default must not win.
+
+    The guard checked only the per-call `kwargs`, so a `stream_options` passed
+    through `model_kwargs` was silently replaced by `{"include_usage": True}`.
+    """
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        model_kwargs={"stream_options": {"include_usage": False}},
+    )
+
+    assert _streamed_stream_options(llm) == {"include_usage": False}
+
+
+def test_stream_options_sources_and_precedence() -> None:
+    """Every documented source is honored, and `model_kwargs` wins."""
+    # The field.
+    assert _streamed_stream_options(
+        ChatLiteLLM(model="gpt-4o-mini", stream_options={"include_usage": False})
+    ) == {"include_usage": False}
+
+    # A per-call keyword.
+    assert _streamed_stream_options(
+        ChatLiteLLM(model="gpt-4o-mini"), stream_options={"include_usage": False}
+    ) == {"include_usage": False}
+
+    # Neither: the default still applies.
+    assert _streamed_stream_options(ChatLiteLLM(model="gpt-4o-mini")) == {
+        "include_usage": True
+    }
+
+    # `model_kwargs` is merged last into `_default_params`, so it takes
+    # precedence over the field.
+    assert _streamed_stream_options(
+        ChatLiteLLM(
+            model="gpt-4o-mini",
+            stream_options={"include_usage": True},
+            model_kwargs={"stream_options": {"include_usage": False}},
+        )
+    ) == {"include_usage": False}
+
+
+async def test_astream_stream_options_from_model_kwargs() -> None:
+    """The async path carries the same guard."""
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        model_kwargs={"stream_options": {"include_usage": False}},
+    )
+
+    async def _empty(*_args: Any, **_kwargs: Any) -> Any:
+        async def _gen() -> Any:
+            if False:  # pragma: no cover - never yields
+                yield None
+
+        return _gen()
+
+    with patch("litellm.acompletion", side_effect=_empty) as completion:
+        try:
+            async for _ in llm.astream("hi"):
+                pass
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    assert completion.call_args.kwargs.get("stream_options") == {"include_usage": False}
