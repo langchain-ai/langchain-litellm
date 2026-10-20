@@ -2435,21 +2435,36 @@ def _create_usage_metadata(token_usage: Any) -> UsageMetadata:
     # ── input token details (cache) ───────────────────────────────────────
     cache_read = _get_field(token_usage, "cache_read_input_tokens")
     cache_creation = _get_field(token_usage, "cache_creation_input_tokens")
+    prompt_details = _get_field(token_usage, "prompt_tokens_details")
 
     # Fallback: some providers nest cache info inside prompt_tokens_details
     # instead of top-level keys.
-    if cache_read is None or cache_creation is None:
-        prompt_details = _get_field(token_usage, "prompt_tokens_details")
-        if prompt_details is not None:
-            if cache_read is None:
-                cache_read = _get_field(prompt_details, "cached_tokens")
-            if cache_creation is None:
-                cache_creation = _get_field(prompt_details, "cache_creation_tokens")
+    if (cache_read is None or cache_creation is None) and prompt_details is not None:
+        if cache_read is None:
+            cache_read = _get_field(prompt_details, "cached_tokens")
+        if cache_creation is None:
+            cache_creation = _get_field(prompt_details, "cache_creation_tokens")
 
     input_token_details: dict = {
         "cache_read": int(cache_read) if cache_read is not None else None,
         "cache_creation": int(cache_creation) if cache_creation is not None else None,
     }
+
+    creation_details = _get_field(prompt_details, "cache_creation_token_details")
+    cache_lifetimes = {
+        key: count
+        for key in ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens")
+        if (count := _get_field(creation_details, key)) is not None
+    }
+    if (
+        cache_lifetimes
+        and all(type(count) is int and count >= 0 for count in cache_lifetimes.values())
+        and input_token_details["cache_creation"]
+        in (None, 0, sum(cache_lifetimes.values()))
+    ):
+        input_token_details.update(cache_lifetimes)
+        # Token-detail categories are additive; the split replaces the aggregate.
+        input_token_details["cache_creation"] = 0
 
     # ── output token details (reasoning) ──────────────────────────────────
     completion_details = _get_field(token_usage, "completion_tokens_details")

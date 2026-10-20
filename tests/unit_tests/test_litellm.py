@@ -896,6 +896,164 @@ def test_create_usage_metadata_reads_dict_prompt_details() -> None:
     assert meta["input_token_details"]["cache_creation"] == 5
 
 
+def _cache_lifetime_usage(lifetimes: dict[str, Any] | None) -> dict[str, Any]:
+    details: dict[str, Any] = {"cached_tokens": 400, "cache_creation_tokens": 100}
+    if lifetimes is not None:
+        details["cache_creation_token_details"] = lifetimes
+    return {
+        "prompt_tokens": 1000,
+        "completion_tokens": 200,
+        "total_tokens": 1200,
+        "prompt_tokens_details": details,
+    }
+
+
+@pytest.mark.parametrize("as_model", [False, True])
+@pytest.mark.parametrize("top_level_counts", [False, True])
+@pytest.mark.parametrize("five_minute,one_hour", [(100, 0), (0, 100), (40, 60)])
+def test_cache_lifetime_details_replace_aggregate(
+    as_model: bool, top_level_counts: bool, five_minute: int, one_hour: int
+) -> None:
+    usage: Any = _cache_lifetime_usage(
+        {
+            "ephemeral_5m_input_tokens": five_minute,
+            "ephemeral_1h_input_tokens": one_hour,
+        }
+    )
+    if top_level_counts:
+        usage.update(cache_read_input_tokens=400, cache_creation_input_tokens=100)
+    if as_model:
+        usage = litellm.Usage(**usage)
+    metadata = _create_usage_metadata(usage)
+    assert metadata == {
+        "input_tokens": 1000,
+        "output_tokens": 200,
+        "total_tokens": 1200,
+        "input_token_details": {
+            "cache_read": 400,
+            "cache_creation": 0,
+            "ephemeral_5m_input_tokens": five_minute,
+            "ephemeral_1h_input_tokens": one_hour,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "lifetimes",
+    [{"ephemeral_5m_input_tokens": 100}, {"ephemeral_1h_input_tokens": 100}],
+)
+def test_cache_lifetime_details_do_not_invent_missing_fields(
+    lifetimes: dict[str, int],
+) -> None:
+    metadata = _create_usage_metadata(_cache_lifetime_usage(lifetimes))
+    assert metadata["input_token_details"] == {
+        "cache_read": 400,
+        "cache_creation": 0,
+        **lifetimes,
+    }
+
+
+@pytest.mark.parametrize("as_model", [False, True])
+@pytest.mark.parametrize("lifetimes", [None, {}, {"ephemeral_1h_input_tokens": None}])
+def test_cache_lifetime_details_missing_stay_missing(
+    as_model: bool, lifetimes: dict[str, Any] | None
+) -> None:
+    usage: Any = _cache_lifetime_usage(lifetimes)
+    if as_model:
+        usage = litellm.Usage(**usage)
+    assert _create_usage_metadata(usage)["input_token_details"] == {
+        "cache_read": 400,
+        "cache_creation": 100,
+    }
+
+
+@pytest.mark.parametrize("one_hour", [-1, 1.5, "60", "", True, False, 50, 0])
+def test_cache_lifetime_details_invalid_preserve_aggregate(one_hour: Any) -> None:
+    usage = _cache_lifetime_usage(
+        {"ephemeral_5m_input_tokens": 40, "ephemeral_1h_input_tokens": one_hour}
+    )
+    metadata = _create_usage_metadata(usage)
+    assert metadata["input_tokens"] == 1000
+    assert metadata["output_tokens"] == 200
+    assert metadata["input_token_details"] == {
+        "cache_read": 400,
+        "cache_creation": 100,
+    }
+
+
+@pytest.mark.parametrize("router", [False, True])
+@pytest.mark.parametrize("method", ["invoke", "ainvoke", "stream", "astream"])
+@pytest.mark.parametrize("has_split", [False, True])
+async def test_cache_lifetimes_survive_call_paths(
+    router: bool, method: str, has_split: bool
+) -> None:
+    usage = _cache_lifetime_usage(
+        {"ephemeral_5m_input_tokens": 40, "ephemeral_1h_input_tokens": 60}
+        if has_split
+        else None
+    )
+    chunks = [
+        {"choices": [{"delta": {"role": "assistant", "content": "done"}}]},
+        {"choices": [], "usage": usage},
+    ]
+
+    async def astream() -> Any:
+        for chunk in chunks:
+            yield chunk
+
+    response = litellm.ModelResponse(
+        model="gpt-4",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "done"},
+                "finish_reason": "stop",
+            }
+        ],
+        usage=usage,
+    )
+    llm = (
+        ChatLiteLLMRouter(router=make_router(), model="gpt-4")
+        if router
+        else ChatLiteLLM(model="gpt-4", api_key="test")
+    )
+    with (
+        patch.object(
+            type(llm),
+            "completion_with_retry",
+            return_value=iter(chunks) if method == "stream" else response,
+        ),
+        patch.object(
+            type(llm),
+            "acompletion_with_retry",
+            AsyncMock(return_value=astream() if method == "astream" else response),
+        ),
+    ):
+        if method == "invoke":
+            message = llm.invoke("hi")
+        elif method == "ainvoke":
+            message = await llm.ainvoke("hi")
+        else:
+            messages = (
+                list(llm.stream("hi"))
+                if method == "stream"
+                else [chunk async for chunk in llm.astream("hi")]
+            )
+            message = messages[0]
+            for chunk in messages[1:]:
+                message += chunk
+    assert message.content == "done"
+    assert message.usage_metadata is not None
+    assert message.usage_metadata["input_tokens"] == 1000
+    assert message.usage_metadata["output_tokens"] == 200
+    expected = {"cache_read": 400, "cache_creation": 100}
+    if has_split:
+        expected.update(
+            cache_creation=0, ephemeral_5m_input_tokens=40, ephemeral_1h_input_tokens=60
+        )
+    assert message.usage_metadata["input_token_details"] == expected
+
+
 def test_create_usage_metadata_uses_total_tokens_from_response() -> None:
     """total_tokens should be read from the response, not recomputed."""
     usage = {
