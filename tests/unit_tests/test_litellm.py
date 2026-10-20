@@ -2913,3 +2913,93 @@ def test_a_per_call_base_url_overrides_the_constructor_api_base(
     llm.invoke("hi", base_url="https://call.example/v1")
 
     assert requests[-1].url.host == "call.example"
+
+
+def test_create_usage_metadata_reports_audio_tokens() -> None:
+    """Audio counts are a standard detail key and must not be dropped.
+
+    Matches what `langchain-openai` reports for the same usage object.
+    """
+    usage = {
+        "prompt_tokens": 75,
+        "completion_tokens": 5,
+        "total_tokens": 80,
+        "prompt_tokens_details": {"audio_tokens": 60, "cached_tokens": 0},
+        "completion_tokens_details": {"audio_tokens": 4, "reasoning_tokens": 0},
+    }
+
+    meta = _create_usage_metadata(usage)
+
+    assert meta["input_token_details"] == {"audio": 60, "cache_read": 0}
+    assert meta["output_token_details"] == {"audio": 4, "reasoning": 0}
+
+
+def test_create_usage_metadata_splits_anthropic_cache_writes_by_ttl() -> None:
+    """A 1h write bills at 2x base input and a 5m write at 1.25x.
+
+    One `cache_creation` total cannot be priced, so the TTL split has to
+    survive. `cache_creation` is zeroed alongside it because the split already
+    accounts for every write token — the same choice `langchain-anthropic` and
+    `langchain-aws` make.
+    """
+    usage = {
+        "prompt_tokens": 75,
+        "completion_tokens": 5,
+        "total_tokens": 80,
+        "prompt_tokens_details": {
+            "cached_tokens": 40,
+            "text_tokens": 10,
+            "cache_write_tokens": 25,
+            "cache_creation_tokens": 25,
+            "cache_creation_token_details": {
+                "ephemeral_5m_input_tokens": 20,
+                "ephemeral_1h_input_tokens": 5,
+            },
+        },
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 5},
+    }
+
+    meta = _create_usage_metadata(usage)
+
+    assert meta["input_token_details"] == {
+        "cache_read": 40,
+        "cache_creation": 0,
+        "ephemeral_5m_input_tokens": 20,
+        "ephemeral_1h_input_tokens": 5,
+    }
+
+
+def test_create_usage_metadata_keeps_cache_creation_without_a_split() -> None:
+    """Routes that report no TTL breakdown keep reporting `cache_creation`."""
+    usage = {
+        "prompt_tokens": 50,
+        "completion_tokens": 25,
+        "total_tokens": 75,
+        "prompt_tokens_details": {"cached_tokens": 15, "cache_creation_tokens": 5},
+    }
+
+    meta = _create_usage_metadata(usage)
+
+    assert meta["input_token_details"]["cache_creation"] == 5
+    assert "ephemeral_5m_input_tokens" not in meta["input_token_details"]
+
+
+def test_create_usage_metadata_ignores_an_all_zero_ttl_split() -> None:
+    """An all-zero split carries no information and must not zero the total."""
+    usage = {
+        "prompt_tokens": 50,
+        "completion_tokens": 25,
+        "total_tokens": 75,
+        "prompt_tokens_details": {
+            "cached_tokens": 15,
+            "cache_creation_tokens": 5,
+            "cache_creation_token_details": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 0,
+            },
+        },
+    }
+
+    meta = _create_usage_metadata(usage)
+
+    assert meta["input_token_details"]["cache_creation"] == 5
