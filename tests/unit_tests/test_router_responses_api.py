@@ -353,7 +353,7 @@ async def test_a_call_that_may_reach_another_group_is_refused(
     assert refusal == (
         f"use_responses_api=True, but {reason}, so a call to model group 'g' may "
         "reach deployments ChatLiteLLMRouter cannot check. The flag only checks: "
-        "without it, a deployment named '<provider>/responses/<model>' still reaches "
+        "without use_responses_api, a deployment named '<provider>/responses/<model>' still reaches "
         "the Responses API."
     )
 

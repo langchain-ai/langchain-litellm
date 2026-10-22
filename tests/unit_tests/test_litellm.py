@@ -20,7 +20,14 @@ import pytest
 from langchain.chat_models import init_chat_model
 from langchain_core.caches import InMemoryCache
 from langchain_core.exceptions import OutputParserException
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    ChatMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_core.runnables import RunnableLambda
 from langchain_core.tools import Tool
 from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function
@@ -47,6 +54,7 @@ from tests.utils import (
     make_router,
     message_item,
     reasoning_item,
+    responses_api_events,
     responses_api_reply,
     serve_http,
     whole_reply,
@@ -784,6 +792,308 @@ async def test_a_split_reply_keeps_its_tool_calls(
         (call["name"], call["args"], call["id"]) for call in message.tool_calls
     ] == [("get_weather", {"city": "Paris"}, "call_1")]
     assert message.response_metadata["finish_reason"] == "tool_calls"
+    assert message.response_metadata["id"] == "resp_1"
+
+
+@pytest.mark.parametrize("method", ["invoke", "ainvoke"])
+@pytest.mark.asyncio
+async def test_use_previous_response_id_trims_history_and_reaches_responses_api(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    """The server continues from its reply, so only the new turn is sent."""
+    requests = serve_http(monkeypatch, responses_api_reply(message_item("Fine.")))
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_previous_response_id=True)
+    history = [
+        HumanMessage("Hello"),
+        AIMessage("Hi.", response_metadata={"id": "resp_previous"}),
+        HumanMessage("How are you?"),
+    ]
+
+    if method == "invoke":
+        message = llm.invoke(history)
+    else:
+        message = await llm.ainvoke(history)
+
+    payload = json.loads(requests[0].content)
+    assert requests[0].url.path.endswith("/responses")
+    assert payload["previous_response_id"] == "resp_previous"
+    assert payload["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "How are you?"}],
+        }
+    ]
+    assert message.response_metadata["id"] == "resp_1"
+
+
+@pytest.mark.parametrize("method", ["stream", "astream"])
+@pytest.mark.asyncio
+async def test_use_previous_response_id_streams_and_chains(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    """The Responses API bridge retains its id after either kind of stream."""
+    reply = responses_api_reply(message_item("Fine."))
+    requests = serve_http(
+        monkeypatch,
+        reply,
+        responses_api_events(
+            {
+                "type": "response.created",
+                "response": {**reply, "status": "in_progress", "output": []},
+            },
+            {
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "item_id": reply["output"][0]["id"],
+                "content_index": 0,
+                "delta": "Fine.",
+                "logprobs": [],
+            },
+            {"type": "response.completed", "response": reply},
+        ),
+    )
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_previous_response_id=True)
+    history = [
+        HumanMessage("Hello"),
+        AIMessage("Hi.", response_metadata={"id": "resp_previous"}),
+        HumanMessage("How are you?"),
+    ]
+
+    if method == "stream":
+        message = _merge(list(llm.stream(history)))
+    else:
+        message = _merge([chunk async for chunk in llm.astream(history)])
+
+    assert json.loads(requests[0].content)["previous_response_id"] == "resp_previous"
+    assert message.response_metadata["id"] == "resp_1"
+
+
+@pytest.mark.parametrize(
+    "system", [SystemMessage("Rules"), ChatMessage(role="system", content="Rules")]
+)
+def test_use_previous_response_id_keeps_string_system_instructions(system: Any) -> None:
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_previous_response_id=True)
+    messages, response_id = llm._messages_for_request(
+        [
+            system,
+            HumanMessage("Hello"),
+            AIMessage("Hi", response_metadata={"id": "resp_1"}),
+            HumanMessage("Again"),
+        ],
+        {},
+    )
+
+    assert messages == [system, HumanMessage("Again")]
+    assert response_id == "resp_1"
+
+
+def test_use_previous_response_id_does_not_retain_list_system_content() -> None:
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_previous_response_id=True)
+    history = [
+        SystemMessage([{"type": "text", "text": "Rules"}]),
+        HumanMessage("Hello"),
+        AIMessage("Hi", response_metadata={"id": "resp_1"}),
+        HumanMessage("Again"),
+    ]
+
+    messages, response_id = llm._messages_for_request(history, {})
+
+    assert messages == [HumanMessage("Again")]
+    assert response_id == "resp_1"
+
+
+@pytest.mark.parametrize("response_id", ["chatcmpl-1", "", None])
+def test_use_previous_response_id_skips_non_responses_ids(
+    response_id: str | None,
+) -> None:
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_previous_response_id=True)
+    history = [
+        HumanMessage("Old"),
+        AIMessage("Answer", response_metadata={"id": response_id}),
+        HumanMessage("New"),
+    ]
+
+    messages, chained_id = llm._messages_for_request(history, {})
+
+    assert messages == history
+    assert chained_id is None
+
+
+def test_use_previous_response_id_walks_back_past_chat_completion_id() -> None:
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_previous_response_id=True)
+    history = [
+        HumanMessage("Old"),
+        AIMessage("Stored", response_metadata={"id": "resp_1"}),
+        HumanMessage("Intervening"),
+        AIMessage("Unstored", response_metadata={"id": "chatcmpl-1"}),
+        HumanMessage("New"),
+    ]
+
+    messages, chained_id = llm._messages_for_request(history, {})
+
+    assert messages == history[2:]
+    assert chained_id == "resp_1"
+
+
+def test_explicit_previous_response_id_disables_history_trimming() -> None:
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_previous_response_id=True)
+    history = [
+        HumanMessage("Old"),
+        AIMessage("Stored", response_metadata={"id": "resp_history"}),
+        HumanMessage("New"),
+    ]
+
+    messages, chained_id = llm._messages_for_request(
+        history, {"previous_response_id": "resp_explicit"}
+    )
+
+    assert messages == history
+    assert chained_id is None
+
+
+def test_use_previous_response_id_flag_off_keeps_history() -> None:
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k")
+    history = [
+        HumanMessage("Old"),
+        AIMessage("Stored", response_metadata={"id": "resp_history"}),
+        HumanMessage("New"),
+    ]
+
+    messages, chained_id = llm._messages_for_request(history, {})
+
+    assert messages == history
+    assert chained_id is None
+
+
+@pytest.mark.parametrize("kind", ["model", "router"])
+@pytest.mark.parametrize(
+    "system", [SystemMessage("Rules"), ChatMessage(role="system", content="Rules")]
+)
+def test_use_previous_response_id_resends_system_instructions(
+    monkeypatch: pytest.MonkeyPatch, kind: str, system: Any
+) -> None:
+    requests = serve_http(monkeypatch, responses_api_reply(message_item("Fine.")))
+    if kind == "model":
+        llm = ChatLiteLLM(
+            model="gpt-4o-mini", api_key="k", use_previous_response_id=True
+        )
+    else:
+        llm = ChatLiteLLMRouter(
+            router=litellm.Router(
+                model_list=[
+                    {
+                        "model_name": "gpt-4o-mini",
+                        "litellm_params": {
+                            "model": "openai/responses/gpt-4o-mini",
+                            "api_key": "k",
+                        },
+                    }
+                ]
+            ),
+            use_previous_response_id=True,
+        )
+
+    llm.invoke(
+        [
+            system,
+            HumanMessage("Earlier"),
+            AIMessage("A", response_metadata={"id": "resp_previous"}),
+            HumanMessage("Now"),
+        ]
+    )
+
+    payload = json.loads(requests[0].content)
+    assert payload["instructions"] == "Rules"
+    assert payload["previous_response_id"] == "resp_previous"
+    assert [item["role"] for item in payload["input"]] == ["user"]
+
+
+def test_use_previous_response_id_rejects_per_call_flag() -> None:
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k")
+
+    with pytest.raises(
+        ValueError,
+        match="Set use_previous_response_id on the ChatLiteLLM model",
+    ):
+        llm.invoke("hi", use_previous_response_id=True)
+
+
+def test_use_previous_response_id_rejects_model_kwargs_flag() -> None:
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="k",
+        model_kwargs={"use_previous_response_id": True},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="not in model_kwargs",
+    ):
+        llm.invoke("hi")
+
+
+def test_use_previous_response_id_rejects_store_false() -> None:
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="k",
+        use_previous_response_id=True,
+        model_kwargs={"store": False},
+    )
+
+    with pytest.raises(ValueError, match="requires stored Responses API replies"):
+        llm.invoke("hi")
+
+
+def test_use_previous_response_id_rejects_fallbacks() -> None:
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="k",
+        use_previous_response_id=True,
+        model_kwargs={"fallbacks": [{"model": "openai/gpt-4o-mini"}]},
+    )
+
+    with pytest.raises(ValueError, match="cannot be used with fallbacks"):
+        llm.invoke(
+            [
+                HumanMessage("Earlier"),
+                AIMessage("A", response_metadata={"id": "resp_1"}),
+                HumanMessage("Next"),
+            ]
+        )
+
+
+@pytest.mark.parametrize("method", ["stream", "astream"])
+@pytest.mark.asyncio
+async def test_stream_keeps_a_responses_api_id(method: str) -> None:
+    """Only the final response id is retained when chunks are merged."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k")
+    chunks = [
+        {
+            "id": "resp_primary",
+            "choices": [{"delta": {"role": "assistant", "content": "Fine."}}],
+        },
+        {
+            "id": "resp_backup",
+            "choices": [{"delta": {"content": ""}, "finish_reason": "stop"}],
+        },
+    ]
+
+    if method == "stream":
+        with patch.object(llm.client, "completion", return_value=iter(chunks)):
+            message = _merge(list(llm.stream("hi")))
+    else:
+
+        async def _stream() -> Any:
+            for chunk in chunks:
+                yield chunk
+
+        with patch.object(
+            llm.client, "acompletion", new=AsyncMock(return_value=_stream())
+        ):
+            message = _merge([chunk async for chunk in llm.astream("hi")])
+
+    assert message.response_metadata["id"] == "resp_backup"
 
 
 def test_a_split_reply_keeps_every_text_part(monkeypatch: pytest.MonkeyPatch) -> None:

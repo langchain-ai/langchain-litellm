@@ -273,6 +273,118 @@ async def test_router_split_reply_keeps_its_tool_calls(
     assert [
         (call["name"], call["args"], call["id"]) for call in message.tool_calls
     ] == [("get_weather", {"city": "Paris"}, "call_1")]
+    assert message.response_metadata["id"] == "resp_1"
+
+
+@pytest.mark.parametrize("method", ["invoke", "ainvoke"])
+@pytest.mark.asyncio
+async def test_router_use_previous_response_id_trims_history(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    """Router requests keep only the turns after the latest Responses API reply."""
+    requests = serve_http(monkeypatch, responses_api_reply(message_item("Fine.")))
+    llm = ChatLiteLLMRouter(
+        router=_router_serving("openai/responses/gpt-4o-mini"),
+        use_previous_response_id=True,
+    )
+    history = [
+        HumanMessage("Hello"),
+        AIMessage("Hi.", response_metadata={"id": "resp_previous"}),
+        HumanMessage("How are you?"),
+    ]
+
+    if method == "invoke":
+        message = llm.invoke(history)
+    else:
+        message = await llm.ainvoke(history)
+
+    payload = json.loads(requests[0].content)
+    assert payload["previous_response_id"] == "resp_previous"
+    assert payload["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "How are you?"}],
+        }
+    ]
+    assert message.response_metadata["id"] == "resp_1"
+
+
+@pytest.mark.parametrize("method", ["stream", "astream"])
+@pytest.mark.asyncio
+async def test_router_use_previous_response_id_streams_and_chains(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    reply = responses_api_reply(message_item("Fine."))
+    requests = serve_http(
+        monkeypatch,
+        reply,
+        responses_api_events(
+            {
+                "type": "response.created",
+                "response": {**reply, "status": "in_progress", "output": []},
+            },
+            {
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "item_id": reply["output"][0]["id"],
+                "content_index": 0,
+                "delta": "Fine.",
+                "logprobs": [],
+            },
+            {"type": "response.completed", "response": reply},
+        ),
+    )
+    llm = ChatLiteLLMRouter(
+        router=_router_serving("openai/responses/gpt-4o-mini"),
+        use_previous_response_id=True,
+    )
+    history = [
+        HumanMessage("Hello"),
+        AIMessage("Hi.", response_metadata={"id": "resp_previous"}),
+        HumanMessage("How are you?"),
+    ]
+
+    if method == "stream":
+        message = _merge(list(llm.stream(history)))
+    else:
+        message = _merge([chunk async for chunk in llm.astream(history)])
+
+    assert json.loads(requests[0].content)["previous_response_id"] == "resp_previous"
+    assert message.response_metadata["id"] == "resp_1"
+
+
+def test_router_use_previous_response_id_refuses_different_stores() -> None:
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/responses/gpt-4o-mini",
+                    "api_key": "k",
+                    "api_base": "https://one.example/v1",
+                },
+            },
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/responses/gpt-4o-mini",
+                    "api_key": "k",
+                    "api_base": "https://two.example/v1",
+                },
+            },
+        ]
+    )
+    llm = ChatLiteLLMRouter(router=router, use_previous_response_id=True)
+
+    with pytest.raises(ValueError, match="share one Responses API store"):
+        llm.invoke(
+            [
+                HumanMessage("Earlier"),
+                AIMessage("A", response_metadata={"id": "resp_1"}),
+                HumanMessage("Next"),
+            ]
+        )
 
 
 def get_weather(city: str) -> str:
@@ -345,6 +457,7 @@ async def test_router_sends_built_in_tools_through_a_responses_deployment(
     assert [tool["type"] for tool in tools] == ["function", "web_search"]
     assert message.content == "Sunny."
     assert message.tool_calls == []
+    assert message.response_metadata["id"] == "resp_1"
 
 
 def test_router_n_above_one_keeps_each_completion(
