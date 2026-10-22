@@ -1633,7 +1633,7 @@ typing = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "langchain-core", specifier = ">=1.6.1" },
+    { name = "langchain-core", specifier = ">=1.6.1,<2.0.0" },
     { name = "litellm", extras = ["mcp"], specifier = ">=1.106.2,!=1.107.0" },
     { name = "pydantic", marker = "python_full_version < '3.14'", specifier = ">=2.11.0" },
     { name = "pydantic", marker = "python_full_version >= '3.14'", specifier = ">=2.12.0" },
