@@ -995,6 +995,19 @@ def _create_retry_decorator(
     )
 
 
+def _reasoning_summary(items: Any) -> str | None:
+    """Join original reasoning summaries without inventing separators, as streaming does."""
+    if not isinstance(items, list):
+        return None
+    texts = [
+        text
+        for item in items
+        for summary in _get_field(item, "summary") or []
+        if isinstance(text := _get_field(summary, "text"), str)
+    ]
+    return "".join(texts) if texts else None
+
+
 def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
     role = _dict["role"]
     if role == "user":
@@ -1072,8 +1085,11 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
                     # Prevent crash on malformed tool call
                     pass
 
-        if _dict.get("reasoning_content"):
-            additional_kwargs["reasoning_content"] = _dict["reasoning_content"]
+        reasoning_content = _reasoning_summary(
+            _dict.get("reasoning_items")
+        ) or _dict.get("reasoning_content")
+        if reasoning_content:
+            additional_kwargs["reasoning_content"] = reasoning_content
         # Kept only once marked with their issuer: see _keep_reasoning_items.
         if _dict.get("reasoning_items"):
             additional_kwargs["reasoning_items"] = list(_dict["reasoning_items"])

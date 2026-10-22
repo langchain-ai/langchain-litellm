@@ -105,6 +105,39 @@ def test_convert_dict_to_tool_message() -> None:
     assert message.tool_call_id == "123"
 
 
+@pytest.mark.parametrize(
+    ("summaries", "expected"),
+    [
+        (["Think A.", "Think B."], "Think A.Think B."),
+        (["Think A. ", " Think B."], "Think A.  Think B."),
+        (["", "Think B."], "Think B."),
+        ([], "SDK fallback"),
+    ],
+)
+def test_reasoning_summaries_preserve_provider_whitespace(
+    summaries: list[str], expected: str
+) -> None:
+    items = [
+        {
+            "type": "reasoning",
+            "id": "rs_1",
+            "encrypted_content": "sealed",
+            "summary": [{"type": "summary_text", "text": text} for text in summaries],
+        }
+    ]
+    message = _convert_dict_to_message(
+        {
+            "role": "assistant",
+            "content": "Reply",
+            "reasoning_content": "SDK fallback",
+            "reasoning_items": items,
+        }
+    )
+
+    assert message.additional_kwargs["reasoning_content"] == expected
+    assert message.additional_kwargs["reasoning_items"] == items
+
+
 def test_malformed_tool_call_arguments_are_reported_as_invalid() -> None:
     """Unparsable arguments must not become a tool call with empty args.
 
