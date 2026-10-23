@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.2](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.11.1...langchain-litellm==0.11.2) (2026-10-23)
+
+
+### Bug Fixes
+
+* **deps:** relax third-party bounds and harden LiteLLM ([#378](https://github.com/langchain-ai/langchain-litellm/issues/378)) ([5f99fc6](https://github.com/langchain-ai/langchain-litellm/commit/5f99fc6d33ca43c2fa099e4d0c8ed952f20b426f))
+
 ## [0.11.1](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.11.0...langchain-litellm==0.11.1) (2026-10-14)
 
 
