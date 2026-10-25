@@ -29,7 +29,8 @@ classifiers = [
 ]
 dependencies = [
     "langchain-core>=1.6.1,<2.0.0",
-    # 1.101.0 is the first litellm that puts a streamed reply's cost on the stream.
+    # 1.107.0 is malware (litellm incident, 2026-10-21); the incident report says to pin
+    # 1.106.2, which imports `mcp` on every Responses API call and any call with tools.
     "litellm[mcp]>=1.106.2,!=1.107.0",
     "httpx>=0.28.1",
     # litellm 1.101.0 through 1.102.2 fail to import on pydantic 2.10, and 2.12.0 is
