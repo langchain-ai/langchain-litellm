@@ -13,8 +13,6 @@ updates:
       - dependency-name: "langchain-text-splitters"
       - dependency-name: "langchain-tests"
       - dependency-name: "langchain-model-profiles"
-      # litellm currently requires filelock<4.0, so filelock 4.x updates are unsatisfiable.
-      - dependency-name: "filelock"
     groups:
       # All routine version bumps batched into one PR per week
       python-deps:
