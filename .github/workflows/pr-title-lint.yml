@@ -58,7 +58,6 @@ jobs:
           fi
 
       - name: "Validate Conventional Commits format"
-        if: ${{ !startsWith(github.event.pull_request.title, 'Dependabot:') }}
         uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
