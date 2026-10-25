@@ -131,6 +131,10 @@ def _get_field(source: Any, name: str) -> Any:
 # Hosts that serve Claude through litellm's Anthropic message format. An
 # `anthropic/` route always does, including Anthropic-compatible endpoints like Kimi's.
 _CLAUDE_HOSTS = frozenset({"bedrock", "vertex_ai", "azure_ai"})
+# Anthropic's own platforms, whose signatures hold on each other and across models.
+_FIRST_PARTY = frozenset({"anthropic", "bedrock", "vertex_ai"})
+# The one name every first-party route shares.
+_FIRST_PARTY_FAMILY = "anthropic|first-party"
 # Where a stored thinking block records the endpoint that signed it.
 _ORIGIN = "origin"
 # Where it records the history it followed, which a replay must send unchanged.
@@ -234,6 +238,8 @@ def _endpoint_name(
     custom_llm_provider: str | None,
     api_base: str | None,
     base_model: str | None = None,
+    *,
+    legacy: bool = False,
 ) -> str | None:
     """Name where a request's replayed thinking signatures would be checked, if at all.
 
@@ -241,9 +247,13 @@ def _endpoint_name(
     ``thinking_blocks`` entry and checks its signature, and a signature holds only
     where it was issued: Kimi's are not Anthropic's, and one gateway URL can serve
     several models. So the name joins the provider, the base litellm sends to and
-    the model. Anything this cannot place is None, which leaves the request as it
-    was. The provider comes from the model prefix, not ``litellm.get_llm_provider``,
-    which authenticates some providers while it resolves them.
+    the model. Anthropic's own platforms are the exception: the Claude API, Bedrock
+    and Vertex accept each other's signatures, for any model, and drop a block a
+    model can't read, so they share one name. Anything this cannot place is None,
+    which leaves the request as it was. The provider comes from the model prefix,
+    not ``litellm.get_llm_provider``, which authenticates some providers while it
+    resolves them. ``legacy`` gives the name blocks were stored with before that
+    exception, which they keep.
     """
     provider = custom_llm_provider or ""
     # litellm routes a bare model to Anthropic whatever the case of "claude".
@@ -266,7 +276,28 @@ def _endpoint_name(
             or os.environ.get("ANTHROPIC_BASE_URL")
         )
     where = _server(base)
-    return None if where is None else f"{provider}|{where}|{name}"
+    if where is None:
+        return None
+    # Blocks stored before https://github.com/langchain-ai/langchain-litellm/pull/364
+    # carry the per-route name, which ``legacy`` keeps matching.
+    if not legacy and provider in _FIRST_PARTY and _first_party_server(provider, where):
+        return _FIRST_PARTY_FAMILY
+    return f"{provider}|{where}|{name}"
+
+
+def _first_party_server(provider: str, where: str) -> bool:
+    """Whether a request goes to Anthropic's own platform for ``provider``.
+
+    A Bedrock or Vertex request with a base of its own may reach a proxy, so only the
+    default counts there.
+    """
+    if not where:
+        return True
+    url = urlsplit(where)
+    return provider == "anthropic" and (url.scheme, url.netloc) == (
+        "https",
+        "api.anthropic.com",
+    )
 
 
 def _server(base: str | None) -> str | None:
@@ -288,12 +319,16 @@ def _signing_endpoint(
     custom_llm_provider: str | None,
     api_base: str | None,
     base_model: str | None = None,
+    *,
+    legacy: bool = False,
 ) -> str | None:
     """A digest of ``_endpoint_name``, so a stored block never carries an api_base.
 
     Saved histories keep it, so changing what goes into the name strands their blocks.
     """
-    name = _endpoint_name(model, custom_llm_provider, api_base, base_model)
+    name = _endpoint_name(
+        model, custom_llm_provider, api_base, base_model, legacy=legacy
+    )
     return None if name is None else hashlib.sha256(name.encode()).hexdigest()[:16]
 
 
@@ -622,13 +657,16 @@ def _with_blocks(
 
 
 def _replayable_blocks(
-    message: AIMessage, message_dict: Mapping[str, Any], endpoint: str, prefix: str
+    message: AIMessage,
+    message_dict: Mapping[str, Any],
+    origins: frozenset[str],
+    prefix: str,
 ) -> list[dict[str, Any]]:
     """The blocks ``message`` may carry back after the history digested as ``prefix``."""
     stored = message.additional_kwargs.get("thinking_blocks")
     if not isinstance(stored, list) or not stored:
         return []
-    if any(_get_field(block, _ORIGIN) != endpoint for block in stored):
+    if any(_get_field(block, _ORIGIN) not in origins for block in stored):
         logger.debug(
             "Not replaying a turn's thinking blocks: another endpoint signed them."
         )
@@ -657,7 +695,7 @@ def _replayable_blocks(
 def _replayable_turns(
     messages: Sequence[BaseMessage],
     message_dicts: list[dict[str, Any]],
-    endpoint: str,
+    origins: frozenset[str],
     params: Mapping[str, Any],
 ) -> dict[int, list[dict[str, Any]]]:
     """The blocks each turn may carry back, by index.
@@ -677,7 +715,7 @@ def _replayable_turns(
         message_dict = message_dicts[index]
         if isinstance(message, AIMessage):
             blocks = _replayable_blocks(
-                message, message_dict, endpoint, history.digest()
+                message, message_dict, origins, history.digest()
             )
             if blocks:
                 replayable[index] = blocks
@@ -695,12 +733,15 @@ def _attach_thinking_blocks(
     message_dicts: list[dict[str, Any]],
     endpoint: str | None,
     params: Mapping[str, Any],
+    *,
+    legacy: str | None = None,
 ) -> tuple[str, str] | None:
     """Put back each turn's thinking blocks where Anthropic will accept them, and say
     what the reply's own blocks must be stored with.
 
     A turn's blocks go back only when ``endpoint``, the one endpoint this request
-    reaches, signed them after exactly the history that precedes the turn now. Such
+    reaches, signed them after exactly the history that precedes the turn now; a
+    block stored under the ``legacy`` name of that endpoint counts too. Such
     turns replace their entries in ``message_dicts``. The return value is the
     endpoint and the digest of this request as sent, or None when there is no
     single endpoint or the history cannot be digested.
@@ -719,7 +760,8 @@ def _attach_thinking_blocks(
         if holds_blocks and len(messages) != len(message_dicts):
             logger.warning("Not replaying thinking blocks: messages and dicts differ.")
         elif holds_blocks:
-            replayable = _replayable_turns(messages, message_dicts, endpoint, params)
+            origins = frozenset(o for o in (endpoint, legacy) if o is not None)
+            replayable = _replayable_turns(messages, message_dicts, origins, params)
         sent = [
             _with_blocks(message_dict, replayable[index])
             if index in replayable
@@ -953,6 +995,19 @@ def _create_retry_decorator(
     )
 
 
+def _reasoning_summary(items: Any) -> str | None:
+    """Join original reasoning summaries without inventing separators, as streaming does."""
+    if not isinstance(items, list):
+        return None
+    texts = [
+        text
+        for item in items
+        for summary in _get_field(item, "summary") or []
+        if isinstance(text := _get_field(summary, "text"), str)
+    ]
+    return "".join(texts) if texts else None
+
+
 def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
     role = _dict["role"]
     if role == "user":
@@ -1030,8 +1085,11 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
                     # Prevent crash on malformed tool call
                     pass
 
-        if _dict.get("reasoning_content"):
-            additional_kwargs["reasoning_content"] = _dict["reasoning_content"]
+        reasoning_content = _reasoning_summary(
+            _dict.get("reasoning_items")
+        ) or _dict.get("reasoning_content")
+        if reasoning_content:
+            additional_kwargs["reasoning_content"] = reasoning_content
         # Kept only once marked with their issuer: see _keep_reasoning_items.
         if _dict.get("reasoning_items"):
             additional_kwargs["reasoning_items"] = list(_dict["reasoning_items"])
@@ -1637,7 +1695,9 @@ class ChatLiteLLM(BaseChatModel):
             )
         return merged
 
-    def _thinking_endpoint(self, params: dict[str, Any]) -> str | None:
+    def _thinking_endpoint(
+        self, params: dict[str, Any], *, legacy: bool = False
+    ) -> str | None:
         """The one endpoint this request reaches, when it checks replayed thinking.
 
         ``params`` must be the merged per-call params, since a call may redirect.
@@ -1650,6 +1710,7 @@ class ChatLiteLLM(BaseChatModel):
                 # litellm sends to base_url over api_base when a caller sets both.
                 params.get("base_url") or params.get("api_base"),
                 params.get("base_model"),
+                legacy=legacy,
             ),
         )
 
@@ -1693,7 +1754,12 @@ class ChatLiteLLM(BaseChatModel):
         """Replay what this request may carry back; say how to store its reply's."""
         endpoint = self._thinking_endpoint(params)
         sent_with = params if endpoint is None else self._replay_params(params)
-        return _attach_thinking_blocks(messages, message_dicts, endpoint, sent_with)
+        legacy = (
+            None if endpoint is None else self._thinking_endpoint(params, legacy=True)
+        )
+        return _attach_thinking_blocks(
+            messages, message_dicts, endpoint, sent_with, legacy=legacy
+        )
 
     @property
     def _client_params(self) -> dict[str, Any]:

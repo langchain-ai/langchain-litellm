@@ -1,6 +1,7 @@
 """LiteLLM Router chat model integration for LangChain."""
 
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from functools import partial
 from typing import Any
 
 import litellm
@@ -122,9 +123,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
     The deployment the Router picks decides which API a call reaches. OpenAI's
     built-in tools, such as ``{"type": "web_search"}``, need its Responses API, so
     name the deployment's model ``<provider>/responses/<model>``. A reply's
-    reasoning item goes back on later turns only when the group's deployments share
-    one model, endpoint and set of credentials and no fallback is set, since an item
-    decrypts only where it was issued.
+    reasoning item goes back on later turns only when the group's deployments, and
+    those of every group the Router's own fallbacks name, share one model, endpoint
+    and set of credentials, since an item decrypts only where it was issued.
 
     ``use_responses_api=True`` renames nothing here, since the Router picks the
     deployment on each call. It checks instead: the call goes out unchanged when
@@ -214,8 +215,12 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             for entry in matched
         )
 
-    def _thinking_endpoint(self, params: dict[str, Any]) -> str | None:
-        return self._group_endpoint(params, super()._thinking_endpoint)
+    def _thinking_endpoint(
+        self, params: dict[str, Any], *, legacy: bool = False
+    ) -> str | None:
+        return self._group_endpoint(
+            params, partial(super()._thinking_endpoint, legacy=legacy)
+        )
 
     def _reasoning_endpoint(self, params: dict[str, Any]) -> str | None:
         return self._group_endpoint(params, super()._reasoning_endpoint)
@@ -231,9 +236,14 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         layers it: the call's keys over the router's defaults over the deployment's
         own.
         """
-        if self._unknown_reach(params) is not None:
+        groups = self._reachable_groups(params)
+        if groups is None:
             return None
-        deployments = self._deployments(params)
+        deployments = [
+            deployment
+            for group in groups
+            for deployment in self._deployments({**params, "model": group})
+        ]
         endpoints = set()
         for deployment in deployments:
             endpoints.add(resolve(deployment))
@@ -242,19 +252,60 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             return None
         return endpoints.pop()
 
-    def _unknown_reach(self, params: Mapping[str, Any]) -> str | None:
+    def _reachable_groups(self, params: Mapping[str, Any]) -> list[str] | None:
+        """The called group and every group the Router's own fallbacks name, or None
+        when the call may reach a deployment none of them lists.
+
+        Every chain counts, whatever group it is keyed by: that covers the generic
+        ``"*"`` chain, litellm's looser key matching and a fallback's own fallbacks
+        without copying litellm's lookup. Checking more groups than the Router would
+        try can only turn replay off.
+        """
+        called = params.get("model")
+        if not isinstance(called, str):
+            return None
+        targets: list[str] = []
+        for key in _FALLBACK_SETTINGS:
+            entries = getattr(self.router, key, None) or []
+            if not isinstance(entries, list):
+                return None
+            for entry in entries:
+                if not isinstance(entry, Mapping):
+                    return None
+                for chain in entry.values():
+                    # A target that overrides params is a call of its own.
+                    if not isinstance(chain, list) or not all(
+                        isinstance(target, str) for target in chain
+                    ):
+                        return None
+                    targets.extend(chain)
+        groups = list(dict.fromkeys([called, *targets]))
+        for group in groups:
+            reached = {**params, "model": group}
+            if self._unknown_reach(reached, router_fallbacks_followed=True) is not None:
+                return None
+            # A group served only by a wildcard has no deployments to check.
+            if not self._deployments(reached):
+                return None
+        return groups
+
+    def _unknown_reach(
+        self, params: Mapping[str, Any], *, router_fallbacks_followed: bool = False
+    ) -> str | None:
         """Why this call may reach deployments other than its group's own, or None.
 
         The Router re-sends the same messages to any fallback: its own, the call's,
         and those its defaults or a deployment hand to litellm, which a call cannot
         clear. An alias or a deployment id of the group's name points it elsewhere,
-        as does a specific deployment, and a team caller gets the team's own.
+        as does a specific deployment, and a team caller gets the team's own. With
+        ``router_fallbacks_followed``, the caller has added the groups the Router's
+        own fallbacks name, so those alone do not count.
         """
         group = params.get("model")
         router = self.router
         defaults = getattr(router, "default_litellm_params", None) or {}
         for key in _FALLBACK_SETTINGS:
-            if getattr(router, key, None):
+            if getattr(router, key, None) and not router_fallbacks_followed:
                 return f"the Router sets {key}"
             if defaults.get(key):
                 return f"the Router's default_litellm_params set {key}"
