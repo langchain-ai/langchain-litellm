@@ -1053,33 +1053,63 @@ def test_client_params_forwards_api_key() -> None:
 # ── stream_options ─────────────────────────────────────────────────────────────
 
 
-def test_stream_options_set_for_non_openai_model() -> None:
-    """stream_options must be set for non-OpenAI providers too."""
-    llm = ChatLiteLLM(model="anthropic/claude-3-5-sonnet-20241022", api_key="fake")
-    _, params = llm._create_message_dicts([], None)
-    # Simulate what _stream does
-    params = {**params, "stream": True}
-    if llm.stream_options is not None:
-        params["stream_options"] = llm.stream_options
-    else:
-        params["stream_options"] = {"include_usage": True}
-    assert params.get("stream_options") == {"include_usage": True}
+_STREAM_OPTIONS = {"include_usage": True, "include_obfuscation": False}
 
 
-def test_stream_options_respected_when_set_explicitly() -> None:
-    """User-provided stream_options must not be overwritten."""
-    custom = {"include_usage": False}
-    llm = ChatLiteLLM(
-        model="anthropic/claude-3-5-sonnet-20241022",
-        api_key="fake",
-        stream_options=custom,
-    )
-    params = {}
-    if llm.stream_options is not None:
-        params["stream_options"] = llm.stream_options
-    else:
-        params["stream_options"] = {"include_usage": True}
-    assert params["stream_options"] == custom
+async def _no_chunks() -> Any:
+    return
+    yield
+
+
+@pytest.mark.parametrize("method", ["stream", "astream"])
+@pytest.mark.parametrize(
+    ("constructor", "call", "sent"),
+    [
+        ({}, {}, {"include_usage": True}),
+        ({"stream_options": _STREAM_OPTIONS}, {}, _STREAM_OPTIONS),
+        ({"model_kwargs": {"stream_options": _STREAM_OPTIONS}}, {}, _STREAM_OPTIONS),
+        ({}, {"stream_options": _STREAM_OPTIONS}, _STREAM_OPTIONS),
+        (
+            {
+                "stream_options": {"include_usage": True},
+                "model_kwargs": {"stream_options": _STREAM_OPTIONS},
+            },
+            {},
+            _STREAM_OPTIONS,
+        ),
+        (
+            {"model_kwargs": {"stream_options": {"include_usage": True}}},
+            {"stream_options": _STREAM_OPTIONS},
+            _STREAM_OPTIONS,
+        ),
+    ],
+    ids=[
+        "default",
+        "field",
+        "model_kwargs",
+        "per-call",
+        "model_kwargs-over-field",
+        "per-call-over-model_kwargs",
+    ],
+)
+async def test_stream_options_sent_from_each_source(
+    method: str, constructor: dict[str, Any], call: dict[str, Any], sent: Any
+) -> None:
+    """The default fills only a gap, so no source the caller used is overwritten."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", **constructor)
+
+    with pytest.raises(ValueError, match="No generation chunks"):
+        if method == "stream":
+            with patch("litellm.completion", return_value=iter([])) as completion:
+                list(llm.stream("hi", **call))
+        else:
+            with patch(
+                "litellm.acompletion", AsyncMock(return_value=_no_chunks())
+            ) as completion:
+                async for _ in llm.astream("hi", **call):
+                    pass
+
+    assert completion.call_args.kwargs["stream_options"] == sent
 
 
 # ── tool_choice mapping with thinking enabled ──────────────────────────────────
@@ -2946,80 +2976,3 @@ def test_a_per_call_base_url_overrides_the_constructor_api_base(
     llm.invoke("hi", base_url="https://call.example/v1")
 
     assert requests[-1].url.host == "call.example"
-
-
-def _streamed_stream_options(llm: ChatLiteLLM, **call_kwargs: Any) -> Any:
-    """The `stream_options` actually handed to `litellm.completion`."""
-    with patch("litellm.completion", return_value=iter([])) as completion:
-        try:
-            list(llm.stream("hi", **call_kwargs))
-        except Exception:  # noqa: BLE001, S110
-            # The mock streams nothing; only the outgoing kwargs matter here.
-            pass
-    return completion.call_args.kwargs.get("stream_options")
-
-
-def test_stream_options_from_model_kwargs_is_not_overwritten() -> None:
-    """`model_kwargs` already lands in `params`, so the default must not win.
-
-    The guard checked only the per-call `kwargs`, so a `stream_options` passed
-    through `model_kwargs` was silently replaced by `{"include_usage": True}`.
-    """
-    llm = ChatLiteLLM(
-        model="gpt-4o-mini",
-        model_kwargs={"stream_options": {"include_usage": False}},
-    )
-
-    assert _streamed_stream_options(llm) == {"include_usage": False}
-
-
-def test_stream_options_sources_and_precedence() -> None:
-    """Every documented source is honored, and `model_kwargs` wins."""
-    # The field.
-    assert _streamed_stream_options(
-        ChatLiteLLM(model="gpt-4o-mini", stream_options={"include_usage": False})
-    ) == {"include_usage": False}
-
-    # A per-call keyword.
-    assert _streamed_stream_options(
-        ChatLiteLLM(model="gpt-4o-mini"), stream_options={"include_usage": False}
-    ) == {"include_usage": False}
-
-    # Neither: the default still applies.
-    assert _streamed_stream_options(ChatLiteLLM(model="gpt-4o-mini")) == {
-        "include_usage": True
-    }
-
-    # `model_kwargs` is merged last into `_default_params`, so it takes
-    # precedence over the field.
-    assert _streamed_stream_options(
-        ChatLiteLLM(
-            model="gpt-4o-mini",
-            stream_options={"include_usage": True},
-            model_kwargs={"stream_options": {"include_usage": False}},
-        )
-    ) == {"include_usage": False}
-
-
-async def test_astream_stream_options_from_model_kwargs() -> None:
-    """The async path carries the same guard."""
-    llm = ChatLiteLLM(
-        model="gpt-4o-mini",
-        model_kwargs={"stream_options": {"include_usage": False}},
-    )
-
-    async def _empty(*_args: Any, **_kwargs: Any) -> Any:
-        async def _gen() -> Any:
-            if False:  # pragma: no cover - never yields
-                yield None
-
-        return _gen()
-
-    with patch("litellm.acompletion", side_effect=_empty) as completion:
-        try:
-            async for _ in llm.astream("hi"):
-                pass
-        except Exception:  # noqa: BLE001, S110
-            pass
-
-    assert completion.call_args.kwargs.get("stream_options") == {"include_usage": False}

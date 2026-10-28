@@ -1435,9 +1435,13 @@ class ChatLiteLLM(BaseChatModel):
 
     client: Any = None  #: :meta private:
     model: str = "gpt-3.5-turbo"
+    """Model name to use."""
     model_name: str | None = None
     stream_options: dict[str, Any] | None = None
-    """Model name to use."""
+    """``stream_options`` sent when streaming, ``{"include_usage": True}`` if unset.
+
+    A per-call ``stream_options`` wins over ``model_kwargs``, which wins over this.
+    """
     openai_api_key: str | None = Field(default=None, repr=False)
     azure_api_key: str | None = Field(default=None, repr=False)
     anthropic_api_key: str | None = Field(default=None, repr=False)
@@ -1950,9 +1954,8 @@ class ChatLiteLLM(BaseChatModel):
     ) -> Iterator[ChatGenerationChunk]:
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**self._merge_call_params(params, kwargs), "stream": True}
-        # `params` already carries `model_kwargs`, so checking only `kwargs`
-        # would overwrite a `stream_options` supplied there with the default.
-        if "stream_options" not in kwargs and "stream_options" not in params:
+        # `params` already holds the call kwargs and `model_kwargs`; either one wins.
+        if "stream_options" not in params:
             params["stream_options"] = (
                 self.stream_options
                 if self.stream_options is not None
@@ -2045,9 +2048,8 @@ class ChatLiteLLM(BaseChatModel):
     ) -> AsyncIterator[ChatGenerationChunk]:
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**self._merge_call_params(params, kwargs), "stream": True}
-        # `params` already carries `model_kwargs`, so checking only `kwargs`
-        # would overwrite a `stream_options` supplied there with the default.
-        if "stream_options" not in kwargs and "stream_options" not in params:
+        # `params` already holds the call kwargs and `model_kwargs`; either one wins.
+        if "stream_options" not in params:
             params["stream_options"] = (
                 self.stream_options
                 if self.stream_options is not None

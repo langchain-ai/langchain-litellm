@@ -395,6 +395,33 @@ async def test_router_astream_honours_a_per_call_stream_options() -> None:
 
 @pytest.mark.parametrize("method", ["stream", "astream"])
 @pytest.mark.asyncio
+async def test_router_stream_keeps_stream_options_from_model_kwargs(
+    method: str,
+) -> None:
+    """`model_kwargs` is caller configuration too, so the default must not replace it."""
+    seen: list[dict[str, Any]] = []
+    llm = ChatLiteLLMRouter(
+        router=make_router(),
+        model_kwargs={"stream_options": {"include_usage": False}},
+    )
+
+    if method == "stream":
+        with patch.object(
+            llm.router, "completion", side_effect=_completion_double(seen)
+        ):
+            list(llm.stream("hi"))
+    else:
+        with patch.object(
+            llm.router, "acompletion", side_effect=_acompletion_double(seen)
+        ):
+            async for _ in llm.astream("hi"):
+                pass
+
+    assert seen[0]["stream_options"] == {"include_usage": False}
+
+
+@pytest.mark.parametrize("method", ["stream", "astream"])
+@pytest.mark.asyncio
 async def test_router_per_call_stream_options_none_matches_the_base_class(
     method: str,
 ) -> None:
