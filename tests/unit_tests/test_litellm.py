@@ -20,7 +20,14 @@ import pytest
 from langchain.chat_models import init_chat_model
 from langchain_core.caches import InMemoryCache
 from langchain_core.exceptions import OutputParserException
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    ChatMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_core.runnables import RunnableLambda
 from langchain_core.tools import Tool
 from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function
@@ -47,6 +54,7 @@ from tests.utils import (
     make_router,
     message_item,
     reasoning_item,
+    responses_api_events,
     responses_api_reply,
     serve_http,
     whole_reply,
@@ -817,6 +825,378 @@ async def test_a_split_reply_keeps_its_tool_calls(
         (call["name"], call["args"], call["id"]) for call in message.tool_calls
     ] == [("get_weather", {"city": "Paris"}, "call_1")]
     assert message.response_metadata["finish_reason"] == "tool_calls"
+    assert message.response_metadata["id"] == "resp_1"
+
+
+@pytest.mark.parametrize("method", ["invoke", "ainvoke"])
+@pytest.mark.asyncio
+async def test_use_previous_response_id_trims_history_and_reaches_responses_api(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    """The server continues from its reply, so only the new turn is sent."""
+    requests = serve_http(monkeypatch, responses_api_reply(message_item("Fine.")))
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_previous_response_id=True)
+    history = [
+        HumanMessage("Hello"),
+        AIMessage("Hi.", response_metadata={"id": "resp_previous"}),
+        HumanMessage("How are you?"),
+    ]
+
+    if method == "invoke":
+        message = llm.invoke(history)
+    else:
+        message = await llm.ainvoke(history)
+
+    payload = json.loads(requests[0].content)
+    assert requests[0].url.path.endswith("/responses")
+    assert payload["previous_response_id"] == "resp_previous"
+    assert payload["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "How are you?"}],
+        }
+    ]
+    assert message.response_metadata["id"] == "resp_1"
+
+
+@pytest.mark.parametrize("method", ["stream", "astream"])
+@pytest.mark.asyncio
+async def test_use_previous_response_id_streams_and_chains(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    """The Responses API bridge retains its id after either kind of stream."""
+    reply = responses_api_reply(message_item("Fine."))
+    requests = serve_http(
+        monkeypatch,
+        reply,
+        responses_api_events(
+            {
+                "type": "response.created",
+                "response": {**reply, "status": "in_progress", "output": []},
+            },
+            {
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "item_id": reply["output"][0]["id"],
+                "content_index": 0,
+                "delta": "Fine.",
+                "logprobs": [],
+            },
+            {"type": "response.completed", "response": reply},
+        ),
+    )
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_previous_response_id=True)
+    history = [
+        HumanMessage("Hello"),
+        AIMessage("Hi.", response_metadata={"id": "resp_previous"}),
+        HumanMessage("How are you?"),
+    ]
+
+    if method == "stream":
+        message = _merge(list(llm.stream(history)))
+    else:
+        message = _merge([chunk async for chunk in llm.astream(history)])
+
+    assert json.loads(requests[0].content)["previous_response_id"] == "resp_previous"
+    assert message.response_metadata["id"] == "resp_1"
+
+
+@pytest.mark.parametrize(
+    "system", [SystemMessage("Rules"), ChatMessage(role="system", content="Rules")]
+)
+def test_use_previous_response_id_keeps_string_system_instructions(system: Any) -> None:
+    """A string system message stays, since the server never carries instructions over."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_previous_response_id=True)
+    messages, response_id = llm._messages_for_request(
+        [
+            system,
+            HumanMessage("Hello"),
+            AIMessage("Hi", response_metadata={"id": "resp_1"}),
+            HumanMessage("Again"),
+        ],
+        {},
+    )
+
+    assert messages == [system, HumanMessage("Again")]
+    assert response_id == "resp_1"
+
+
+def test_use_previous_response_id_does_not_retain_list_system_content() -> None:
+    """List content went as a stored input item, so the trim drops it."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_previous_response_id=True)
+    history = [
+        SystemMessage([{"type": "text", "text": "Rules"}]),
+        HumanMessage("Hello"),
+        AIMessage("Hi", response_metadata={"id": "resp_1"}),
+        HumanMessage("Again"),
+    ]
+
+    messages, response_id = llm._messages_for_request(history, {})
+
+    assert messages == [HumanMessage("Again")]
+    assert response_id == "resp_1"
+
+
+@pytest.mark.parametrize("response_id", ["chatcmpl-1", "", None])
+def test_use_previous_response_id_skips_non_responses_ids(
+    response_id: str | None,
+) -> None:
+    """Only a ``resp_`` id chains; any other id sends the full history."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_previous_response_id=True)
+    history = [
+        HumanMessage("Old"),
+        AIMessage("Answer", response_metadata={"id": response_id}),
+        HumanMessage("New"),
+    ]
+
+    messages, chained_id = llm._messages_for_request(history, {})
+
+    assert messages == history
+    assert chained_id is None
+
+
+def test_use_previous_response_id_walks_back_past_chat_completion_id() -> None:
+    """A later non-Responses reply goes out with the turns after the stored one."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_previous_response_id=True)
+    history = [
+        HumanMessage("Old"),
+        AIMessage("Stored", response_metadata={"id": "resp_1"}),
+        HumanMessage("Intervening"),
+        AIMessage("Unstored", response_metadata={"id": "chatcmpl-1"}),
+        HumanMessage("New"),
+    ]
+
+    messages, chained_id = llm._messages_for_request(history, {})
+
+    assert messages == history[2:]
+    assert chained_id == "resp_1"
+
+
+def test_explicit_previous_response_id_disables_history_trimming() -> None:
+    """A caller's own previous_response_id leaves the history as given."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_previous_response_id=True)
+    history = [
+        HumanMessage("Old"),
+        AIMessage("Stored", response_metadata={"id": "resp_history"}),
+        HumanMessage("New"),
+    ]
+
+    messages, chained_id = llm._messages_for_request(
+        history, {"previous_response_id": "resp_explicit"}
+    )
+
+    assert messages == history
+    assert chained_id is None
+
+
+def test_use_previous_response_id_flag_off_keeps_history() -> None:
+    """Without the flag, a history holding a stored id goes out whole."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k")
+    history = [
+        HumanMessage("Old"),
+        AIMessage("Stored", response_metadata={"id": "resp_history"}),
+        HumanMessage("New"),
+    ]
+
+    messages, chained_id = llm._messages_for_request(history, {})
+
+    assert messages == history
+    assert chained_id is None
+
+
+@pytest.mark.parametrize("kind", ["model", "router"])
+@pytest.mark.parametrize(
+    "system", [SystemMessage("Rules"), ChatMessage(role="system", content="Rules")]
+)
+def test_use_previous_response_id_resends_system_instructions(
+    monkeypatch: pytest.MonkeyPatch, kind: str, system: Any
+) -> None:
+    """The chained request carries the system message as instructions."""
+    requests = serve_http(monkeypatch, responses_api_reply(message_item("Fine.")))
+    if kind == "model":
+        llm = ChatLiteLLM(
+            model="gpt-4o-mini", api_key="k", use_previous_response_id=True
+        )
+    else:
+        llm = ChatLiteLLMRouter(
+            router=litellm.Router(
+                model_list=[
+                    {
+                        "model_name": "gpt-4o-mini",
+                        "litellm_params": {
+                            "model": "openai/responses/gpt-4o-mini",
+                            "api_key": "k",
+                        },
+                    }
+                ]
+            ),
+            use_previous_response_id=True,
+        )
+
+    llm.invoke(
+        [
+            system,
+            HumanMessage("Earlier"),
+            AIMessage("A", response_metadata={"id": "resp_previous"}),
+            HumanMessage("Now"),
+        ]
+    )
+
+    payload = json.loads(requests[0].content)
+    assert payload["instructions"] == "Rules"
+    assert payload["previous_response_id"] == "resp_previous"
+    assert [item["role"] for item in payload["input"]] == ["user"]
+
+
+def test_use_previous_response_id_rejects_per_call_flag() -> None:
+    """The flag is a model field, so a per-call value is refused."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k")
+
+    with pytest.raises(ValueError) as exc_info:
+        llm.invoke("hi", use_previous_response_id=True)
+
+    assert str(exc_info.value) == (
+        "Set use_previous_response_id on the ChatLiteLLM model, not in bind() or "
+        "per-call arguments."
+    )
+
+
+def test_use_previous_response_id_rejects_model_kwargs_flag() -> None:
+    """The flag in model_kwargs is refused rather than sent to the provider."""
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="k",
+        model_kwargs={"use_previous_response_id": True},
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        llm.invoke("hi")
+
+    assert str(exc_info.value) == (
+        "Set use_previous_response_id on the ChatLiteLLM model, not in model_kwargs."
+    )
+
+
+def test_use_previous_response_id_rejects_store_false() -> None:
+    """Chaining needs stored replies, so store=False is refused."""
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="k",
+        use_previous_response_id=True,
+        model_kwargs={"store": False},
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        llm.invoke("hi")
+
+    assert str(exc_info.value) == (
+        "use_previous_response_id=True requires stored Responses API replies, but "
+        "store=False was configured in store or extra_body. Remove store=False or "
+        "disable use_previous_response_id."
+    )
+
+
+def test_use_previous_response_id_rejects_extra_body_store_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stateless extra_body setting cannot support server-side chaining."""
+    requests = serve_http(monkeypatch, responses_api_reply(message_item("ok")))
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="k",
+        use_previous_response_id=True,
+        model_kwargs={"extra_body": {"store": False}},
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        llm.invoke("hi")
+
+    assert str(exc_info.value) == (
+        "use_previous_response_id=True requires stored Responses API replies, but "
+        "store=False was configured in store or extra_body. Remove store=False or "
+        "disable use_previous_response_id."
+    )
+    assert requests == []
+
+
+def test_use_previous_response_id_rejects_fallbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Model fallbacks are rejected before the first turn is sent."""
+    requests = serve_http(monkeypatch, responses_api_reply(message_item("ok")))
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="k",
+        use_previous_response_id=True,
+        model_kwargs={"fallbacks": [{"model": "openai/gpt-4o-mini"}]},
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        llm.invoke("first turn")
+
+    assert str(exc_info.value) == (
+        "use_previous_response_id=True cannot be used because fallbacks is "
+        "configured; remove that fallback setting or disable "
+        "use_previous_response_id."
+    )
+    assert requests == []
+
+
+def test_use_previous_response_id_rejects_global_fallbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LiteLLM-wide fallbacks are rejected before the first turn is sent."""
+    requests = serve_http(monkeypatch, responses_api_reply(message_item("ok")))
+    monkeypatch.setattr(litellm, "model_fallbacks", [{"model": "openai/gpt-4o-mini"}])
+    llm = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="k",
+        use_previous_response_id=True,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        llm.invoke("first turn")
+
+    assert str(exc_info.value) == (
+        "use_previous_response_id=True cannot be used because "
+        "litellm.model_fallbacks is set; remove that fallback setting or disable "
+        "use_previous_response_id."
+    )
+    assert requests == []
+
+
+@pytest.mark.parametrize("method", ["stream", "astream"])
+@pytest.mark.asyncio
+async def test_stream_keeps_a_responses_api_id(method: str) -> None:
+    """Only the final response id is retained when chunks are merged."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="k")
+    chunks = [
+        {
+            "id": "resp_primary",
+            "choices": [{"delta": {"role": "assistant", "content": "Fine."}}],
+        },
+        {
+            "id": "resp_backup",
+            "choices": [{"delta": {"content": ""}, "finish_reason": "stop"}],
+        },
+    ]
+
+    if method == "stream":
+        with patch.object(llm.client, "completion", return_value=iter(chunks)):
+            message = _merge(list(llm.stream("hi")))
+    else:
+
+        async def _stream() -> Any:
+            for chunk in chunks:
+                yield chunk
+
+        with patch.object(
+            llm.client, "acompletion", new=AsyncMock(return_value=_stream())
+        ):
+            message = _merge([chunk async for chunk in llm.astream("hi")])
+
+    assert message.response_metadata["id"] == "resp_backup"
 
 
 def test_a_split_reply_keeps_every_text_part(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1173,6 +1553,7 @@ _MANUAL_THINKING = [
         {"model": "anthropic/claude-sonnet-4-5", "reasoning_effort": "high"},
         {},
     ),
+    ("openai/gpt-4o", {"model": "anthropic/claude-sonnet-4-5", **_THINKING_KWARGS}, {}),
     pytest.param(
         "anthropic/claude-sonnet-4-5",
         {},
@@ -1188,6 +1569,7 @@ _MANUAL_THINKING_IDS = [
     "effort-bound",
     "manual-in-model-kwargs",
     "effort-for-the-model-kwargs-destination",
+    "manual-for-the-model-kwargs-destination",
     "bool-thinking-bound",
 ]
 
@@ -1218,6 +1600,53 @@ def test_bind_tools_downgraded_wherever_thinking_is_set(
         bound = llm.bind_tools([_dummy_tool], tool_choice="required", **bind_kwargs)
     assert bound.kwargs["tool_choice"] == "auto"  # type: ignore[attr-defined]
     assert "incompatible with thinking" in caplog.text
+
+
+@pytest.mark.parametrize("alias", ["fast", "gpt-4o"])
+@pytest.mark.parametrize(
+    "model_kwargs",
+    [_THINKING_KWARGS, {"reasoning_effort": "high"}],
+    ids=["manual", "effort"],
+)
+def test_bind_tools_downgrades_for_an_alias_of_claude(
+    alias: str,
+    model_kwargs: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """litellm swaps an alias in before it routes, so its name decides nothing.
+
+    Neither name says Claude, and litellm routes ``gpt-4o`` on its own.
+    """
+    monkeypatch.setitem(litellm.model_alias_map, alias, "anthropic/claude-sonnet-4-5")
+    llm = ChatLiteLLM(model=alias, api_key="fake", model_kwargs=model_kwargs)
+    with caplog.at_level(
+        logging.WARNING, logger="langchain_litellm.chat_models.litellm"
+    ):
+        bound = llm.bind_tools([_dummy_tool], tool_choice="required")
+    assert bound.kwargs["tool_choice"] == "auto"  # type: ignore[attr-defined]
+    assert "incompatible with thinking" in caplog.text
+
+
+def test_bind_tools_keeps_required_for_a_non_claude_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-claude alias must not downgrade a forced tool choice."""
+    monkeypatch.setitem(
+        litellm.model_alias_map,
+        "my-gpt-alias",
+        "openai/gpt-4o",
+    )
+
+    llm = ChatLiteLLM(
+        model="my-gpt-alias",
+        api_key="fake",
+        model_kwargs={"reasoning_effort": "high"},
+    )
+
+    bound = llm.bind_tools([_dummy_tool], tool_choice="required")
+
+    assert bound.kwargs["tool_choice"] == "required"  # type: ignore[attr-defined]
 
 
 @pytest.mark.skipif(
@@ -2893,6 +3322,27 @@ def test_use_responses_api_keeps_its_own_cache_entries() -> None:
     ]
 
 
+def test_use_previous_response_id_keeps_its_own_cache_entries() -> None:
+    """A flag-off cached reply must not answer a call that chains Responses turns."""
+    cache = InMemoryCache()
+    plain = ChatLiteLLM(model="gpt-4o-mini", api_key="k", cache=cache)
+    chained = ChatLiteLLM(
+        model="gpt-4o-mini",
+        api_key="k",
+        cache=cache,
+        use_previous_response_id=True,
+    )
+
+    with patch.object(plain.client, "completion", return_value=_MOCK_OK) as completion:
+        plain.invoke("hi")
+        chained.invoke("hi")
+
+    assert [call.kwargs["model"] for call in completion.call_args_list] == [
+        "gpt-4o-mini",
+        "openai/responses/gpt-4o-mini",
+    ]
+
+
 def test_use_responses_api_refuses_a_provider_without_one() -> None:
     """litellm would answer over Anthropic's chat API, never reaching a Responses API."""
     llm = ChatLiteLLM(
@@ -2903,10 +3353,38 @@ def test_use_responses_api_refuses_a_provider_without_one() -> None:
 
     with (
         patch.object(llm.client, "completion") as completion,
-        pytest.raises(ValueError, match="cannot send"),
+        pytest.raises(ValueError) as exc_info,
     ):
         llm.invoke("hi")
 
+    assert str(exc_info.value) == (
+        "use_responses_api=True, but litellm cannot send "
+        "'anthropic/claude-3-5-sonnet-20241022' to a Responses API. Use a model "
+        "litellm sends to a Responses API, or disable use_responses_api."
+    )
+    completion.assert_not_called()
+
+
+def test_use_previous_response_id_refusal_explains_unsupported_model() -> None:
+    """The error names the unsupported route and a working alternative."""
+    llm = ChatLiteLLM(
+        model="anthropic/claude-3-5-sonnet-20241022",
+        api_key="k",
+        use_previous_response_id=True,
+    )
+
+    with (
+        patch.object(llm.client, "completion") as completion,
+        pytest.raises(ValueError) as exc_info,
+    ):
+        llm.invoke("hi")
+
+    assert str(exc_info.value) == (
+        "use_previous_response_id=True, but litellm cannot send "
+        "'anthropic/claude-3-5-sonnet-20241022' to a Responses API. Chain an "
+        "OpenAI or Azure Responses model, or drop use_previous_response_id to "
+        "send the full history."
+    )
     completion.assert_not_called()
 
 
