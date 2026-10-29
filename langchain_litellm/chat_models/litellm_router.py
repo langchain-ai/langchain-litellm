@@ -23,7 +23,6 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from langchain_litellm.chat_models.litellm import (
     _REPLAY_SETTINGS,
     ChatLiteLLM,
-    _aliased,
     _convert_delta_to_message_chunk,
     _convert_dict_to_message,
     _cost_metadata,
@@ -31,12 +30,18 @@ from langchain_litellm.chat_models.litellm import (
     _create_usage_metadata,
     _extract_root_provider_specific_fields,
     _get_field,
+    _is_claude,
     _keep_reasoning_items,
     _keep_thinking_blocks,
+    _refuses_forced_tools,
     _rejoin_split_reply,
+    _resolve_deployment,
+    _response_id_metadata,
+    _response_store_key,
     _responses_api_gap,
     _sends_manual_thinking,
     _sends_to_responses_api,
+    _sent_base,
     _stream_cost_metadata,
     _ThinkingBlockAssembler,
 )
@@ -57,35 +62,12 @@ def _deployment_gap(deployment: Mapping[str, Any]) -> str | None:
     """Why litellm does not send a deployment to a Responses API, or None when it
     does, with the name that fixes it where renaming can.
 
-    The deployment is resolved in the order ``litellm.completion`` resolves it
-    before it picks the route: the named credential fills what is missing,
-    ``base_url`` replaces ``api_base``, the model alias applies, and the ``azure``
-    flag or a ``deployment_id`` forces Azure.
+    The deployment is resolved as ``_resolve_deployment`` resolves it.
     """
-    resolved = dict(deployment)
-    litellm.utils.load_credentials_from_list(resolved)
-    model: str = resolved["model"]
-    provider = resolved.get("custom_llm_provider")
-    # Where litellm replaces the model, renaming the deployment cannot help.
-    replaced = []
-    aliased = _aliased(model) or model
-    if aliased != model:
-        replaced.append(f"litellm.model_alias_map renames it {aliased!r}")
-        model = aliased
-    if resolved.get("azure") is True:
-        replaced.append("azure=True makes it an Azure deployment")
-        provider = "azure"
-    if resolved.get("deployment_id") is not None:
-        replaced.append(
-            f"its deployment_id {resolved['deployment_id']!r} replaces the model name"
-        )
-        model, provider = resolved["deployment_id"], "azure"
-    base_url = resolved.get("base_url")
+    resolved, model, provider, replaced = _resolve_deployment(deployment)
     try:
         named, provider, _, _ = litellm.get_llm_provider(
-            model=model,
-            custom_llm_provider=provider,
-            api_base=base_url if base_url is not None else resolved.get("api_base"),
+            model=model, custom_llm_provider=provider, api_base=_sent_base(resolved)
         )
     except litellm.BadRequestError:
         # A prompt-management deployment names its model only once the prompt loads.
@@ -93,12 +75,34 @@ def _deployment_gap(deployment: Mapping[str, Any]) -> str | None:
     gap = _responses_api_gap(named, provider)
     if gap is None:
         return None
+    # Where litellm replaces the model, renaming the deployment cannot help.
     if replaced:
         return f"{gap}, since {' and '.join(replaced)}"
     bare = named.removeprefix("chat_completions/").removeprefix("responses/")
     if _sends_to_responses_api(f"responses/{bare}", provider):
         return f"{gap}; name it '{provider}/responses/{bare}'"
     return gap
+
+
+def _deployment_store_key(
+    deployment: Mapping[str, Any],
+) -> tuple[str, tuple[str, ...], tuple[str, ...]] | None:
+    """The provider, servers and credentials that pick a deployment's response store,
+    resolved as ``_deployment_gap`` resolves it, or None when litellm cannot tell."""
+    resolved, model, provider, _ = _resolve_deployment(deployment)
+    try:
+        _, provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=provider, api_base=_sent_base(resolved)
+        )
+    except litellm.BadRequestError:
+        return None
+    return _response_store_key(
+        provider,
+        _sent_base(resolved),
+        resolved.get("api_key"),
+        resolved.get("organization"),
+        resolved.get("extra_headers"),
+    )
 
 
 token_usage_key_name = "token_usage"  # nosec # incorrectly flagged as password
@@ -139,6 +143,13 @@ class ChatLiteLLMRouter(ChatLiteLLM):
     its own, such as
     ``openai/gpt-5-pro``, passes, but its reasoning items do not go back; name it
     ``openai/responses/gpt-5-pro`` for that.
+
+    ``use_previous_response_id=True`` checks the same way, then also raises unless
+    every deployment of the group keeps its replies in one response store: the same
+    provider, base and credentials, including any a named credential supplies. A
+    chained call may land on any deployment, and only the store that issued its id
+    holds that reply. It raises under a litellm proxy too, since the proxy picks
+    the store.
 
     Example:
         .. code-block:: python
@@ -211,7 +222,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             return super()._is_claude_model()
         # A model group can fan across providers, so any Claude deployment counts.
         return any(
-            "claude" in str(entry.get("litellm_params", {}).get("model", "")).lower()
+            _is_claude(entry.get("litellm_params", {}).get("model"))
             for entry in matched
         )
 
@@ -350,30 +361,56 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         to route: each deployment has to be one litellm sends there already.
         """
         group = params["model"]
+        flag = (
+            "use_previous_response_id"
+            if self.use_previous_response_id
+            else "use_responses_api"
+        )
         sent = _without_none(params)
         unknown = self._unknown_reach(sent)
         if unknown is not None:
+            hint = (
+                "The flag only checks: without use_responses_api, a deployment "
+                "named '<provider>/responses/<model>' still reaches the "
+                "Responses API."
+                if flag == "use_responses_api"
+                else "Chained calls must reach one response store, so remove that "
+                "routing or disable use_previous_response_id."
+            )
             raise ValueError(
-                f"use_responses_api=True, but {unknown}, so a call to model group "
+                f"{flag}=True, but {unknown}, so a call to model group "
                 f"{group!r} may reach deployments ChatLiteLLMRouter cannot check. "
-                "The flag only checks: without it, a deployment named "
-                "'<provider>/responses/<model>' still reaches the Responses API."
+                f"{hint}"
             )
         deployments = self._deployments(sent)
         if not deployments:
             raise ValueError(
-                "use_responses_api=True, but no model_list entry has model_name "
+                f"{flag}=True, but no model_list entry has model_name "
                 f"{group!r}, so ChatLiteLLMRouter cannot tell which deployments serve "
-                "it, such as a wildcard one."
+                "it, such as a wildcard one. Add an explicit deployment for the "
+                f"group or disable {flag}."
+            )
+        # Ahead of the deployment checks: under a proxy they name the wrong cause.
+        if self.use_previous_response_id and (
+            litellm.use_litellm_proxy is True
+            or litellm.get_secret_bool("USE_LITELLM_PROXY") is True
+        ):
+            raise ValueError(
+                "use_previous_response_id=True cannot safely chain model "
+                f"group {group!r} because litellm.use_litellm_proxy or "
+                "USE_LITELLM_PROXY is enabled and the proxy may select a "
+                "different response store. Disable proxy routing or disable "
+                "use_previous_response_id."
             )
         # Replay ignores this one: the mirrored reply never reaches the caller.
         mirrors = [d["silent_model"] for d in deployments if d.get("silent_model")]
         if mirrors:
             raise ValueError(
-                f"use_responses_api=True, but a deployment of model group {group!r} "
+                f"{flag}=True, but a deployment of model group {group!r} "
                 "sets silent_model, so the Router also sends each call to "
                 f"{', '.join(repr(m) for m in dict.fromkeys(mirrors))}, which "
-                "ChatLiteLLMRouter does not check."
+                "ChatLiteLLMRouter does not check. Remove silent_model or disable "
+                f"{flag}."
             )
         gaps: dict[str, str] = {}
         for deployment in deployments:
@@ -382,11 +419,67 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                 gaps.setdefault(deployment["model"], gap)
         if gaps:
             lines = "".join(f"\n- {model!r}: {gap}" for model, gap in gaps.items())
-            raise ValueError(
-                "use_responses_api=True, but litellm would not send every deployment "
-                f"of model group {group!r} to a Responses API:{lines}"
+            # Each line names the rename that fixes it, where a rename can.
+            fix = (
+                "\nChain only deployments litellm sends to a Responses API, or drop "
+                "use_previous_response_id to send the full history."
+                if self.use_previous_response_id
+                else ""
             )
+            raise ValueError(
+                f"{flag}=True, but litellm would not send every deployment "
+                f"of model group {group!r} to a Responses API:{lines}{fix}"
+            )
+        if self.use_previous_response_id:
+            self._check_one_response_store(sent, group)
         return group
+
+    def _check_one_response_store(self, sent: dict[str, Any], group: str) -> None:
+        """Refuse a chained call unless every deployment of ``group`` keeps its
+        replies in one response store, the one that issued the id it chains on."""
+        # previous_response_id names stored state, not a destination, so only this
+        # check leaves it out; the reach checks still see it.
+        store_params = {
+            key: value for key, value in sent.items() if key != "previous_response_id"
+        }
+        deployments = self._deployments(store_params)
+        if any(
+            deployment.get("store") is False
+            or (
+                isinstance(deployment.get("extra_body"), Mapping)
+                and deployment["extra_body"].get("store") is False
+            )
+            for deployment in deployments
+        ):
+            raise ValueError(
+                "use_previous_response_id=True requires stored Responses API "
+                f"replies, but store=False is configured in store or "
+                f"extra_body for model group {group!r}. Remove store=False or "
+                "disable use_previous_response_id."
+            )
+        store_keys = [_deployment_store_key(deployment) for deployment in deployments]
+        if any(key is None for key in store_keys):
+            raise ValueError(
+                "use_previous_response_id=True cannot resolve the response "
+                f"store for every deployment of model group {group!r}. Set a "
+                "supported provider and API base, or disable "
+                "use_previous_response_id."
+            )
+        if any(key != store_keys[0] for key in store_keys[1:]):
+            differences = []
+            if len({key[0] for key in store_keys if key is not None}) > 1:
+                differences.append("different providers")
+            if len({key[1] for key in store_keys if key is not None}) > 1:
+                differences.append("different API base URLs")
+            if len({key[2] for key in store_keys if key is not None}) > 1:
+                differences.append("different credentials")
+            raise ValueError(
+                "use_previous_response_id=True cannot safely chain model "
+                f"group {group!r} because deployments use "
+                f"{', '.join(differences)}. Configure the deployments with "
+                "one shared provider, API base, and credentials, or disable "
+                "use_previous_response_id."
+            )
 
     def _replay_params(self, params: dict[str, Any]) -> Mapping[str, Any]:
         """The group's deployment as sent. With an endpoint there is at least one,
@@ -437,7 +530,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             litellm.Router, "_deployment_params_with_request_reasoning_override", None
         )
         return any(
-            "claude" in str(params.get("model", "")).lower()
+            _is_claude(params.get("model"))
             and _sends_manual_thinking(
                 params["model"],
                 params.get("custom_llm_provider"),
@@ -447,6 +540,18 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                     **defaults,
                     **caller,
                 },
+            )
+            for params in (entry.get("litellm_params", {}) for entry in matched)
+        )
+
+    def _model_refuses_forced_tools(self, overrides: Mapping[str, Any]) -> bool:
+        """Answer for the deployments the Router may pick, not the Router alias."""
+        matched = self._group_entries()
+        if not matched:
+            return super()._model_refuses_forced_tools(overrides)
+        return any(
+            _refuses_forced_tools(
+                params.get("model"), params.get("custom_llm_provider")
             )
             for params in (entry.get("litellm_params", {}) for entry in matched)
         )
@@ -513,14 +618,20 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             )
             return generate_from_stream(stream_iter)
 
+        messages, chained_response_id = self._messages_for_request(messages, kwargs)
         message_dicts, params = self._create_message_dicts(messages, stop)
+        if chained_response_id is not None:
+            params["previous_response_id"] = chained_response_id
         params = self._merge_call_params(params, kwargs)
+        self._validate_chained_request(params)
         # This branch parses a mapping, so it must not inherit stream=True from a
         # streaming=True instance that the caller overrode with stream=False.
         params["stream"] = False
         params = {k: v for k, v in params.items() if v is not None}
         self._prepare_params_for_router(params)
-        reasoning = self._bind_reasoning(messages, message_dicts, params)
+        reasoning = self._bind_reasoning(
+            messages, message_dicts, params, chained_response_id
+        )
         binding = self._bind_thinking(messages, message_dicts, params)
 
         response = self.completion_with_retry(
@@ -541,9 +652,16 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
         default_chunk_class = AIMessageChunk
+        messages, chained_response_id = self._messages_for_request(messages, kwargs)
         message_dicts, params = self._create_message_dicts(messages, stop)
+        if chained_response_id is not None:
+            params["previous_response_id"] = chained_response_id
         params = {**self._merge_call_params(params, kwargs), "stream": True}
-        if "stream_options" not in kwargs:
+        if params.get("n") is not None and params["n"] > 1:
+            raise ValueError("n must be 1 when streaming.")
+        self._validate_chained_request(params)
+        # `params` already holds the call kwargs and `model_kwargs`; either one wins.
+        if "stream_options" not in params:
             params["stream_options"] = (
                 self.stream_options
                 if self.stream_options is not None
@@ -557,15 +675,20 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             if value is not None or key == "stream_options"
         }
         self._prepare_params_for_router(params)
-        reasoning = self._bind_reasoning(messages, message_dicts, params)
+        reasoning = self._bind_reasoning(
+            messages, message_dicts, params, chained_response_id
+        )
         binding = self._bind_thinking(messages, message_dicts, params)
         thinking = _ThinkingBlockAssembler(*binding) if binding else None
         first_chunk_yielded = False
         cost_named = False
+        reply_id = None
 
         for chunk in self.completion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
         ):
+            if chunk.get("id"):
+                reply_id = chunk["id"]
             usage_metadata = None
             if chunk.get("usage"):
                 usage_metadata = _create_usage_metadata(chunk["usage"])
@@ -619,6 +742,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
 
             if finish_reason is not None and isinstance(chunk, AIMessageChunk):
                 chunk.response_metadata["finish_reason"] = finish_reason
+                if reply_id:
+                    chunk.response_metadata["id"] = reply_id
 
             # Response-level, so here as on invoke, where llm_output lands them.
             if root_metadata and isinstance(chunk, AIMessageChunk):
@@ -643,9 +768,16 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
         default_chunk_class = AIMessageChunk
+        messages, chained_response_id = self._messages_for_request(messages, kwargs)
         message_dicts, params = self._create_message_dicts(messages, stop)
+        if chained_response_id is not None:
+            params["previous_response_id"] = chained_response_id
         params = {**self._merge_call_params(params, kwargs), "stream": True}
-        if "stream_options" not in kwargs:
+        if params.get("n") is not None and params["n"] > 1:
+            raise ValueError("n must be 1 when streaming.")
+        self._validate_chained_request(params)
+        # `params` already holds the call kwargs and `model_kwargs`; either one wins.
+        if "stream_options" not in params:
             params["stream_options"] = (
                 self.stream_options
                 if self.stream_options is not None
@@ -659,15 +791,20 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             if value is not None or key == "stream_options"
         }
         self._prepare_params_for_router(params)
-        reasoning = self._bind_reasoning(messages, message_dicts, params)
+        reasoning = self._bind_reasoning(
+            messages, message_dicts, params, chained_response_id
+        )
         binding = self._bind_thinking(messages, message_dicts, params)
         thinking = _ThinkingBlockAssembler(*binding) if binding else None
         first_chunk_yielded = False
         cost_named = False
+        reply_id = None
 
         async for chunk in await self.acompletion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
         ):
+            if chunk.get("id"):
+                reply_id = chunk["id"]
             # Parse usage metadata first
             usage_metadata = None
             if chunk.get("usage"):
@@ -720,6 +857,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
 
             if finish_reason is not None and isinstance(chunk, AIMessageChunk):
                 chunk.response_metadata["finish_reason"] = finish_reason
+                if reply_id:
+                    chunk.response_metadata["id"] = reply_id
 
             # Response-level, so here as on invoke, where llm_output lands them.
             if root_metadata and isinstance(chunk, AIMessageChunk):
@@ -753,14 +892,20 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             )
             return await agenerate_from_stream(stream_iter)
 
+        messages, chained_response_id = self._messages_for_request(messages, kwargs)
         message_dicts, params = self._create_message_dicts(messages, stop)
+        if chained_response_id is not None:
+            params["previous_response_id"] = chained_response_id
         params = self._merge_call_params(params, kwargs)
+        self._validate_chained_request(params)
         # This branch parses a mapping, so it must not inherit stream=True from a
         # streaming=True instance that the caller overrode with stream=False.
         params["stream"] = False
         params = {k: v for k, v in params.items() if v is not None}
         self._prepare_params_for_router(params)
-        reasoning = self._bind_reasoning(messages, message_dicts, params)
+        reasoning = self._bind_reasoning(
+            messages, message_dicts, params, chained_response_id
+        )
         binding = self._bind_thinking(messages, message_dicts, params)
 
         response = await self.acompletion_with_retry(
@@ -819,6 +964,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                 message.response_metadata = {
                     "model_name": self.model_name or self.model,
                     "model_provider": "litellm",
+                    **_response_id_metadata(response),
                     **_deployment_metadata(response),
                     **_cost_metadata(response),
                 }

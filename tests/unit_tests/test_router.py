@@ -11,6 +11,7 @@ import httpx
 import litellm
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
+from litellm.types.utils import CredentialItem
 
 from langchain_litellm._version import __version__
 from langchain_litellm.chat_models import ChatLiteLLMRouter
@@ -273,6 +274,422 @@ async def test_router_split_reply_keeps_its_tool_calls(
     assert [
         (call["name"], call["args"], call["id"]) for call in message.tool_calls
     ] == [("get_weather", {"city": "Paris"}, "call_1")]
+    assert message.response_metadata["id"] == "resp_1"
+
+
+@pytest.mark.parametrize("method", ["invoke", "ainvoke"])
+@pytest.mark.asyncio
+async def test_router_use_previous_response_id_trims_history(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    """Router requests keep only the turns after the latest Responses API reply."""
+    requests = serve_http(monkeypatch, responses_api_reply(message_item("Fine.")))
+    llm = ChatLiteLLMRouter(
+        router=_router_serving("openai/responses/gpt-4o-mini"),
+        use_previous_response_id=True,
+    )
+    history = [
+        HumanMessage("Hello"),
+        AIMessage("Hi.", response_metadata={"id": "resp_previous"}),
+        HumanMessage("How are you?"),
+    ]
+
+    if method == "invoke":
+        message = llm.invoke(history)
+    else:
+        message = await llm.ainvoke(history)
+
+    payload = json.loads(requests[0].content)
+    assert payload["previous_response_id"] == "resp_previous"
+    assert payload["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "How are you?"}],
+        }
+    ]
+    assert message.response_metadata["id"] == "resp_1"
+
+
+@pytest.mark.parametrize("method", ["stream", "astream"])
+@pytest.mark.asyncio
+async def test_router_use_previous_response_id_streams_and_chains(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    """A Router stream chains on the stored reply and sends only the new turn."""
+    reply = responses_api_reply(message_item("Fine."))
+    requests = serve_http(
+        monkeypatch,
+        reply,
+        responses_api_events(
+            {
+                "type": "response.created",
+                "response": {**reply, "status": "in_progress", "output": []},
+            },
+            {
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "item_id": reply["output"][0]["id"],
+                "content_index": 0,
+                "delta": "Fine.",
+                "logprobs": [],
+            },
+            {"type": "response.completed", "response": reply},
+        ),
+    )
+    llm = ChatLiteLLMRouter(
+        router=_router_serving("openai/responses/gpt-4o-mini"),
+        use_previous_response_id=True,
+    )
+    history = [
+        HumanMessage("Hello"),
+        AIMessage("Hi.", response_metadata={"id": "resp_previous"}),
+        HumanMessage("How are you?"),
+    ]
+
+    if method == "stream":
+        message = _merge(list(llm.stream(history)))
+    else:
+        message = _merge([chunk async for chunk in llm.astream(history)])
+
+    assert json.loads(requests[0].content)["previous_response_id"] == "resp_previous"
+    assert message.response_metadata["id"] == "resp_1"
+
+
+def _store_test_router(*deployments: dict[str, Any], **options: Any) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "g",
+                "litellm_params": {"api_key": "k", **deployment},
+            }
+            for deployment in deployments
+        ],
+        **options,
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "cache_responses",
+        "global_cache",
+        "gpt_5_pro",
+        "identical_deployments",
+        "different_models",
+        "different_reasoning_effort",
+    ],
+)
+def test_router_chains_deployments_sharing_a_response_store(
+    monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """Store checks allow groups that share a provider account and endpoint."""
+    requests = serve_http(monkeypatch, responses_api_reply(message_item("ok")))
+    endpoint = "https://same.example/v1"
+    if case == "cache_responses":
+        monkeypatch.setattr(litellm, "cache", None)
+        router = _store_test_router(
+            {"model": "openai/responses/gpt-4o-mini", "api_base": endpoint},
+            cache_responses=True,
+        )
+    elif case == "global_cache":
+        monkeypatch.setattr(litellm, "cache", litellm.Cache())
+        router = _store_test_router(
+            {"model": "openai/responses/gpt-4o-mini", "api_base": endpoint}
+        )
+    elif case == "gpt_5_pro":
+        router = _store_test_router({"model": "openai/gpt-5-pro", "api_base": endpoint})
+    elif case == "identical_deployments":
+        router = _store_test_router(
+            *(
+                {
+                    "model": "openai/responses/gpt-4o-mini",
+                    "api_base": endpoint,
+                    "rpm": 10,
+                }
+                for _ in range(2)
+            )
+        )
+    elif case == "different_models":
+        router = _store_test_router(
+            {"model": "openai/responses/gpt-4o-mini", "api_base": endpoint},
+            {"model": "openai/responses/gpt-4.1", "api_base": endpoint},
+        )
+    else:
+        router = _store_test_router(
+            {"model": "openai/responses/gpt-5-pro", "api_base": endpoint},
+            {
+                "model": "openai/responses/gpt-5-pro",
+                "api_base": endpoint,
+                "reasoning_effort": "low",
+            },
+        )
+    llm = ChatLiteLLMRouter(
+        router=router, model_name="g", use_previous_response_id=True
+    )
+    history = [
+        HumanMessage("Earlier"),
+        AIMessage("A", response_metadata={"id": "resp_previous"}),
+        HumanMessage("Next"),
+    ]
+
+    llm.invoke(history)
+
+    payload = json.loads(requests[0].content)
+    assert payload["previous_response_id"] == "resp_previous"
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected_difference"),
+    [
+        ("different_api_key", "different credentials"),
+        ("different_api_base", "different API base URLs"),
+        (
+            "openai_and_azure",
+            "different providers, different API base URLs, different credentials",
+        ),
+        ("two_azure_resources", "different API base URLs"),
+    ],
+)
+def test_router_refuses_deployments_with_different_response_stores(
+    monkeypatch: pytest.MonkeyPatch, kind: str, expected_difference: str
+) -> None:
+    """A group spanning response stores refuses before sending the request."""
+    requests = serve_http(monkeypatch, responses_api_reply(message_item("ok")))
+    first = {
+        "model": "openai/responses/gpt-4o-mini",
+        "api_base": "https://one.example/v1",
+    }
+    second = dict(first)
+    if kind == "different_api_key":
+        second["api_key"] = "other-secret"
+    elif kind == "different_api_base":
+        second["api_base"] = "https://two.example/v1"
+    elif kind == "openai_and_azure":
+        second = {
+            "model": "azure/responses/my-deployment",
+            "api_base": "https://one.openai.azure.com",
+            "api_version": "2025-04-01-preview",
+        }
+    else:
+        first = {
+            "model": "azure/responses/my-deployment",
+            "api_base": "https://one.openai.azure.com",
+            "api_version": "2025-04-01-preview",
+        }
+        second = {
+            "model": "azure/responses/my-deployment",
+            "api_base": "https://two.openai.azure.com",
+            "api_version": "2025-04-01-preview",
+        }
+    llm = ChatLiteLLMRouter(
+        router=_store_test_router(first, second),
+        model_name="g",
+        use_previous_response_id=True,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        llm.invoke(
+            [
+                HumanMessage("Earlier"),
+                AIMessage("A", response_metadata={"id": "resp_previous"}),
+                HumanMessage("Next"),
+            ]
+        )
+
+    assert str(exc_info.value) == (
+        "use_previous_response_id=True cannot safely chain model group 'g' because "
+        f"deployments use {expected_difference}. Configure the deployments with "
+        "one shared provider, API base, and credentials, or disable "
+        "use_previous_response_id."
+    )
+    assert requests == []
+
+
+def _named_credential_router(
+    monkeypatch: pytest.MonkeyPatch, *names: str
+) -> ChatLiteLLMRouter:
+    """A chaining Router whose deployments take key and base from named credentials."""
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name=name,
+                credential_values={
+                    "api_key": f"key-{name}",
+                    "api_base": f"https://{name}.example/v1",
+                },
+                credential_info={},
+            )
+            for name in ("acct-a", "acct-b")
+        ],
+    )
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "g",
+                "litellm_params": {
+                    "model": "openai/responses/gpt-4o-mini",
+                    "litellm_credential_name": name,
+                },
+            }
+            for name in names
+        ]
+    )
+    return ChatLiteLLMRouter(
+        router=router, model_name="g", use_previous_response_id=True
+    )
+
+
+def test_router_refuses_named_credentials_with_different_stores(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """litellm fills a deployment's key and base from its named credential first."""
+    requests = serve_http(monkeypatch, responses_api_reply(message_item("ok")))
+    llm = _named_credential_router(monkeypatch, "acct-a", "acct-b")
+
+    with pytest.raises(ValueError) as exc_info:
+        llm.invoke(
+            [
+                HumanMessage("Earlier"),
+                AIMessage("A", response_metadata={"id": "resp_previous"}),
+                HumanMessage("Next"),
+            ]
+        )
+
+    assert str(exc_info.value) == (
+        "use_previous_response_id=True cannot safely chain model group 'g' because "
+        "deployments use different API base URLs, different credentials. Configure "
+        "the deployments with one shared provider, API base, and credentials, or "
+        "disable use_previous_response_id."
+    )
+    assert requests == []
+
+
+def test_router_chains_deployments_sharing_a_named_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two deployments on one named credential share its response store."""
+    requests = serve_http(monkeypatch, responses_api_reply(message_item("ok")))
+    llm = _named_credential_router(monkeypatch, "acct-a", "acct-a")
+
+    llm.invoke(
+        [
+            HumanMessage("Earlier"),
+            AIMessage("A", response_metadata={"id": "resp_previous"}),
+            HumanMessage("Next"),
+        ]
+    )
+
+    assert requests[0].url.host == "acct-a.example"
+    assert json.loads(requests[0].content)["previous_response_id"] == "resp_previous"
+
+
+def test_router_chaining_names_each_deployment_outside_a_responses_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fix follows the deployment list, which already names any rename."""
+    requests = serve_http(monkeypatch, responses_api_reply(message_item("ok")))
+    llm = ChatLiteLLMRouter(
+        router=_store_test_router({"model": "openai/gpt-4o-mini"}),
+        model_name="g",
+        use_previous_response_id=True,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        llm.invoke("Hi")
+
+    assert str(exc_info.value) == (
+        "use_previous_response_id=True, but litellm would not send every deployment "
+        "of model group 'g' to a Responses API:\n"
+        "- 'openai/gpt-4o-mini': litellm sends it to Chat Completions; name it "
+        "'openai/responses/gpt-4o-mini'\n"
+        "Chain only deployments litellm sends to a Responses API, or drop "
+        "use_previous_response_id to send the full history."
+    )
+    assert requests == []
+
+
+def test_router_chaining_refuses_fallbacks_with_a_fix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fallback can answer from another store, so removing it is the fix."""
+    requests = serve_http(monkeypatch, responses_api_reply(message_item("ok")))
+    llm = ChatLiteLLMRouter(
+        router=_store_test_router(
+            {"model": "openai/responses/gpt-4o-mini"}, fallbacks=[{"g": ["h"]}]
+        ),
+        model_name="g",
+        use_previous_response_id=True,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        llm.invoke("Hi")
+
+    assert str(exc_info.value) == (
+        "use_previous_response_id=True, but the Router sets fallbacks, so a call to "
+        "model group 'g' may reach deployments ChatLiteLLMRouter cannot check. "
+        "Chained calls must reach one response store, so remove that routing or "
+        "disable use_previous_response_id."
+    )
+    assert requests == []
+
+
+@pytest.mark.parametrize("source", ["deployment", "router_defaults"])
+def test_router_rejects_store_false(
+    monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    """A Router or deployment that disables storage cannot serve a chained id."""
+    requests = serve_http(monkeypatch, responses_api_reply(message_item("ok")))
+    deployment: dict[str, Any] = {"model": "openai/responses/gpt-4o-mini"}
+    options: dict[str, Any] = {"default_litellm_params": {"store": False}}
+    if source == "deployment":
+        deployment["store"] = False
+        options = {}
+    llm = ChatLiteLLMRouter(
+        router=_store_test_router(deployment, **options),
+        model_name="g",
+        use_previous_response_id=True,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        llm.invoke("first turn")
+
+    assert str(exc_info.value) == (
+        "use_previous_response_id=True requires stored Responses API replies, but "
+        "store=False is configured in store or extra_body for model group 'g'. "
+        "Remove store=False or disable use_previous_response_id."
+    )
+    assert requests == []
+
+
+@pytest.mark.parametrize("source", ["global", "environment"])
+def test_router_refuses_litellm_proxy_for_chaining(
+    monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    """The proxy can route to a response store the Router cannot identify."""
+    requests = serve_http(monkeypatch, responses_api_reply(message_item("ok")))
+    if source == "global":
+        monkeypatch.setattr(litellm, "use_litellm_proxy", True)
+    else:
+        monkeypatch.setenv("USE_LITELLM_PROXY", "True")
+    llm = ChatLiteLLMRouter(
+        router=_store_test_router({"model": "openai/responses/gpt-4o-mini"}),
+        model_name="g",
+        use_previous_response_id=True,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        llm.invoke("first turn")
+
+    assert str(exc_info.value) == (
+        "use_previous_response_id=True cannot safely chain model group 'g' because "
+        "litellm.use_litellm_proxy or USE_LITELLM_PROXY is enabled and the proxy "
+        "may select a different response store. Disable proxy routing or disable "
+        "use_previous_response_id."
+    )
+    assert requests == []
 
 
 def get_weather(city: str) -> str:
@@ -345,6 +762,7 @@ async def test_router_sends_built_in_tools_through_a_responses_deployment(
     assert [tool["type"] for tool in tools] == ["function", "web_search"]
     assert message.content == "Sunny."
     assert message.tool_calls == []
+    assert message.response_metadata["id"] == "resp_1"
 
 
 def test_router_n_above_one_keeps_each_completion(
@@ -389,6 +807,33 @@ async def test_router_astream_honours_a_per_call_stream_options() -> None:
     with patch.object(llm.router, "acompletion", side_effect=_acompletion_double(seen)):
         async for _ in llm.astream("hi", stream_options={"include_usage": False}):
             pass
+
+    assert seen[0]["stream_options"] == {"include_usage": False}
+
+
+@pytest.mark.parametrize("method", ["stream", "astream"])
+@pytest.mark.asyncio
+async def test_router_stream_keeps_stream_options_from_model_kwargs(
+    method: str,
+) -> None:
+    """`model_kwargs` is caller configuration too, so the default must not replace it."""
+    seen: list[dict[str, Any]] = []
+    llm = ChatLiteLLMRouter(
+        router=make_router(),
+        model_kwargs={"stream_options": {"include_usage": False}},
+    )
+
+    if method == "stream":
+        with patch.object(
+            llm.router, "completion", side_effect=_completion_double(seen)
+        ):
+            list(llm.stream("hi"))
+    else:
+        with patch.object(
+            llm.router, "acompletion", side_effect=_acompletion_double(seen)
+        ):
+            async for _ in llm.astream("hi"):
+                pass
 
     assert seen[0]["stream_options"] == {"include_usage": False}
 
@@ -510,6 +955,33 @@ def test_router_downgrades_a_forced_choice_for_a_thinking_deployment(
     assert "incompatible with thinking" in caplog.text
 
 
+@pytest.mark.parametrize(
+    ("deployment", "model_kwargs"),
+    [(_THINKING, {}), ({"reasoning_effort": "high"}, {}), ({}, _THINKING)],
+    ids=["deployment", "deployment-effort", "model-kwargs"],
+)
+def test_router_downgrades_a_forced_choice_for_a_deployment_aliased_to_claude(
+    deployment: dict[str, Any],
+    model_kwargs: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """litellm swaps a deployment's alias in when it sends the call."""
+    monkeypatch.setitem(
+        litellm.model_alias_map, "anthropic/fast", "anthropic/claude-sonnet-4-5"
+    )
+    router = _claude_router("anthropic/fast", deployment=deployment)
+    llm = ChatLiteLLMRouter(router=router, model_kwargs=model_kwargs)
+
+    with caplog.at_level(
+        logging.WARNING, logger="langchain_litellm.chat_models.litellm"
+    ):
+        bound = llm.bind_tools([_LOOKUP], tool_choice="required")
+
+    assert bound.kwargs["tool_choice"] == "auto"  # type: ignore[attr-defined]
+    assert "incompatible with thinking" in caplog.text
+
+
 def test_router_keeps_a_forced_choice_no_claude_deployment_refuses() -> None:
     """Only a Claude deployment with manual thinking refuses the forced tool."""
     router = litellm.Router(
@@ -581,6 +1053,47 @@ def test_router_structured_output_stops_forcing_for_a_thinking_deployment() -> N
     llm = ChatLiteLLMRouter(router=_claude_router(deployment=_THINKING))
 
     with pytest.warns(UserWarning, match="Structured output via function calling"):
+        structured = llm.with_structured_output(
+            {"title": "Answer", "type": "object", "properties": {}},
+            method="function_calling",
+        )
+
+    assert structured.first.kwargs["tool_choice"] is None  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "models",
+    [["anthropic/claude-opus-5-5"], ["openai/gpt-4o", "anthropic/claude-fable-5-1"]],
+    ids=["deployment", "one-deployment-of-a-group"],
+)
+def test_router_downgrades_a_forced_choice_for_a_deployment_that_refuses_it(
+    models: list[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """The Router alias names no model, so every deployment it may pick is asked."""
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "assistant", "litellm_params": {"model": m, "api_key": "k"}}
+            for m in models
+        ]
+    )
+    llm = ChatLiteLLMRouter(router=router, model_name="assistant")
+
+    with caplog.at_level(
+        logging.WARNING, logger="langchain_litellm.chat_models.litellm"
+    ):
+        bound = llm.bind_tools([_LOOKUP], tool_choice="required")
+
+    assert bound.kwargs["tool_choice"] == "auto"  # type: ignore[attr-defined]
+    assert "unsupported by this model" in caplog.text
+
+
+def test_router_structured_output_stops_forcing_for_a_deployment_that_refuses_it() -> (
+    None
+):
+    """Structured output reads the same deployments as bind_tools."""
+    llm = ChatLiteLLMRouter(router=_claude_router("anthropic/claude-opus-5-5"))
+
+    with pytest.warns(UserWarning, match="does not support forced tool use"):
         structured = llm.with_structured_output(
             {"title": "Answer", "type": "object", "properties": {}},
             method="function_calling",

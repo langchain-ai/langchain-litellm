@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.2](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.11.1...langchain-litellm==0.11.2) (2026-10-25)
+
+
+### Bug Fixes
+
+* **deps:** explain the litellm 1.106.2 floor and 1.107.0 exclusion ([#384](https://github.com/langchain-ai/langchain-litellm/issues/384)) ([9407fc7](https://github.com/langchain-ai/langchain-litellm/commit/9407fc78869965bb9e42724cc05bddffc61b040b))
+* **deps:** relax third-party bounds and harden LiteLLM ([#378](https://github.com/langchain-ai/langchain-litellm/issues/378)) ([5f99fc6](https://github.com/langchain-ai/langchain-litellm/commit/5f99fc6d33ca43c2fa099e4d0c8ed952f20b426f))
+
 ## [0.11.1](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.11.0...langchain-litellm==0.11.1) (2026-10-14)
 
 
