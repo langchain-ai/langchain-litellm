@@ -1144,6 +1144,17 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
 
             # Populate standard tool_calls attribute
             for tc in _dict["tool_calls"]:
+                # A custom tool takes one freeform string, which LangChain hands a
+                # single-input tool as __arg1.
+                if (custom := _get_field(tc, "custom")) is not None:
+                    tool_calls.append(
+                        ToolCall(
+                            name=custom["name"],
+                            args={"__arg1": custom["input"]},
+                            id=tc["id"],
+                        )
+                    )
+                    continue
                 try:
                     # Handle both dict and object (Pydantic) access safely
                     tc_id = (
@@ -1299,6 +1310,23 @@ register_translator(
 )
 
 
+def _tool_call_chunk(raw: Any) -> ToolCallChunk:
+    """A streamed tool call as a chunk; any of its fields may be missing on a delta."""
+    if (custom := _get_field(raw, "custom")) is None:
+        function = _get_field(raw, "function")
+        name = _get_field(function, "name")
+        args = _get_field(function, "arguments")
+    else:
+        # Core joins a call's chunks and parse_partial_json closes the result, so the
+        # chunk naming the call opens the JSON and each one adds its input escaped.
+        name = _get_field(custom, "name")
+        opener = '{"__arg1": "' if name else ""
+        args = opener + json.dumps(_get_field(custom, "input") or "")[1:-1]
+    return ToolCallChunk(
+        name=name, args=args, id=_get_field(raw, "id"), index=_get_field(raw, "index")
+    )
+
+
 def _convert_delta_to_message_chunk(
     delta: Delta | dict[str, Any],
     default_class: type[BaseMessageChunk],
@@ -1357,22 +1385,7 @@ def _convert_delta_to_message_chunk(
     tool_call_chunks = []
     if raw_tool_calls:
         additional_kwargs["tool_calls"] = raw_tool_calls
-        try:
-            tool_call_chunks = [
-                ToolCallChunk(
-                    name=rtc["function"]["name"]
-                    if isinstance(rtc, dict)
-                    else rtc.function.name,
-                    args=rtc["function"]["arguments"]
-                    if isinstance(rtc, dict)
-                    else rtc.function.arguments,
-                    id=rtc["id"] if isinstance(rtc, dict) else rtc.id,
-                    index=rtc["index"] if isinstance(rtc, dict) else rtc.index,
-                )
-                for rtc in raw_tool_calls
-            ]
-        except KeyError:
-            pass
+        tool_call_chunks = [_tool_call_chunk(rtc) for rtc in raw_tool_calls]
 
     if role == "user" or default_class == HumanMessageChunk:
         return HumanMessageChunk(content=content)
@@ -1405,7 +1418,21 @@ def _convert_delta_to_message_chunk(
         return default_class(content=content)  # type: ignore[call-arg]
 
 
-def _lc_tool_call_to_openai_tool_call(tool_call: ToolCall) -> dict[str, Any]:
+def _lc_tool_call_to_openai_tool_call(
+    tool_call: ToolCall, *, custom: bool
+) -> dict[str, Any]:
+    if custom:
+        if tool_call["args"].keys() != {"__arg1"}:
+            raise ValueError(
+                f"Tool call {tool_call['id']!r} calls the custom tool "
+                f"{tool_call['name']!r}, which takes one string, so its args must be "
+                f"{{'__arg1': <input>}}; got the keys {sorted(tool_call['args'])}."
+            )
+        return {
+            "type": "custom",
+            "id": tool_call["id"],
+            "custom": {"name": tool_call["name"], "input": tool_call["args"]["__arg1"]},
+        }
     return {
         "type": "function",
         "id": tool_call["id"],
@@ -1518,8 +1545,15 @@ def _convert_message_to_dict(message: BaseMessage) -> dict[str, Any]:
         if "function_call" in message.additional_kwargs:
             message_dict["function_call"] = message.additional_kwargs["function_call"]
         if message.tool_calls:
+            # Only the reply as litellm returned it records which tools are custom.
+            custom_tools = {
+                _get_field(custom, "name")
+                for raw in message.additional_kwargs.get("tool_calls") or []
+                if (custom := _get_field(raw, "custom")) is not None
+            }
             message_dict["tool_calls"] = [
-                _lc_tool_call_to_openai_tool_call(tc) for tc in message.tool_calls
+                _lc_tool_call_to_openai_tool_call(tc, custom=tc["name"] in custom_tools)
+                for tc in message.tool_calls
             ]
         # A call that failed to parse was never dispatched, so it must not go back:
         # the provider fails the same parse on the same raw arguments.
@@ -1562,6 +1596,12 @@ class ChatLiteLLM(BaseChatModel):
     or not, in any process that imports ``langchain_litellm``. Spans are the offsets
     litellm reports, which for Gemini grounding are bytes within a part. A reply
     streamed through litellm's Responses API bridge carries none: litellm drops them.
+
+    A call to a custom (freeform) tool reaches ``tool_calls``, streamed or not, with
+    its input as ``args={"__arg1": input}``, the one argument a single-input
+    LangChain ``Tool`` takes, and goes back to the provider as a custom call.
+    litellm's Responses API bridge returns one as a function call instead, with the
+    raw input as its arguments.
     """
 
     client: Any = None  #: :meta private:
