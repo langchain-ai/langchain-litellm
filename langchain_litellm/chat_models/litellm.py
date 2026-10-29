@@ -1603,10 +1603,12 @@ class ChatLiteLLM(BaseChatModel):
     resolved as litellm resolves it, through named credentials, ``base_url``, model
     aliases and the ``azure`` flag. A model litellm cannot bridge raises
     ``ValueError``, as does a ``deployment_id``, which litellm puts in place of the
-    model: name the model ``azure/<deployment>`` instead. ``None`` and ``False``
-    leave the route to litellm, which sends some models, such as ``gpt-5-pro``,
-    there anyway. On ``ChatLiteLLMRouter`` the flag checks the Router's deployments
-    rather than renaming them.
+    model: name the model ``azure/<deployment>`` instead. Any fallback raises too,
+    since litellm sends it under its own name; to keep fallbacks, drop the flag and
+    name the model and each fallback ``<provider>/responses/<model>``. ``None`` and
+    ``False`` leave the route to litellm, which sends some models, such as
+    ``gpt-5-pro``, there anyway. On ``ChatLiteLLMRouter`` the flag checks the
+    Router's deployments rather than renaming them.
 
     A reply's reasoning item goes back on later turns when it carries encrypted
     content, the turn holds no other, and the model, endpoint and credentials are
