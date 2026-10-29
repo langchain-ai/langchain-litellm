@@ -1,0 +1,82 @@
+name: "Newest litellm"
+
+# CI tests the litellm in uv.lock and the pyproject.toml floor. This tests the newest release
+# a fresh install resolves, so an upstream release that breaks the package fails on its release day.
+on:
+  schedule:
+    - cron: "23 6,18 * * *"
+  workflow_dispatch:
+  # A change to the declared range moves which release a fresh install gets.
+  pull_request:
+    paths:
+      - "pyproject.toml"
+      - ".github/workflows/newest-litellm.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-newest:
+    name: "Test newest litellm (Python ${{ matrix.python-version }})"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+      fail-fast: false
+    steps:
+      # This job runs a litellm no lock has vetted, so it keeps no token on disk and never
+      # saves the uv cache that every other CI job restores.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+          save-cache: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # A full resolve of pyproject.toml, so it skips pre-releases, yanked releases and any
+      # version the range excludes, and keeps the declared extras, as a user's install does.
+      - name: Resolve the newest litellm
+        id: newest
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+        run: |
+          pin=$(uv pip compile pyproject.toml --python-version "$PYTHON_VERSION" \
+            --prerelease disallow --no-strip-extras --refresh-package litellm \
+            --no-header --no-annotate --quiet \
+            | grep -xE 'litellm(\[[a-z0-9,_-]+\])?==[0-9]+(\.[0-9]+)*(\.post[0-9]+)?')
+          echo "pin=$pin" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Newest litellm::$pin on Python $PYTHON_VERSION"
+
+      # Overlay the pin on the locked test environment, and confirm it took: an overlay that
+      # missed would test the lock and pass.
+      - name: Overlay it on the locked test environment
+        env:
+          PIN: ${{ steps.newest.outputs.pin }}
+        run: |
+          have=$(uv run --frozen --group test --with "$PIN" python -c \
+            'from importlib.metadata import version; print(version("litellm"))')
+          if [ "$have" != "${PIN##*==}" ]; then
+            echo "::error::litellm $have is installed, not $PIN"
+            exit 1
+          fi
+
+      # python -m pytest, never bare pytest: uv 0.13 runs a bare pytest from the venv, which
+      # tests the locked litellm (uv 0.10 did not).
+      - name: Run unit tests
+        env:
+          PIN: ${{ steps.newest.outputs.pin }}
+        run: >-
+          uv run --frozen --group test --with "$PIN"
+          python -m pytest tests/unit_tests/ --disable-socket --allow-unix-socket -q

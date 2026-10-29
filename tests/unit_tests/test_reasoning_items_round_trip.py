@@ -111,6 +111,15 @@ def _model(kind: str) -> ChatLiteLLM:
     return _base() if kind == "base" else _router()
 
 
+def _chained_model(kind: str) -> Any:
+    if kind == "base":
+        return _base(use_previous_response_id=True)
+    base = _router()
+    return ChatLiteLLMRouter(
+        router=base.router, model_name="gpt", use_previous_response_id=True
+    )
+
+
 def _run(llm: Any, mode: str, messages: list[Any]) -> Any:
     if mode == "invoke":
         return llm.invoke(messages)
@@ -198,6 +207,56 @@ def test_a_tool_loop_sends_the_reasoning_item_back(
     assert _sent_reasoning(requests[-1]) == [("rs_1", ENCRYPTED)]
     types = [item.get("type") for item in json.loads(requests[-1].content)["input"]]
     assert types.index("reasoning") < types.index("function_call")
+
+
+@pytest.mark.parametrize("kind", ["base", "router"])
+def test_a_chained_reply_keeps_its_encrypted_reasoning_item(
+    monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """A chained reply's encrypted item remains available in the returned message."""
+    requests = serve_http(monkeypatch, REPLY)
+    llm = _chained_model(kind)
+    first = _first_turn(llm)
+    second = _run(
+        llm,
+        "invoke",
+        [
+            HumanMessage("weather?"),
+            first,
+            ToolMessage("Sunny", tool_call_id="call_Qx7wP2"),
+        ],
+    )
+
+    assert json.loads(requests[-1].content)["previous_response_id"] == "resp_1"
+    assert _sent_reasoning(requests[-1]) == []
+    kept = second.additional_kwargs["reasoning_items"]
+    assert [(item["id"], item["encrypted_content"]) for item in kept] == [
+        ("rs_1", ENCRYPTED)
+    ]
+
+
+@pytest.mark.parametrize("kind", ["base", "router"])
+def test_an_explicit_response_id_does_not_replay_full_history_reasoning(
+    monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """An explicit id leaves full history intact without replaying reasoning items."""
+    requests = serve_http(monkeypatch, REPLY)
+    first = _first_turn(_model(kind))
+    llm = _chained_model(kind)
+    history = [
+        HumanMessage("weather?"),
+        first,
+        ToolMessage("Sunny", tool_call_id="call_Qx7wP2"),
+    ]
+
+    llm.invoke(history, previous_response_id="resp_explicit")
+
+    request = requests[-1]
+    payload = json.loads(request.content)
+    assert payload["previous_response_id"] == "resp_explicit"
+    assert _sent_reasoning(request) == []
+    assert payload["input"][0]["content"][0]["text"] == "weather?"
+    assert any(item.get("type") == "function_call" for item in payload["input"])
 
 
 @pytest.mark.parametrize(
@@ -488,8 +547,14 @@ def test_a_turn_with_several_items_goes_back_without_them(
 def test_a_call_with_fallbacks_keeps_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     """A fallback may answer from another model, whose items no issuer accepts."""
     serve_http(monkeypatch, REPLY)
+    # use_responses_api refuses fallbacks, so the model names the Responses API.
+    llm = _base(
+        model=DEPLOYMENT,
+        use_responses_api=None,
+        model_kwargs={"fallbacks": ["openai/responses/gpt-5"]},
+    )
 
-    message = _first_turn(_base(model_kwargs={"fallbacks": ["openai/gpt-5"]}))
+    message = _first_turn(llm)
 
     assert "reasoning_items" not in message.additional_kwargs
 

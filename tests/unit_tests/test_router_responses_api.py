@@ -230,7 +230,8 @@ async def test_a_group_no_model_list_entry_names_is_refused() -> None:
     assert refusal == (
         "use_responses_api=True, but no model_list entry has model_name "
         "'openai/responses/gpt-4o-mini', so ChatLiteLLMRouter cannot tell which "
-        "deployments serve it, such as a wildcard one."
+        "deployments serve it, such as a wildcard one. Add an explicit deployment "
+        "for the group or disable use_responses_api."
     )
 
 
@@ -353,7 +354,7 @@ async def test_a_call_that_may_reach_another_group_is_refused(
     assert refusal == (
         f"use_responses_api=True, but {reason}, so a call to model group 'g' may "
         "reach deployments ChatLiteLLMRouter cannot check. The flag only checks: "
-        "without it, a deployment named '<provider>/responses/<model>' still reaches "
+        "without use_responses_api, a deployment named '<provider>/responses/<model>' still reaches "
         "the Responses API."
     )
 
@@ -676,7 +677,8 @@ async def test_a_deployment_that_mirrors_the_call_is_refused() -> None:
     assert await _refused(llm, "invoke") == (
         "use_responses_api=True, but a deployment of model group 'g' sets "
         "silent_model, so the Router also sends each call to 'chat', which "
-        "ChatLiteLLMRouter does not check."
+        "ChatLiteLLMRouter does not check. Remove silent_model or disable "
+        "use_responses_api."
     )
 
 

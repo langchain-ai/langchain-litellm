@@ -80,6 +80,7 @@ from langchain_core.runnables import Runnable, RunnablePassthrough
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import TypeBaseModel, is_basemodel_subclass
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.types.utils import Delta
 from pydantic import BaseModel, Field, model_validator
 from typing_extensions import is_typeddict
@@ -90,6 +91,12 @@ logger = logging.getLogger(__name__)
 
 # Per-call kwargs that decide WHERE litellm sends the request.
 _DESTINATION_KEYS = ("model", "custom_llm_provider")
+# Settings that make litellm or its Router re-send a failed request elsewhere.
+_FALLBACK_SETTINGS = (
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+)
 
 # OpenAI's string tool_choice modes, which litellm maps per provider. Any other
 # string names a tool.
@@ -126,6 +133,33 @@ def _get_field(source: Any, name: str) -> Any:
     if isinstance(source, dict):
         return source.get(name)
     return getattr(source, name, None)
+
+
+def _last_messages_with_response_id(
+    messages: list[BaseMessage],
+) -> tuple[list[BaseMessage], str | None]:
+    """Return turns after the latest Responses API reply, retaining instructions."""
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if isinstance(message, AIMessage):
+            response_id = message.response_metadata.get("id")
+            if isinstance(response_id, str) and response_id.startswith("resp_"):
+                instructions = [
+                    prior
+                    for prior in messages[:index]
+                    if (converted := _convert_message_to_dict(prior)).get("role")
+                    == "system"
+                    and isinstance(converted.get("content"), str)
+                ]
+                return [*instructions, *messages[index + 1 :]], response_id
+    return messages, None
+
+
+def _response_id_metadata(response: Any) -> dict[str, Any]:
+    """The reply's id as litellm returns it: the upstream ``resp_`` id from its
+    Responses API bridge, a ``chatcmpl-`` id from Chat Completions."""
+    response_id = _get_field(response, "id")
+    return {"id": response_id} if response_id is not None else {}
 
 
 # Hosts that serve Claude through litellm's Anthropic message format. An
@@ -356,6 +390,31 @@ def _issuing_endpoint(
         provider, name = name.split("/", 1)
     if not provider or not name.startswith("responses/"):
         return None
+    store = _response_store_key(
+        provider, api_base, api_key, organization, extra_headers
+    )
+    if store is None:
+        return None
+    _, servers, credentials = store
+    issuer = "\0".join(
+        [provider, name.removeprefix("responses/").lower(), *servers, *credentials]
+    )
+    return _issuer_digest(issuer)
+
+
+def _response_store_key(
+    provider: str,
+    api_base: str | None,
+    api_key: str | None,
+    organization: str | None,
+    extra_headers: Mapping[str, Any] | None,
+) -> tuple[str, tuple[str, ...], tuple[str, ...]] | None:
+    """Identify a Responses API store without including the model name.
+
+    The values are compared only in memory and must never be logged or included in
+    errors: the credentials tuple contains secrets. Keep its sources and order in
+    sync with ``_issuing_endpoint``.
+    """
     env = provider.upper()
     bases = [
         api_base,
@@ -363,9 +422,10 @@ def _issuing_endpoint(
         os.environ.get(f"{env}_BASE_URL"),
         os.environ.get(f"{env}_API_BASE"),
     ]
-    servers = [_server(base) for base in bases]
-    if any(server is None for server in servers):
+    resolved_servers = [_server(base) for base in bases]
+    if any(server is None for server in resolved_servers):
         return None
+    servers = tuple(server or "" for server in resolved_servers)
     credentials = [
         api_key,
         getattr(litellm, "api_key", None),
@@ -381,15 +441,11 @@ def _issuing_endpoint(
             if header.lower() in _ACCOUNT_HEADERS
         ),
     ]
-    issuer = "\0".join(
-        [
-            provider,
-            name.removeprefix("responses/").lower(),
-            *[server or "" for server in servers],
-            *[str(credential or "") for credential in credentials],
-        ]
+    return (
+        provider,
+        servers,
+        tuple(str(credential or "") for credential in credentials),
     )
-    return _issuer_digest(issuer)
 
 
 @functools.lru_cache(maxsize=64)
@@ -437,6 +493,46 @@ def _aliased(model: str | None) -> str | None:
     """The model litellm resolves ``model`` to through its alias map."""
     aliases = litellm.model_alias_map
     return aliases[model] if aliases and model in aliases else model
+
+
+def _is_claude(model: str | None) -> bool:
+    """Whether ``model`` names Claude once litellm's alias map has applied."""
+    return "claude" in (_aliased(model) or "").lower()
+
+
+def _resolve_deployment(
+    deployment: Mapping[str, Any],
+) -> tuple[dict[str, Any], str, str | None, list[str]]:
+    """A call's or deployment's params, model and provider as ``litellm.completion``
+    resolves them before it picks the route, and what replaced its model.
+
+    The named credential fills what is missing, the model alias applies, and the
+    ``azure`` flag or a ``deployment_id`` forces Azure.
+    """
+    resolved = dict(deployment)
+    litellm.utils.load_credentials_from_list(resolved)
+    model: str = resolved["model"]
+    provider = resolved.get("custom_llm_provider")
+    replaced = []
+    aliased = _aliased(model) or model
+    if aliased != model:
+        replaced.append(f"litellm.model_alias_map renames it {aliased!r}")
+        model = aliased
+    if resolved.get("azure") is True:
+        replaced.append("azure=True makes it an Azure deployment")
+        provider = "azure"
+    if resolved.get("deployment_id") is not None:
+        replaced.append(
+            f"its deployment_id {resolved['deployment_id']!r} replaces the model name"
+        )
+        model, provider = resolved["deployment_id"], "azure"
+    return resolved, model, provider, replaced
+
+
+def _sent_base(params: Mapping[str, Any]) -> str | None:
+    """The base litellm sends to: ``base_url`` replaces ``api_base``."""
+    base_url = params.get("base_url")
+    return base_url if base_url is not None else params.get("api_base")
 
 
 def _only_endpoint(params: Mapping[str, Any], endpoint: str | None) -> str | None:
@@ -930,12 +1026,14 @@ def _sends_manual_thinking(
     effort = params.get("reasoning_effort")
     if thinking is None and effort is None:
         return False
+    # litellm swaps an alias in before it resolves the provider.
+    model = _aliased(model) or model
     try:
         bare_model, provider, _, _ = litellm.get_llm_provider(
             model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
         )
     except litellm.BadRequestError:
-        # An alias or routed name that litellm resolves only when the call is made.
+        # A routed name that litellm resolves only when the call is made.
         return False
     mapped = litellm.get_optional_params(
         model=bare_model,
@@ -946,6 +1044,25 @@ def _sends_manual_thinking(
         max_tokens=params.get("max_tokens"),
     ).get("thinking")
     return isinstance(mapped, dict) and mapped.get("type") == "enabled"
+
+
+def _refuses_forced_tools(model: str | None, custom_llm_provider: str | None) -> bool:
+    """Whether litellm's model map marks ``model`` as refusing a forced tool.
+
+    The map keys a model both with and without a provider prefix, so each form is
+    read by name. Never through ``litellm.get_llm_provider``, which prints a banner
+    for a name it cannot route and logs in to some providers.
+    """
+    name = _aliased(model)
+    if not name:
+        return False
+    prefix, _, bare = name.partition("/")
+    names = [name]
+    if custom_llm_provider:
+        names.append(f"{custom_llm_provider}/{name}")
+    if bare and prefix in litellm.provider_list:
+        names.append(bare)
+    return any(AnthropicModelInfo.forced_tool_use_unsupported(n) for n in names)
 
 
 class ChatLiteLLMException(Exception):
@@ -993,6 +1110,19 @@ def _create_retry_decorator(
     return create_base_retry_decorator(
         error_types=errors, max_retries=llm.max_retries, run_manager=run_manager
     )
+
+
+def _reasoning_summary(items: Any) -> str | None:
+    """Join original reasoning summaries without inventing separators, as streaming does."""
+    if not isinstance(items, list):
+        return None
+    texts = [
+        text
+        for item in items
+        for summary in _get_field(item, "summary") or []
+        if isinstance(text := _get_field(summary, "text"), str)
+    ]
+    return "".join(texts) if texts else None
 
 
 def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
@@ -1072,8 +1202,11 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
                     # Prevent crash on malformed tool call
                     pass
 
-        if _dict.get("reasoning_content"):
-            additional_kwargs["reasoning_content"] = _dict["reasoning_content"]
+        reasoning_content = _reasoning_summary(
+            _dict.get("reasoning_items")
+        ) or _dict.get("reasoning_content")
+        if reasoning_content:
+            additional_kwargs["reasoning_content"] = reasoning_content
         # Kept only once marked with their issuer: see _keep_reasoning_items.
         if _dict.get("reasoning_items"):
             additional_kwargs["reasoning_items"] = list(_dict["reasoning_items"])
@@ -1297,6 +1430,20 @@ def _is_skipped_content_block(block: dict[str, Any]) -> bool:
     return block.get("type") in _SKIPPED_CONTENT_BLOCK_TYPES
 
 
+def _collapse_text_only_content(content: list[Any]) -> str | list[Any]:
+    """Join a list of bare strings into one string, else type each bare string.
+
+    A bare string is not a content part, so beside other items it goes out as a
+    text block; dicts and any other item pass through. An empty list joins to "".
+    """
+    if all(isinstance(item, str) for item in content):
+        return "".join(content)
+    return [
+        {"type": "text", "text": item} if isinstance(item, str) else item
+        for item in content
+    ]
+
+
 def _convert_message_to_dict(message: BaseMessage) -> dict[str, Any]:
     # Capture the original content from the message
     content = message.content
@@ -1355,7 +1502,7 @@ def _convert_message_to_dict(message: BaseMessage) -> dict[str, Any]:
         # Update content with the processed list.
         # If filtering removed all blocks, collapse to empty string so the
         # provider doesn't receive an empty list.
-        content = new_content or ""
+        content = _collapse_text_only_content(new_content)
 
     # Initialize the message dictionary with the processed content
     message_dict: dict[str, Any] = {"content": content}
@@ -1419,9 +1566,13 @@ class ChatLiteLLM(BaseChatModel):
 
     client: Any = None  #: :meta private:
     model: str = "gpt-3.5-turbo"
+    """Model name to use."""
     model_name: str | None = None
     stream_options: dict[str, Any] | None = None
-    """Model name to use."""
+    """``stream_options`` sent when streaming, ``{"include_usage": True}`` if unset.
+
+    A per-call ``stream_options`` wins over ``model_kwargs``, which wins over this.
+    """
     openai_api_key: str | None = Field(default=None, repr=False)
     azure_api_key: str | None = Field(default=None, repr=False)
     anthropic_api_key: str | None = Field(default=None, repr=False)
@@ -1448,11 +1599,16 @@ class ChatLiteLLM(BaseChatModel):
     """Send calls to the provider's Responses API instead of Chat Completions.
 
     litellm translates each request and reply, so calls are written as usual, but
-    it drops Chat Completions-only params such as ``stop`` and ``n``. A model
-    litellm cannot bridge raises ``ValueError``. ``None`` and ``False`` leave the
-    route to litellm, which sends some models, such as ``gpt-5-pro``, there anyway.
-    On ``ChatLiteLLMRouter`` the flag checks the Router's deployments rather than
-    renaming them.
+    it drops Chat Completions-only params such as ``stop`` and ``n``. The call is
+    resolved as litellm resolves it, through named credentials, ``base_url``, model
+    aliases and the ``azure`` flag. A model litellm cannot bridge raises
+    ``ValueError``, as does a ``deployment_id``, which litellm puts in place of the
+    model: name the model ``azure/<deployment>`` instead. Any fallback raises too,
+    since litellm sends it under its own name; to keep fallbacks, drop the flag and
+    name the model and each fallback ``<provider>/responses/<model>``. ``None`` and
+    ``False`` leave the route to litellm, which sends some models, such as
+    ``gpt-5-pro``, there anyway. On ``ChatLiteLLMRouter`` the flag checks the
+    Router's deployments rather than renaming them.
 
     A reply's reasoning item goes back on later turns when it carries encrypted
     content, the turn holds no other, and the model, endpoint and credentials are
@@ -1461,6 +1617,20 @@ class ChatLiteLLM(BaseChatModel):
     ["reasoning.encrypted_content"]}}``, adding ``"store": False`` for stateless
     turns. litellm keeps only the last item of a reply it does not stream, and calls
     it routes to the Responses API on its own keep none."""
+    use_previous_response_id: bool = False
+    """Chain Responses API calls through the latest stored response.
+
+    Each call sends the id of the latest ``AIMessage`` whose ``response_metadata``
+    holds a Responses API id (``resp_...``) as ``previous_response_id``, with only
+    the turns after that message, through litellm's Responses API. String system
+    messages go again as instructions, since the server never carries those over. A
+    caller's own ``previous_response_id`` leaves the history as given.
+
+    Set it on the model: a per-call or ``model_kwargs`` value raises ``ValueError``,
+    as do ``store=False`` and any fallback, since a fallback may answer from a store
+    that never issued the id. On ``ChatLiteLLMRouter`` it checks the deployments
+    rather than renaming them, and the group must share one response store.
+    """
     base_model: str | None = None
     extra_headers: dict[str, str] | None = Field(default=None, repr=False)
     request_timeout: float | tuple[float, float] | None = None
@@ -1477,7 +1647,8 @@ class ChatLiteLLM(BaseChatModel):
        Must be positive."""
     n: int | None = None
     """Number of chat completions to generate for each prompt. Note that the API may
-       not return the full n completions if duplicates are generated."""
+       not return the full n completions if duplicates are generated. Streaming
+       yields a single message, so it raises ``ValueError`` when ``n`` is above 1."""
     max_tokens: int | None = None
     """The maximum number of tokens to generate in the reply."""
     num_ctx: int | None = None
@@ -1497,6 +1668,14 @@ class ChatLiteLLM(BaseChatModel):
             return True
         return self._litellm_sends_manual_thinking(overrides)
 
+    def _model_refuses_forced_tools(self, overrides: Mapping[str, Any]) -> bool:
+        """Answer whether the model this call reaches refuses any forced tool."""
+        model, provider = self._constructor_destination()
+        return _refuses_forced_tools(
+            overrides.get("model") or model or self.model,
+            overrides.get("custom_llm_provider") or provider,
+        )
+
     def _litellm_sends_manual_thinking(self, overrides: Mapping[str, Any]) -> bool:
         model, provider = self._constructor_destination()
         return _sends_manual_thinking(
@@ -1507,7 +1686,8 @@ class ChatLiteLLM(BaseChatModel):
         )
 
     def _is_claude_model(self) -> bool:
-        return "claude" in (self.model_name or self.model).lower()
+        model, _ = self._constructor_destination()
+        return _is_claude(model)
 
     @property
     def _default_params(self) -> dict[str, Any]:
@@ -1613,18 +1793,51 @@ class ChatLiteLLM(BaseChatModel):
 
     def _route_to_responses_api(self, params: Mapping[str, Any]) -> str:
         """The model to send so litellm's own bridge carries the call to a Responses
-        API: ``params["model"]`` named ``<provider>/responses/<model>``."""
-        model = params["model"]
+        API: the model ``params`` resolve to, named ``<provider>/responses/<model>``.
+
+        ``params`` resolve as ``_resolve_deployment`` resolves them, since litellm
+        settles the model and provider before it picks the route. litellm sends a
+        fallback under its own name, so any fallback setting is refused.
+        """
+        previous_id = self.use_previous_response_id
+        flag = "use_previous_response_id" if previous_id else "use_responses_api"
+        fallback = next((key for key in _FALLBACK_SETTINGS if params.get(key)), None)
+        if fallback is not None or litellm.model_fallbacks:
+            fix = (
+                "disable use_previous_response_id"
+                if previous_id
+                else "drop use_responses_api and name the model and each fallback "
+                "'<provider>/responses/<model>'"
+            )
+            raise ValueError(
+                f"{flag}=True, but {fallback or 'litellm.model_fallbacks'} is set, "
+                "and only the called model is routed to the Responses API, so a "
+                "fallback may reach Chat Completions. Remove that fallback setting, "
+                f"or {fix}."
+            )
+        resolved, model, provider, _ = _resolve_deployment(params)
+        if resolved.get("deployment_id") is not None:
+            # litellm puts the deployment in place of the model after this rename.
+            raise ValueError(
+                f"{flag}=True, but litellm cannot send a call with deployment_id to "
+                "a Responses API. Name the deployment in the model instead, as "
+                "'azure/<deployment>'."
+            )
         named, provider, _, _ = litellm.get_llm_provider(
-            model=model,
-            custom_llm_provider=params.get("custom_llm_provider"),
-            api_base=params.get("api_base"),
+            model=model, custom_llm_provider=provider, api_base=_sent_base(resolved)
         )
         routed = f"responses/{named.removeprefix('responses/')}"
         if not _sends_to_responses_api(routed, provider):
+            fix = (
+                "Chain an OpenAI or Azure Responses model, or drop "
+                "use_previous_response_id to send the full history."
+                if previous_id
+                else "Use a model litellm sends to a Responses API, or disable "
+                "use_responses_api."
+            )
             raise ValueError(
-                f"use_responses_api=True, but litellm cannot send {model!r} to a "
-                "Responses API."
+                f"{flag}=True, but litellm cannot send {model!r} to a Responses API. "
+                f"{fix}"
             )
         return f"{provider}/{routed}"
 
@@ -1647,10 +1860,20 @@ class ChatLiteLLM(BaseChatModel):
 
         A ``None`` override means "not supplied", matching how litellm reads params.
 
-        ``use_responses_api`` routes the destination once it is settled, so a
-        redirected call reaches the Responses API too. It is read like the
-        destination, from the call, ``model_kwargs`` or the field, and never sent.
+        ``use_responses_api`` is read from the call, ``model_kwargs`` or the field
+        and routes the destination once it is settled. ``use_previous_response_id``
+        is a model field, not a per-call LiteLLM parameter.
         """
+        if "use_previous_response_id" in kwargs:
+            raise ValueError(
+                "Set use_previous_response_id on the ChatLiteLLM model, not in "
+                "bind() or per-call arguments."
+            )
+        if "use_previous_response_id" in self.model_kwargs:
+            raise ValueError(
+                "Set use_previous_response_id on the ChatLiteLLM model, not in "
+                "model_kwargs."
+            )
         merged = {**params, **kwargs}
 
         # None means omitted: fall back rather than sending a null destination.
@@ -1661,7 +1884,7 @@ class ChatLiteLLM(BaseChatModel):
         use_responses_api = merged.pop("use_responses_api", None)
         if use_responses_api is None:
             use_responses_api = self.use_responses_api
-        if use_responses_api:
+        if use_responses_api or self.use_previous_response_id:
             merged["model"] = self._route_to_responses_api(merged)
 
         redirected = {
@@ -1722,10 +1945,18 @@ class ChatLiteLLM(BaseChatModel):
         messages: Sequence[BaseMessage],
         message_dicts: list[dict[str, Any]],
         params: dict[str, Any],
+        chained_response_id: str | None = None,
     ) -> str | None:
         """Replay what reasoning items this request may carry back; say who issues
         its reply's."""
-        endpoint = self._reasoning_endpoint(params)
+        reasoning_params = params
+        if (
+            chained_response_id is not None
+            and params.get("previous_response_id") == chained_response_id
+        ):
+            reasoning_params = {**params}
+            reasoning_params.pop("previous_response_id", None)
+        endpoint = self._reasoning_endpoint(reasoning_params)
         _attach_reasoning_items(messages, message_dicts, endpoint)
         return endpoint
 
@@ -1860,12 +2091,18 @@ class ChatLiteLLM(BaseChatModel):
             )
             return generate_from_stream(stream_iter)
 
+        messages, chained_response_id = self._messages_for_request(messages, kwargs)
         message_dicts, params = self._create_message_dicts(messages, stop)
+        if chained_response_id is not None:
+            params["previous_response_id"] = chained_response_id
         params = self._merge_call_params(params, kwargs)
+        self._validate_chained_request(params)
         # This branch parses a mapping, so it must not inherit stream=True from a
         # streaming=True instance that the caller overrode with stream=False.
         params["stream"] = False
-        reasoning = self._bind_reasoning(messages, message_dicts, params)
+        reasoning = self._bind_reasoning(
+            messages, message_dicts, params, chained_response_id
+        )
         binding = self._bind_thinking(messages, message_dicts, params)
         response = self.completion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
@@ -1889,6 +2126,7 @@ class ChatLiteLLM(BaseChatModel):
                 message.response_metadata = {
                     "model_name": self.model_name or self.model,
                     "model_provider": "litellm",
+                    **_response_id_metadata(response),
                     **_cost_metadata(response),
                 }
                 message.usage_metadata = usage_metadata
@@ -1925,6 +2163,34 @@ class ChatLiteLLM(BaseChatModel):
         message_dicts = [_convert_message_to_dict(m) for m in messages]
         return message_dicts, params
 
+    def _messages_for_request(
+        self, messages: list[BaseMessage], kwargs: Mapping[str, Any]
+    ) -> tuple[list[BaseMessage], str | None]:
+        """Trim history unless the caller supplied an explicit response id."""
+        explicit_id = kwargs.get("previous_response_id") or self.model_kwargs.get(
+            "previous_response_id"
+        )
+        if self.use_previous_response_id and not explicit_id:
+            return _last_messages_with_response_id(messages)
+        return messages, None
+
+    def _validate_chained_request(self, params: Mapping[str, Any]) -> None:
+        """Refuse chaining when replies are not stored.
+
+        ``_route_to_responses_api`` has already refused any fallback.
+        """
+        if not self.use_previous_response_id:
+            return
+        extra_body = params.get("extra_body")
+        if params.get("store") is False or (
+            isinstance(extra_body, Mapping) and extra_body.get("store") is False
+        ):
+            raise ValueError(
+                "use_previous_response_id=True requires stored Responses API "
+                "replies, but store=False was configured in store or extra_body. "
+                "Remove store=False or disable use_previous_response_id."
+            )
+
     def _stream(
         self,
         messages: list[BaseMessage],
@@ -1932,20 +2198,30 @@ class ChatLiteLLM(BaseChatModel):
         run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
+        messages, chained_response_id = self._messages_for_request(messages, kwargs)
         message_dicts, params = self._create_message_dicts(messages, stop)
+        if chained_response_id is not None:
+            params["previous_response_id"] = chained_response_id
         params = {**self._merge_call_params(params, kwargs), "stream": True}
-        if "stream_options" not in kwargs:
+        if params.get("n") is not None and params["n"] > 1:
+            raise ValueError("n must be 1 when streaming.")
+        self._validate_chained_request(params)
+        # `params` already holds the call kwargs and `model_kwargs`; either one wins.
+        if "stream_options" not in params:
             params["stream_options"] = (
                 self.stream_options
                 if self.stream_options is not None
                 else {"include_usage": True}
             )
-        reasoning = self._bind_reasoning(messages, message_dicts, params)
+        reasoning = self._bind_reasoning(
+            messages, message_dicts, params, chained_response_id
+        )
         binding = self._bind_thinking(messages, message_dicts, params)
         thinking = _ThinkingBlockAssembler(*binding) if binding else None
         default_chunk_class = AIMessageChunk
         first_chunk_yielded = False
         cost_named = False
+        reply_id = None
 
         for chunk in self.completion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
@@ -1953,6 +2229,8 @@ class ChatLiteLLM(BaseChatModel):
             # Ensure chunk is a dict
             if not isinstance(chunk, dict):
                 chunk = chunk.model_dump()
+            if chunk.get("id"):
+                reply_id = chunk["id"]
 
             # Extract usage metadata first
             usage_metadata = None
@@ -2002,6 +2280,8 @@ class ChatLiteLLM(BaseChatModel):
 
             if finish_reason is not None and isinstance(chunk, AIMessageChunk):
                 chunk.response_metadata["finish_reason"] = finish_reason
+                if reply_id:
+                    chunk.response_metadata["id"] = reply_id
 
             # Response-level, so here as on invoke, where llm_output lands them.
             if root_metadata and isinstance(chunk, AIMessageChunk):
@@ -2025,20 +2305,30 @@ class ChatLiteLLM(BaseChatModel):
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
+        messages, chained_response_id = self._messages_for_request(messages, kwargs)
         message_dicts, params = self._create_message_dicts(messages, stop)
+        if chained_response_id is not None:
+            params["previous_response_id"] = chained_response_id
         params = {**self._merge_call_params(params, kwargs), "stream": True}
-        if "stream_options" not in kwargs:
+        if params.get("n") is not None and params["n"] > 1:
+            raise ValueError("n must be 1 when streaming.")
+        self._validate_chained_request(params)
+        # `params` already holds the call kwargs and `model_kwargs`; either one wins.
+        if "stream_options" not in params:
             params["stream_options"] = (
                 self.stream_options
                 if self.stream_options is not None
                 else {"include_usage": True}
             )
-        reasoning = self._bind_reasoning(messages, message_dicts, params)
+        reasoning = self._bind_reasoning(
+            messages, message_dicts, params, chained_response_id
+        )
         binding = self._bind_thinking(messages, message_dicts, params)
         thinking = _ThinkingBlockAssembler(*binding) if binding else None
         default_chunk_class = AIMessageChunk
         first_chunk_yielded = False
         cost_named = False
+        reply_id = None
 
         async for chunk in await self.acompletion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
@@ -2046,6 +2336,8 @@ class ChatLiteLLM(BaseChatModel):
             # Ensure chunk is a dict
             if not isinstance(chunk, dict):
                 chunk = chunk.model_dump()
+            if chunk.get("id"):
+                reply_id = chunk["id"]
 
             # Extract usage metadata first
             usage_metadata = None
@@ -2094,6 +2386,8 @@ class ChatLiteLLM(BaseChatModel):
 
             if finish_reason is not None and isinstance(chunk, AIMessageChunk):
                 chunk.response_metadata["finish_reason"] = finish_reason
+                if reply_id:
+                    chunk.response_metadata["id"] = reply_id
 
             # Response-level, so here as on invoke, where llm_output lands them.
             if root_metadata and isinstance(chunk, AIMessageChunk):
@@ -2125,12 +2419,18 @@ class ChatLiteLLM(BaseChatModel):
             )
             return await agenerate_from_stream(stream_iter)
 
+        messages, chained_response_id = self._messages_for_request(messages, kwargs)
         message_dicts, params = self._create_message_dicts(messages, stop)
+        if chained_response_id is not None:
+            params["previous_response_id"] = chained_response_id
         params = self._merge_call_params(params, kwargs)
+        self._validate_chained_request(params)
         # This branch parses a mapping, so it must not inherit stream=True from a
         # streaming=True instance that the caller overrode with stream=False.
         params["stream"] = False
-        reasoning = self._bind_reasoning(messages, message_dicts, params)
+        reasoning = self._bind_reasoning(
+            messages, message_dicts, params, chained_response_id
+        )
         binding = self._bind_thinking(messages, message_dicts, params)
         response = await self.acompletion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
@@ -2217,8 +2517,8 @@ class ChatLiteLLM(BaseChatModel):
                     f"but the bound function tools are {tool_names}."
                 )
 
-        # Claude refuses a forced tool beside manual thinking, so downgrade to "auto"
-        # there; other providers and adaptive thinking keep the forced choice.
+        # Downgrade a forced choice to "auto" where it is refused: on a model litellm
+        # marks as refusing any forced tool, and on Claude beside manual thinking.
         # Prior art: langchain-ai/langchain#35544, langchain-ai/langchain-aws#927.
         # "any" is already mapped to "required" above, and litellm reads
         # {"type": "required"} as that same string.
@@ -2227,19 +2527,25 @@ class ChatLiteLLM(BaseChatModel):
             or function_choice is not None
             or (isinstance(tool_choice, dict) and tool_choice.get("type") == "required")
         )
-        if (
-            tool_choice_is_forced
-            and self._is_claude_model()
-            and self._thinking_refuses_forced_tools(kwargs)
-        ):
-            logger.warning(
-                "tool_choice=%r is incompatible with thinking/extended "
-                "thinking on Claude models. Downgrading tool_choice to 'auto' "
-                "so the model can produce chain-of-thought reasoning before "
-                "calling tools.",
-                tool_choice,
-            )
-            tool_choice = "auto"
+        if tool_choice_is_forced:
+            if self._model_refuses_forced_tools(kwargs):
+                logger.warning(
+                    "tool_choice=%r is unsupported by this model. "
+                    "Downgrading tool_choice to 'auto'; tool calls may be omitted.",
+                    tool_choice,
+                )
+                tool_choice = "auto"
+            elif self._is_claude_model() and self._thinking_refuses_forced_tools(
+                kwargs
+            ):
+                logger.warning(
+                    "tool_choice=%r is incompatible with thinking/extended "
+                    "thinking on Claude models. Downgrading tool_choice to 'auto' "
+                    "so the model can produce chain-of-thought reasoning before "
+                    "calling tools.",
+                    tool_choice,
+                )
+                tool_choice = "auto"
 
         return super().bind(tools=formatted_tools, tool_choice=tool_choice, **kwargs)
 
@@ -2267,7 +2573,16 @@ class ChatLiteLLM(BaseChatModel):
             tool_choice_value = "required"
             bind_kwargs = {"tool_choice": tool_choice_value}
 
-            if self._is_claude_model() and self._thinking_refuses_forced_tools({}):
+            warning_message: str | None = None
+            if self._model_refuses_forced_tools({}):
+                warning_message = (
+                    "Structured output via function calling is not guaranteed "
+                    "because this model does not support forced tool use. "
+                    "Tool calls may be omitted; this runnable will raise "
+                    "OutputParserException when no tool call is returned. "
+                    'Consider using `method="json_schema"` where supported.'
+                )
+            elif self._is_claude_model() and self._thinking_refuses_forced_tools({}):
                 warning_message = (
                     "Structured output via function calling is not guaranteed on "
                     "Claude models when `thinking` is enabled. Tool calls may be "
@@ -2275,6 +2590,8 @@ class ChatLiteLLM(BaseChatModel):
                     "no tool call is returned. Consider disabling `thinking` or "
                     'using `method="json_schema"`.'
                 )
+
+            if warning_message is not None:
                 warnings.warn(warning_message, stacklevel=2)
                 bind_kwargs = {}
 
@@ -2378,6 +2695,7 @@ class ChatLiteLLM(BaseChatModel):
             "n": self.n,
             "num_ctx": self.num_ctx,
             "use_responses_api": self.use_responses_api,
+            "use_previous_response_id": self.use_previous_response_id,
         }
 
     def _get_ls_params(
