@@ -4307,3 +4307,22 @@ def test_a_per_call_base_url_overrides_the_constructor_api_base(
     llm.invoke("hi", base_url="https://call.example/v1")
 
     assert requests[-1].url.host == "call.example"
+
+
+def test_create_usage_metadata_reports_audio_tokens() -> None:
+    """Audio counts are a standard detail key and must not be dropped.
+
+    Matches what `langchain-openai` reports for the same usage object.
+    """
+    usage = {
+        "prompt_tokens": 75,
+        "completion_tokens": 5,
+        "total_tokens": 80,
+        "prompt_tokens_details": {"audio_tokens": 60, "cached_tokens": 0},
+        "completion_tokens_details": {"audio_tokens": 4, "reasoning_tokens": 0},
+    }
+
+    meta = _create_usage_metadata(usage)
+
+    assert meta["input_token_details"] == {"audio": 60, "cache_read": 0}
+    assert meta["output_token_details"] == {"audio": 4, "reasoning": 0}

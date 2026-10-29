@@ -2763,7 +2763,14 @@ def _create_usage_metadata(token_usage: Any) -> UsageMetadata:
         if cache_creation is None:
             cache_creation = _get_field(prompt_details, "cache_creation_tokens")
 
+    input_audio = (
+        _get_field(prompt_details, "audio_tokens")
+        if prompt_details is not None
+        else None
+    )
+
     input_token_details: dict = {
+        "audio": int(input_audio) if input_audio is not None else None,
         "cache_read": int(cache_read) if cache_read is not None else None,
         "cache_creation": int(cache_creation) if cache_creation is not None else None,
     }
@@ -2791,7 +2798,13 @@ def _create_usage_metadata(token_usage: Any) -> UsageMetadata:
         if completion_details is not None
         else None
     )
+    output_audio = (
+        _get_field(completion_details, "audio_tokens")
+        if completion_details is not None
+        else None
+    )
     output_token_details: dict = {
+        "audio": int(output_audio) if output_audio is not None else None,
         "reasoning": int(reasoning) if reasoning is not None else None,
     }
 
