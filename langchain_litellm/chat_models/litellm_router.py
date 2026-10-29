@@ -21,6 +21,7 @@ from langchain_core.messages import (
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
 from langchain_litellm.chat_models.litellm import (
+    _FALLBACK_SETTINGS,
     _REPLAY_SETTINGS,
     ChatLiteLLM,
     _convert_delta_to_message_chunk,
@@ -44,13 +45,6 @@ from langchain_litellm.chat_models.litellm import (
     _sent_base,
     _stream_cost_metadata,
     _ThinkingBlockAssembler,
-)
-
-# Router settings that re-send a request to another group.
-_FALLBACK_SETTINGS = (
-    "fallbacks",
-    "context_window_fallbacks",
-    "content_policy_fallbacks",
 )
 
 

@@ -91,6 +91,12 @@ logger = logging.getLogger(__name__)
 
 # Per-call kwargs that decide WHERE litellm sends the request.
 _DESTINATION_KEYS = ("model", "custom_llm_provider")
+# Settings that make litellm or its Router re-send a failed request elsewhere.
+_FALLBACK_SETTINGS = (
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+)
 
 # OpenAI's string tool_choice modes, which litellm maps per provider. Any other
 # string names a tool.
@@ -527,14 +533,6 @@ def _sent_base(params: Mapping[str, Any]) -> str | None:
     """The base litellm sends to: ``base_url`` replaces ``api_base``."""
     base_url = params.get("base_url")
     return base_url if base_url is not None else params.get("api_base")
-
-
-# Call params that make litellm re-send a failed request to another model.
-_FALLBACK_PARAMS = (
-    "fallbacks",
-    "context_window_fallbacks",
-    "content_policy_fallbacks",
-)
 
 
 def _only_endpoint(params: Mapping[str, Any], endpoint: str | None) -> str | None:
@@ -1801,7 +1799,7 @@ class ChatLiteLLM(BaseChatModel):
         """
         previous_id = self.use_previous_response_id
         flag = "use_previous_response_id" if previous_id else "use_responses_api"
-        fallback = next((key for key in _FALLBACK_PARAMS if params.get(key)), None)
+        fallback = next((key for key in _FALLBACK_SETTINGS if params.get(key)), None)
         if fallback is not None or litellm.model_fallbacks:
             fix = (
                 "disable use_previous_response_id"
