@@ -1575,7 +1575,7 @@ wheels = [
 
 [[package]]
 name = "langchain-litellm"
-version = "0.11.2"
+version = "0.12.0"
 source = { editable = "." }
 default-groups = ["dev", "lint"]
 dependencies = [
