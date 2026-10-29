@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "langchain-litellm"
-version = "0.11.1"
+version = "0.11.2"
 
 description = "An integration package connecting LiteLLM and LangChain"
 readme = "README.md"
@@ -29,17 +29,18 @@ classifiers = [
 ]
 dependencies = [
     "langchain-core>=1.6.1,<2.0.0",
-    # 1.101.0 is the first litellm that puts a streamed reply's cost on the stream.
-    "litellm>=1.101.0,<2.0.0",
-    "httpx>=0.28.1,<0.29.0",
+    # 1.107.0 is malware (litellm incident, 2026-10-21); the incident report says to pin
+    # 1.106.2, which imports `mcp` on every Responses API call and any call with tools.
+    "litellm[mcp]>=1.106.2,!=1.107.0",
+    "httpx>=0.28.1",
     # litellm 1.101.0 through 1.102.2 fail to import on pydantic 2.10, and 2.12.0 is
     # the first pydantic that installs on Python 3.14.
-    "pydantic>=2.11.0,<3.0.0; python_version < '3.14'",
-    "pydantic>=2.12.0,<3.0.0; python_version >= '3.14'",
+    "pydantic>=2.11.0; python_version < '3.14'",
+    "pydantic>=2.12.0; python_version >= '3.14'",
     # langchain-core 1.6.1 needs 4.13.0, through langchain-protocol; pydantic 2.12.0
     # needs 4.14.1.
-    "typing-extensions>=4.13.0,<5.0.0; python_version < '3.14'",
-    "typing-extensions>=4.14.1,<5.0.0; python_version >= '3.14'",
+    "typing-extensions>=4.13.0; python_version < '3.14'",
+    "typing-extensions>=4.14.1; python_version >= '3.14'",
 ]
 
 [project.urls]
@@ -104,6 +105,9 @@ typing = [
 # A plain `uv sync` installs the locked ruff too, so an editor that uses the
 # project environment lints with exactly the ruff `make lint` and CI run.
 default-groups = ["dev", "lint"]
+# litellm caps filelock below 4.0, but only 4.2.1 fixes filelock's 2026-10 advisories;
+# this reaches the lock, never the wheel. Drop it once litellm allows filelock 4.
+override-dependencies = ["filelock>=4.2.1"]
 
 [tool.mypy]
 disallow_untyped_defs = "True"

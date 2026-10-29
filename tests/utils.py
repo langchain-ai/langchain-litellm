@@ -206,16 +206,17 @@ def gemini_reply(text: str, grounding: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def whole_reply(llm: BaseChatModel, method: str) -> BaseMessage:
-    """The reply to "hi" read through ``method``, with a stream's chunks merged."""
+async def whole_reply(llm: BaseChatModel, method: str, **kwargs: Any) -> BaseMessage:
+    """The reply to "hi" read through ``method`` with ``kwargs`` on the call, with a
+    stream's chunks merged."""
     if method == "invoke":
-        return llm.invoke("hi")
+        return llm.invoke("hi", **kwargs)
     if method == "ainvoke":
-        return await llm.ainvoke("hi")
+        return await llm.ainvoke("hi", **kwargs)
     if method == "stream":
-        chunks = list(llm.stream("hi"))
+        chunks = list(llm.stream("hi", **kwargs))
     else:
-        chunks = [chunk async for chunk in llm.astream("hi")]
+        chunks = [chunk async for chunk in llm.astream("hi", **kwargs)]
     merged = chunks[0]
     for chunk in chunks[1:]:
         merged += chunk
