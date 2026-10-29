@@ -1443,6 +1443,17 @@ def test_cache_lifetime_details_invalid_preserve_aggregate(one_hour: Any) -> Non
     }
 
 
+@pytest.mark.parametrize("one_hour", [-1, True])
+def test_cache_lifetime_details_invalid_without_aggregate_are_ignored(
+    one_hour: Any,
+) -> None:
+    usage = _cache_lifetime_usage(
+        {"ephemeral_5m_input_tokens": 40, "ephemeral_1h_input_tokens": one_hour}
+    )
+    del usage["prompt_tokens_details"]["cache_creation_tokens"]
+    assert _create_usage_metadata(usage)["input_token_details"] == {"cache_read": 400}
+
+
 @pytest.mark.parametrize("router", [False, True])
 @pytest.mark.parametrize("method", ["invoke", "ainvoke", "stream", "astream"])
 @pytest.mark.parametrize("has_split", [False, True])
