@@ -58,6 +58,7 @@ from tests.utils import (
     responses_api_events,
     responses_api_reply,
     serve_http,
+    serve_requests,
     whole_reply,
 )
 
@@ -3866,10 +3867,16 @@ def test_use_responses_api_rejects_fallbacks(key: str, in_model_kwargs: bool) ->
 
     with (
         patch.object(llm.client, "completion") as completion,
-        pytest.raises(ValueError, match=key),
+        pytest.raises(ValueError) as exc_info,
     ):
         llm.invoke("hi", **call)
 
+    assert str(exc_info.value) == (
+        f"use_responses_api=True, but {key} is set, and only the called model is "
+        "routed to the Responses API, so a fallback may reach Chat Completions. "
+        "Remove that fallback setting, or drop use_responses_api and name the "
+        "model and each fallback '<provider>/responses/<model>'."
+    )
     completion.assert_not_called()
 
 
@@ -3881,11 +3888,40 @@ def test_use_responses_api_rejects_litellm_model_fallbacks(
 
     with (
         patch.object(llm.client, "completion") as completion,
-        pytest.raises(ValueError, match="model_fallbacks"),
+        pytest.raises(ValueError) as exc_info,
     ):
         llm.invoke("hi")
 
+    assert str(exc_info.value) == (
+        "use_responses_api=True, but litellm.model_fallbacks is set, and only the "
+        "called model is routed to the Responses API, so a fallback may reach Chat "
+        "Completions. Remove that fallback setting, or drop use_responses_api and "
+        "name the model and each fallback '<provider>/responses/<model>'."
+    )
     completion.assert_not_called()
+
+
+def test_fallbacks_named_for_the_responses_api_reach_it_without_the_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The refusal's advice holds: litellm sends each name where it points."""
+    sent: list[tuple[str, str]] = []
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        sent.append((request.url.path, json.loads(request.content)["model"]))
+        if len(sent) == 1:
+            return httpx.Response(
+                400, json={"error": {"message": "no"}}, request=request
+            )
+        return httpx.Response(
+            200, json=responses_api_reply(message_item("ok")), request=request
+        )
+
+    serve_requests(monkeypatch, reply)
+    llm = ChatLiteLLM(model="openai/responses/gpt-4o-mini", api_key="k")
+
+    assert llm.invoke("hi", fallbacks=["openai/responses/gpt-4.1-nano"]).content == "ok"
+    assert sent == [("/v1/responses", "gpt-4o-mini"), ("/v1/responses", "gpt-4.1-nano")]
 
 
 def test_use_responses_api_keeps_its_own_cache_entries() -> None:
