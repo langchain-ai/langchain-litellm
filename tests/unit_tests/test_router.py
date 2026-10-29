@@ -1338,6 +1338,58 @@ def test_router_names_a_streamed_cost_once() -> None:
     assert _merge(chunks).response_metadata["response_cost"] == 1.0e-06
 
 
+@pytest.mark.parametrize("method", ["invoke", "ainvoke", "stream", "astream"])
+async def test_router_names_the_fallback_that_answered(method: str) -> None:
+    """A fallback answers from another group, so the alias called is not the model.
+
+    Merged, a stream that named the model on two chunks would read it twice.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "model_info": {"id": "primary-id"},
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "k"},
+            },
+            {
+                "model_name": "fallback_0",
+                "model_info": {"id": "fallback-id"},
+                "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "k"},
+            },
+        ],
+        fallbacks=[{"primary": ["fallback_0"]}],
+    )
+    llm = ChatLiteLLMRouter(router=router, model="primary")
+
+    # litellm fails the primary deployment, so the fallback group answers.
+    message = await whole_reply(
+        llm, method, mock_response="hi", mock_testing_fallbacks=True
+    )
+
+    assert message.response_metadata["model_name"] == "openai/gpt-3.5-turbo"
+    assert message.response_metadata["model_id"] == "fallback-id"
+    assert llm.model == "primary"
+
+
+@pytest.mark.parametrize("method", ["invoke", "ainvoke", "stream", "astream"])
+async def test_router_names_the_model_a_wildcard_deployment_sent(method: str) -> None:
+    """A wildcard deployment configures a pattern, which litellm fills in from the
+    model called, so the called name is the one sent."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "k"},
+            }
+        ]
+    )
+    llm = ChatLiteLLMRouter(router=router, model="openai/gpt-4o")
+
+    message = await whole_reply(llm, method, mock_response="hi")
+
+    assert message.response_metadata["model_name"] == "openai/gpt-4o"
+
+
 @pytest.mark.asyncio
 async def test_router_names_an_astreamed_cost_once() -> None:
     """The async loop merges the same way, so it needs the same guarantee."""
@@ -1457,10 +1509,35 @@ def test_deployment_is_read_from_either_shape_litellm_hands_over() -> None:
     from types import SimpleNamespace
 
     named = {"model_id": "deployment-A"}
-    assert _deployment_metadata({"_hidden_params": named}) == named
-    assert _deployment_metadata(SimpleNamespace(_hidden_params=named)) == named
-    assert _deployment_metadata({"_hidden_params": {"model_id": None}}) == {}
-    assert _deployment_metadata({}) == {}
+    assert _deployment_metadata({"_hidden_params": named}, None) == named
+    assert _deployment_metadata(SimpleNamespace(_hidden_params=named), None) == named
+    assert _deployment_metadata({"_hidden_params": {"model_id": None}}, None) == {}
+    assert _deployment_metadata({}, None) == {}
+
+
+def test_deployment_metadata_resolves_model_name() -> None:
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "model_info": {"id": "deployment-A"},
+                "litellm_params": {"model": "openai/gpt-4o-mini"},
+            },
+            {
+                "model_name": "fallback_0",
+                "model_info": {"id": "deployment-B"},
+                "litellm_params": {"model": "openai/gpt-3.5-turbo"},
+            },
+        ]
+    )
+    response = {"_hidden_params": {"model_id": "deployment-B"}}
+
+    metadata = _deployment_metadata(response, router)
+
+    assert metadata == {
+        "model_id": "deployment-B",
+        "model_name": "openai/gpt-3.5-turbo",
+    }
 
 
 def test_router_create_chat_result_names_the_cost_and_deployment() -> None:

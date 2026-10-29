@@ -103,8 +103,9 @@ token_usage_key_name = "token_usage"  # nosec # incorrectly flagged as password
 model_extra_key_name = "model_extra"  # nosec # incorrectly flagged as password
 
 
-def _deployment_metadata(response: Any) -> dict[str, Any]:
-    """Name which deployment the router picked, never the rest of `_hidden_params`.
+def _deployment_metadata(response: Any, router: Any) -> dict[str, Any]:
+    """Name which deployment the router picked and its model, never the rest of
+    `_hidden_params`. A fallback answers from another group than the one called.
 
     `_hidden_params` also carries `api_base` and the resolved request params, and
     this metadata reaches every trace and log. Only the router routes, and only its
@@ -112,7 +113,17 @@ def _deployment_metadata(response: Any) -> dict[str, Any]:
     which drops the private attribute this reads.
     """
     model_id = _get_field(_get_field(response, "_hidden_params"), "model_id")
-    return {"model_id": model_id} if model_id is not None else {}
+    if model_id is None:
+        return {}
+    metadata = {"model_id": model_id}
+    for deployment in getattr(router, "model_list", None) or []:
+        if (deployment.get("model_info") or {}).get("id") == model_id:
+            model_name = (deployment.get("litellm_params") or {}).get("model")
+            # A wildcard deployment names a pattern, which litellm fills in per call.
+            if model_name and "*" not in model_name:
+                metadata["model_name"] = model_name
+            break
+    return metadata
 
 
 class ChatLiteLLMRouter(ChatLiteLLM):
@@ -691,7 +702,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             # branch below and the content path need these. A cost named on two
             # chunks cannot be merged, since langchain raises on two floats.
             cost_metadata = {} if cost_named else _stream_cost_metadata(chunk)
-            deployment_metadata = _deployment_metadata(chunk)
+            deployment_metadata = (
+                {} if first_chunk_yielded else _deployment_metadata(chunk, self.router)
+            )
 
             if len(chunk["choices"]) == 0:
                 # If the chunk has usage metadata but no content (typical for final stream chunk),
@@ -808,7 +821,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             # branch below and the content path need these. A cost named on two
             # chunks cannot be merged, since langchain raises on two floats.
             cost_metadata = {} if cost_named else _stream_cost_metadata(chunk)
-            deployment_metadata = _deployment_metadata(chunk)
+            deployment_metadata = (
+                {} if first_chunk_yielded else _deployment_metadata(chunk, self.router)
+            )
 
             # Check for empty choices
             if len(chunk["choices"]) == 0:
@@ -959,7 +974,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                     "model_name": self.model_name or self.model,
                     "model_provider": "litellm",
                     **_response_id_metadata(response),
-                    **_deployment_metadata(response),
+                    **_deployment_metadata(response, self.router),
                     **_cost_metadata(response),
                 }
                 message.usage_metadata = usage_metadata
