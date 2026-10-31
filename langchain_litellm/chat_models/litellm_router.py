@@ -396,10 +396,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                 f"group or disable {flag}."
             )
         # Ahead of the deployment checks: under a proxy they name the wrong cause.
-        if self.use_previous_response_id and (
-            litellm.use_litellm_proxy is True
-            or litellm.get_secret_bool("USE_LITELLM_PROXY") is True
-        ):
+        if self.use_previous_response_id and self._proxy_enabled():
             raise ValueError(
                 "use_previous_response_id=True cannot safely chain model "
                 f"group {group!r} because litellm.use_litellm_proxy or "
@@ -422,6 +419,16 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             gap = _deployment_gap(deployment)
             if gap is not None:
                 gaps.setdefault(deployment["model"], gap)
+        if gaps and self._proxy_enabled():
+            # Behind a proxy litellm sends every deployment as 'litellm_proxy/<name>',
+            # so the rename in the gap would reach the proxy as a different model.
+            raise ValueError(
+                f"{flag}=True, but litellm.use_litellm_proxy or USE_LITELLM_PROXY "
+                f"is enabled, so litellm sends the deployments of model group "
+                f"{group!r} through the proxy and ChatLiteLLMRouter cannot tell "
+                "which Responses API answers. Disable proxy routing or disable "
+                f"{flag}."
+            )
         if gaps:
             lines = "".join(f"\n- {model!r}: {gap}" for model, gap in gaps.items())
             # Each line names the rename that fixes it, where a rename can.
@@ -438,6 +445,13 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         if self.use_previous_response_id:
             self._check_one_response_store(sent, group)
         return group
+
+    @staticmethod
+    def _proxy_enabled() -> bool:
+        return (
+            litellm.use_litellm_proxy is True
+            or litellm.get_secret_bool("USE_LITELLM_PROXY") is True
+        )
 
     def _check_one_response_store(self, sent: dict[str, Any], group: str) -> None:
         """Refuse a chained call unless every deployment of ``group`` keeps its
