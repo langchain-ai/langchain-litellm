@@ -47,6 +47,15 @@ body:
         If this bug is related to any existing issues or pull requests, please link them here.
       placeholder: |
         * e.g. #123, #456
+  - type: input
+    id: provider-model
+    attributes:
+      label: Provider and model
+      description: |
+        The exact `model` string you pass, including the litellm provider prefix, and the class you call: `ChatLiteLLM`, `ChatLiteLLMRouter` or a LiteLLM proxy. For `ChatLiteLLMRouter`, give the `model` in the deployment's `litellm_params`.
+      placeholder: "openai/gpt-4o-mini via ChatLiteLLM"
+    validations:
+      required: true
   - type: textarea
     id: reproduction
     validations:
@@ -102,7 +111,7 @@ body:
       description: |
         Please share your system info with us.
 
-        Run the following command in your terminal and paste the output here:
+        Run the following command in the environment that shows the bug and paste the full output here. `litellm` is listed under "Other Dependencies", so please don't trim it:
 
         `python -m langchain_core.sys_info`
 
