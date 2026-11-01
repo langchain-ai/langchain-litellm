@@ -62,6 +62,10 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
+    # The tag pins Python 3.11 on purpose and Microsoft rebuilds it with image fixes;
+    # Dependabot reads 3-3.11-trixie as version 3 and jumps Python to the newest.
+    ignore:
+      - dependency-name: "devcontainers/python"
     groups:
       devcontainer:
         applies-to: version-updates
