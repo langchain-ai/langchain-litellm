@@ -58,9 +58,12 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
             )
     """
 
-    model: str = "openai/text-embedding-3-small"
+    model: str
     """Model name in litellm format (e.g. 'openai/text-embedding-3-small',
-    'cohere/embed-english-v3.0', 'bedrock/amazon.titan-embed-text-v1')."""
+    'cohere/embed-english-v3.0', 'bedrock/amazon.titan-embed-text-v1').
+
+    Required: there is no default, since any model picked here is one its provider
+    will eventually retire."""
 
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
     """Reject unknown constructor kwargs, naming them without echoing their values.
@@ -124,7 +127,8 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
     @model_validator(mode="before")
     @classmethod
     def _normalize_base_url_alias(cls, values: Any) -> Any:
-        """Accept base_url as a runtime alias for api_base.
+        """Accept base_url as a runtime alias for api_base, and refuse unknown keys
+        and a missing model.
 
         Keyed on the VALUE, not key presence: ``api_base=None`` is the field's
         own default, so treating it as "supplied" would silently drop base_url
@@ -146,6 +150,12 @@ class LiteLLMEmbeddings(BaseModel, Embeddings):
             raise ValueError(
                 f"Unexpected keyword arguments: {', '.join(unknown)}. "
                 "Pass provider-specific values through model_kwargs."
+            )
+        # A subclass that declares a default model keeps it.
+        if not values.get("model") and cls.model_fields["model"].is_required():
+            raise ValueError(
+                f'{cls.__name__} needs a model: pass model="<provider>/<model>", '
+                "the name litellm routes by."
             )
         return values
 

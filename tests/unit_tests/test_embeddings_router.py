@@ -202,15 +202,16 @@ async def test_embeddings_router_honours_max_retries_on_the_async_path(
 @pytest.mark.parametrize(
     "model_list",
     [
+        [],
         [{"litellm_params": {"model": "openai/text-embedding-3-small"}}],
         [{"model_name": None, "litellm_params": {}}],
         ["not-a-dict"],
     ],
 )
-def test_embeddings_router_falls_back_when_the_first_entry_has_no_alias(
+def test_embeddings_router_needs_a_model_when_its_model_list_names_none(
     model_list: Any,
 ) -> None:
-    """A partial or stubbed model_list must leave the field default in place."""
+    """A partial or stubbed model_list leaves no group to take the model from."""
 
     class _Stub:
         pass
@@ -218,14 +219,25 @@ def test_embeddings_router_falls_back_when_the_first_entry_has_no_alias(
     stub = _Stub()
     stub.model_list = model_list  # type: ignore[attr-defined]
 
-    embeddings = LiteLLMEmbeddingsRouter(router=stub)
+    with pytest.raises(ValueError) as caught:
+        LiteLLMEmbeddingsRouter(router=stub)
 
-    assert embeddings.model == LiteLLMEmbeddingsRouter.model_fields["model"].default
+    assert str(caught.value) == (
+        'LiteLLMEmbeddingsRouter needs a model: pass model="<model group>", '
+        "since the Router's model_list names none."
+    )
+    assert LiteLLMEmbeddingsRouter(router=stub, model="emb").model == "emb"
 
 
 def test_embeddings_router_defaults_its_model_from_the_router() -> None:
     """ChatLiteLLMRouter does this; the embeddings router left `model` unset."""
     embeddings = LiteLLMEmbeddingsRouter(router=_one_deployment_router())
+    assert embeddings.model == "emb-small"
+
+
+def test_embeddings_router_takes_an_unset_model_from_the_router() -> None:
+    """``None`` is what a config built from ``os.getenv`` carries for unset."""
+    embeddings = LiteLLMEmbeddingsRouter(router=_one_deployment_router(), model=None)
     assert embeddings.model == "emb-small"
 
 
