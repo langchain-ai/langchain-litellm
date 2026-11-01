@@ -3789,6 +3789,13 @@ def _responses_endpoint(monkeypatch: pytest.MonkeyPatch) -> list[httpx.Request]:
             "https://openrouter.ai/api/v1/responses",
             "openai/gpt-4o-mini",
         ),
+        # litellm reads a 'chat_completions/' prefix only on an OpenAI name.
+        (
+            "hosted_vllm/chat_completions/fake-model",
+            {"api_base": "https://vllm.example/v1"},
+            "https://vllm.example/v1/responses",
+            "chat_completions/fake-model",
+        ),
         (
             "fake-deployment",
             {
@@ -4383,6 +4390,51 @@ def test_behind_a_proxy_the_flag_changes_the_endpoint_not_the_model(
         assert llm.invoke("hi").content == "ok"
 
     assert sent == [(path, received), ("/responses", received)]
+
+
+@pytest.mark.parametrize(
+    ("flag", "fix"),
+    [
+        pytest.param(
+            "use_responses_api",
+            "Use a model litellm sends to a Responses API, or disable "
+            "use_responses_api.",
+            id="use_responses_api",
+        ),
+        pytest.param(
+            "use_previous_response_id",
+            "Chain an OpenAI or Azure Responses model, or drop "
+            "use_previous_response_id to send the full history.",
+            id="use_previous_response_id",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("model", "config"),
+    [
+        ("openai/chat_completions/gpt-4o-mini", {}),
+        ("openai/chat_completions/gpt-4o-mini", {"api_base": "https://gw.example/v1"}),
+        ("chat_completions/gpt-4o-mini", {"custom_llm_provider": "openai"}),
+        ("openai/responses/chat_completions/gpt-4o-mini", {}),
+    ],
+)
+def test_responses_refuses_a_name_that_asks_for_chat_completions(
+    flag: str, fix: str, model: str, config: dict[str, Any]
+) -> None:
+    """litellm's bridge drops the routing 'responses/', then answers the OpenAI
+    name left, which asks for Chat Completions, over Chat Completions."""
+    llm = ChatLiteLLM(model=model, api_key="k", **{flag: True, **config})
+
+    with (
+        patch.object(llm.client, "completion") as completion,
+        pytest.raises(ValueError) as exc_info,
+    ):
+        llm.invoke("hi")
+
+    assert str(exc_info.value) == (
+        f"{flag}=True, but litellm cannot send {model!r} to a Responses API. {fix}"
+    )
+    completion.assert_not_called()
 
 
 @pytest.mark.parametrize("name", ["proxy_base_url", "openai_api_base"])
