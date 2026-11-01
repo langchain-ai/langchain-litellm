@@ -36,6 +36,11 @@ def mock_ocr_response() -> dict[str, Any]:
 class TestLiteLLMOCRLoaderValidation:
     """Test input validation."""
 
+    def test_missing_model_raises_error(self) -> None:
+        """Any default would be a name the proxy may not define."""
+        with pytest.raises(TypeError, match="keyword-only argument: 'model'"):
+            LiteLLMOCRLoader(url_path="https://example.com/doc.pdf")  # type: ignore[call-arg]
+
     def test_no_input_source_raises_error(self) -> None:
         """Test that missing input source raises ValueError."""
         with pytest.raises(ValueError, match="Must provide exactly one"):

@@ -354,3 +354,15 @@ def test_embeddings_token_in_extra_headers_is_not_shown_in_repr() -> None:
             extra_headers={"Authorization": "Bearer sk-should-not-appear"},
         )
     )
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"model": None}, {"model": ""}])
+def test_embeddings_without_a_model_are_refused(kwargs: dict) -> None:
+    """Any default would be a model its provider eventually retires."""
+    with pytest.raises(ValidationError) as caught:
+        LiteLLMEmbeddings(**kwargs)
+
+    assert caught.value.errors()[0]["msg"] == (
+        "Value error, LiteLLMEmbeddings needs a model: "
+        'pass model="<provider>/<model>", the name litellm routes by.'
+    )
