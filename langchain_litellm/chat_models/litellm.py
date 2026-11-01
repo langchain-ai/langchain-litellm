@@ -478,11 +478,15 @@ def _responses_api_gap(model: str, provider: str) -> str | None:
     )
     if config is None:
         return f"litellm has no Responses API for provider {provider!r}"
-    bridge, _ = litellm.main.responses_api_bridge_check(
+    bridge, sent = litellm.main.responses_api_bridge_check(
         model=model, custom_llm_provider=provider
     )
     if bridge.get("mode") != "responses":
         return "litellm sends it to Chat Completions"
+    # The bridge drops 'responses/' before litellm reads the name, so a routed
+    # OpenAI name can still ask for Chat Completions.
+    if provider == "openai" and sent.startswith("chat_completions/"):
+        return "its name asks for Chat Completions"
     return None
 
 
@@ -1656,7 +1660,8 @@ class ChatLiteLLM(BaseChatModel):
     model: name the model ``azure/<deployment>`` instead. A name litellm would send
     as another model raises it as well: litellm drops every ``responses/`` from a
     routed name, so behind a proxy ``openai/responses/gpt-4o-mini`` would arrive as
-    ``openai/gpt-4o-mini``. Any fallback raises too,
+    ``openai/gpt-4o-mini``. So does an OpenAI name that asks litellm for Chat
+    Completions, such as ``openai/chat_completions/<model>``. Any fallback raises too,
     since litellm sends it under its own name; to keep fallbacks, drop the flag and
     name the model and each fallback ``<provider>/responses/<model>``. ``None`` and
     ``False`` leave the route to litellm, which sends some models, such as
