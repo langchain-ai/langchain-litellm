@@ -1791,6 +1791,7 @@ def test_base_neither_replays_nor_keeps_under_a_litellm_wide_redirect(
                 "guardrailConfig": {"guardrailIdentifier": "g"},
                 "performanceConfig": {"latency": "optimized"},
                 "requestMetadata": {"k": "v"},
+                "model_id": ARN,
             },
         ),
         (
