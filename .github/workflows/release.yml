@@ -42,7 +42,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout release branch
+      # Keeps credentials: this job pushes the refreshed uv.lock back.
+      - name: Checkout release branch # zizmor: ignore[artipacked]
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ fromJson(needs.release-please.outputs.pr).headBranchName }}
@@ -108,6 +109,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
           ref: >-
             ${{

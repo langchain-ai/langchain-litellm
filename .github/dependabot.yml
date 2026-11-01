@@ -5,6 +5,10 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Version updates wait a week so a bad release can be yanked first;
+    # security updates ignore the cooldown.
+    cooldown:
+      default-days: 7
     versioning-strategy: increase
     ignore:
       - dependency-name: "langchain-core"
@@ -30,6 +34,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     groups:
       github-actions:
         applies-to: version-updates
