@@ -660,6 +660,80 @@ async def test_a_deployment_id_replaces_the_model(
     ]
 
 
+@pytest.mark.parametrize(
+    ("proxy", "deployment", "reason"),
+    [
+        pytest.param(
+            "global",
+            "openai/responses/gpt-4o-mini",
+            "litellm sends it to Chat Completions",
+            id="use_litellm_proxy",
+        ),
+        pytest.param(
+            "environment",
+            "openai/responses/gpt-4o-mini",
+            "litellm sends it to Chat Completions",
+            id="USE_LITELLM_PROXY",
+        ),
+        pytest.param(
+            None,
+            "litellm_proxy/openai/responses/gpt-4o-mini",
+            "litellm sends it to Chat Completions",
+            id="named-for-the-proxy",
+        ),
+        pytest.param(
+            None,
+            "litellm_proxy/chat_completions/gpt-4o-mini",
+            "its name asks for Chat Completions",
+            id="chat-completions-prefix",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_behind_a_proxy_no_rename_that_changes_the_model_is_suggested(
+    monkeypatch: pytest.MonkeyPatch, proxy: str | None, deployment: str, reason: str
+) -> None:
+    """The proxy reads the name as written, so a rename asks it for another model."""
+    if proxy == "global":
+        monkeypatch.setattr(litellm, "use_litellm_proxy", True)
+    elif proxy == "environment":
+        monkeypatch.setenv("USE_LITELLM_PROXY", "True")
+    llm = ChatLiteLLMRouter(router=_router(deployment), use_responses_api=True)
+
+    refusal = await _refused(llm, "invoke")
+
+    assert refusal.splitlines()[1:] == [f"- {deployment!r}: {reason}"]
+
+
+def test_behind_a_proxy_the_suggested_name_keeps_the_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Followed, the rename sends the proxy the same model, only to /responses."""
+    monkeypatch.setattr(litellm, "use_litellm_proxy", True)
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://proxy.example")
+    requests = serve_http(monkeypatch, REPLY)
+    llm = ChatLiteLLMRouter(
+        router=_router("openai/gpt-4o-mini"), use_responses_api=True
+    )
+
+    with pytest.raises(ValueError) as refusal:
+        llm.invoke("hi")
+    ChatLiteLLMRouter(
+        router=_router("litellm_proxy/responses/openai/gpt-4o-mini"),
+        use_responses_api=True,
+    ).invoke("hi")
+
+    assert str(refusal.value).splitlines()[1:] == [
+        (
+            "- 'openai/gpt-4o-mini': litellm sends it to Chat Completions; "
+            "name it 'litellm_proxy/responses/openai/gpt-4o-mini'"
+        )
+    ]
+    assert [
+        (request.url.path, json.loads(request.content)["model"]) for request in requests
+    ] == [("/responses", "openai/gpt-4o-mini")]
+
+
 @pytest.mark.asyncio
 async def test_a_deployment_that_mirrors_the_call_is_refused() -> None:
     """The Router also sends the call to the silent_model group, unchecked."""

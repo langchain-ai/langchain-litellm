@@ -692,34 +692,6 @@ def test_router_refuses_litellm_proxy_for_chaining(
     assert requests == []
 
 
-@pytest.mark.parametrize("source", ["global", "environment"])
-def test_router_names_litellm_proxy_instead_of_suggesting_a_rename(
-    monkeypatch: pytest.MonkeyPatch, source: str
-) -> None:
-    """Behind a proxy the suggested rename reaches it as a different model."""
-    requests = serve_http(monkeypatch, responses_api_reply(message_item("ok")))
-    if source == "global":
-        monkeypatch.setattr(litellm, "use_litellm_proxy", True)
-    else:
-        monkeypatch.setenv("USE_LITELLM_PROXY", "True")
-    llm = ChatLiteLLMRouter(
-        router=_store_test_router({"model": "openai/responses/gpt-4o-mini"}),
-        model_name="g",
-        use_responses_api=True,
-    )
-
-    with pytest.raises(ValueError) as exc_info:
-        llm.invoke("hi")
-
-    assert str(exc_info.value) == (
-        "use_responses_api=True, but litellm.use_litellm_proxy or "
-        "USE_LITELLM_PROXY is enabled, so litellm sends the deployments of model "
-        "group 'g' through the proxy and ChatLiteLLMRouter cannot tell which "
-        "Responses API answers. Disable proxy routing or disable use_responses_api."
-    )
-    assert requests == []
-
-
 def get_weather(city: str) -> str:
     """Report the weather in a city."""
     return city
