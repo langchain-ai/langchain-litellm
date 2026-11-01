@@ -26,8 +26,9 @@ class TestLiteLLMEmbeddingsUnit(EmbeddingsUnitTests):
 class TestLiteLLMEmbeddingsParams:
     def test_default_params(self):
         """Test default parameter values."""
-        embeddings = LiteLLMEmbeddings(api_key="fake")
-        assert embeddings.model == "openai/text-embedding-3-small"
+        embeddings = LiteLLMEmbeddings(
+            model="openai/text-embedding-3-small", api_key="fake"
+        )
         assert embeddings.max_retries == 1
         assert embeddings.api_base is None
 
@@ -90,6 +91,7 @@ class TestLiteLLMEmbeddingsParams:
     def test_model_kwargs_merged(self):
         """Test that model_kwargs are merged into params."""
         embeddings = LiteLLMEmbeddings(
+            model="openai/text-embedding-3-small",
             api_key="fake",
             model_kwargs={"user": "test-user"},
         )
@@ -109,11 +111,19 @@ class TestLiteLLMEmbeddingsParams:
     def test_encoding_format_rejects_base64(self):
         """Test that encoding_format='base64' is rejected by validation."""
         with pytest.raises(ValidationError):
-            LiteLLMEmbeddings(api_key="fake", encoding_format="base64")
+            LiteLLMEmbeddings(
+                model="openai/text-embedding-3-small",
+                api_key="fake",
+                encoding_format="base64",
+            )
 
     def test_encoding_format_accepts_float(self):
         """Test that encoding_format='float' is accepted."""
-        embeddings = LiteLLMEmbeddings(api_key="fake", encoding_format="float")
+        embeddings = LiteLLMEmbeddings(
+            model="openai/text-embedding-3-small",
+            api_key="fake",
+            encoding_format="float",
+        )
         assert embeddings.encoding_format == "float"
 
     @patch("litellm.embedding")
@@ -189,14 +199,18 @@ class TestLiteLLMEmbeddingsParams:
 
     def test_embed_documents_empty_list(self):
         """Test that embed_documents returns [] for empty input without API call."""
-        embeddings = LiteLLMEmbeddings(api_key="fake")
+        embeddings = LiteLLMEmbeddings(
+            model="openai/text-embedding-3-small", api_key="fake"
+        )
         result = embeddings.embed_documents([])
         assert result == []
 
     @pytest.mark.asyncio
     async def test_aembed_documents_empty_list(self):
         """Test that aembed_documents returns [] for empty input without API call."""
-        embeddings = LiteLLMEmbeddings(api_key="fake")
+        embeddings = LiteLLMEmbeddings(
+            model="openai/text-embedding-3-small", api_key="fake"
+        )
         result = await embeddings.aembed_documents([])
         assert result == []
 
@@ -366,3 +380,12 @@ def test_embeddings_without_a_model_are_refused(kwargs: dict) -> None:
         "Value error, LiteLLMEmbeddings needs a model: "
         'pass model="<provider>/<model>", the name litellm routes by.'
     )
+
+
+def test_an_embeddings_subclass_can_still_default_its_model() -> None:
+    """Only a missing model is refused, so a subclass that names one keeps it."""
+
+    class _Pinned(LiteLLMEmbeddings):
+        model: str = "openai/pinned"
+
+    assert _Pinned().model == "openai/pinned"

@@ -44,19 +44,22 @@ class TestLiteLLMOCRLoaderValidation:
     def test_no_input_source_raises_error(self) -> None:
         """Test that missing input source raises ValueError."""
         with pytest.raises(ValueError, match="Must provide exactly one"):
-            LiteLLMOCRLoader()
+            LiteLLMOCRLoader(model="azure-document")
 
     def test_multiple_input_sources_raises_error(self) -> None:
         """Test that multiple input sources raises ValueError."""
         with pytest.raises(ValueError, match="Must provide exactly one"):
             LiteLLMOCRLoader(
-                file_path="/tmp/test.pdf", url_path="https://example.com/doc.pdf"
+                model="azure-document",
+                file_path="/tmp/test.pdf",
+                url_path="https://example.com/doc.pdf",
             )
 
     def test_invalid_mode_raises_error(self) -> None:
         """Test that invalid mode raises ValueError."""
         with pytest.raises(ValueError, match="mode must be"):
             LiteLLMOCRLoader(
+                model="azure-document",
                 url_path="https://example.com/doc.pdf",
                 mode="invalid",  # type: ignore
             )
@@ -68,30 +71,47 @@ class TestLiteLLMOCRLoaderValidation:
             pytest.raises(ValueError, match="proxy_base_url must start with"),
         ):
             LiteLLMOCRLoader(
-                proxy_base_url="invalid-url", url_path="https://example.com/doc.pdf"
+                model="azure-document",
+                proxy_base_url="invalid-url",
+                url_path="https://example.com/doc.pdf",
             )
 
     @pytest.mark.parametrize("name", ["api_base", "base_url"])
     def test_an_invalid_endpoint_names_the_parameter_passed(self, name: str) -> None:
         endpoint: dict[str, Any] = {name: "invalid-url"}
         with pytest.raises(ValueError, match=f"{name} must start with"):
-            LiteLLMOCRLoader(**endpoint, url_path="https://e.com/d.pdf")
+            LiteLLMOCRLoader(
+                model="azure-document", **endpoint, url_path="https://e.com/d.pdf"
+            )
 
     def test_invalid_timeout_raises_error(self) -> None:
         """Test that non-positive timeout raises ValueError."""
         with pytest.raises(ValueError, match="timeout must be positive"):
-            LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", timeout=0)
+            LiteLLMOCRLoader(
+                model="azure-document",
+                url_path="https://example.com/doc.pdf",
+                timeout=0,
+            )
 
         with pytest.raises(ValueError, match="timeout must be positive"):
-            LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", timeout=-1.0)
+            LiteLLMOCRLoader(
+                model="azure-document",
+                url_path="https://example.com/doc.pdf",
+                timeout=-1.0,
+            )
 
     def test_invalid_max_retries_raises_error(self) -> None:
         """Test that negative max_retries raises ValueError."""
         with pytest.raises(ValueError, match="max_retries must be non-negative"):
-            LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", max_retries=-1)
+            LiteLLMOCRLoader(
+                model="azure-document",
+                url_path="https://example.com/doc.pdf",
+                max_retries=-1,
+            )
 
     def test_api_base_is_accepted(self) -> None:
         loader = LiteLLMOCRLoader(
+            model="azure-document",
             api_base="https://api.example.com",
             url_path="https://example.com/doc.pdf",
         )
@@ -100,7 +120,9 @@ class TestLiteLLMOCRLoaderValidation:
 
     def test_base_url_is_accepted(self) -> None:
         loader = LiteLLMOCRLoader(
-            base_url="https://api.example.com", url_path="https://example.com/doc.pdf"
+            model="azure-document",
+            base_url="https://api.example.com",
+            url_path="https://example.com/doc.pdf",
         )
 
         assert loader.api_base == "https://api.example.com"
@@ -111,6 +133,7 @@ class TestLiteLLMOCRLoaderValidation:
             match="'proxy_base_url' is deprecated",
         ):
             loader = LiteLLMOCRLoader(
+                model="azure-document",
                 proxy_base_url="https://api.example.com",
                 url_path="https://example.com/doc.pdf",
             )
@@ -119,6 +142,7 @@ class TestLiteLLMOCRLoaderValidation:
 
     def test_api_base_takes_precedence_over_base_url(self) -> None:
         loader = LiteLLMOCRLoader(
+            model="azure-document",
             api_base="https://api.example.com",
             base_url="https://base.example.com",
             url_path="https://example.com/doc.pdf",
@@ -129,6 +153,7 @@ class TestLiteLLMOCRLoaderValidation:
     def test_base_url_takes_precedence_over_proxy_base_url(self) -> None:
         with pytest.warns(DeprecationWarning):
             loader = LiteLLMOCRLoader(
+                model="azure-document",
                 base_url="https://base.example.com",
                 proxy_base_url="https://proxy.example.com",
                 url_path="https://example.com/doc.pdf",
@@ -138,7 +163,9 @@ class TestLiteLLMOCRLoaderValidation:
 
     def test_proxy_base_url_still_reads_and_sets_the_endpoint(self) -> None:
         loader = LiteLLMOCRLoader(
-            api_base="https://api.example.com", url_path="https://e.com/d.pdf"
+            model="azure-document",
+            api_base="https://api.example.com",
+            url_path="https://e.com/d.pdf",
         )
 
         assert loader.proxy_base_url == "https://api.example.com"
@@ -147,6 +174,7 @@ class TestLiteLLMOCRLoaderValidation:
 
     def test_proxy_base_url_none_uses_default(self) -> None:
         loader = LiteLLMOCRLoader(
+            model="azure-document",
             proxy_base_url=None,
             url_path="https://example.com/doc.pdf",
         )
@@ -159,7 +187,9 @@ class TestLiteLLMOCRLoaderDocumentPreparation:
 
     def test_prepare_url_payload(self) -> None:
         """Test preparing payload for URL input."""
-        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf")
+        loader = LiteLLMOCRLoader(
+            model="azure-document", url_path="https://example.com/doc.pdf"
+        )
         payload = loader._prepare_document_payload()
 
         assert payload == {
@@ -170,7 +200,7 @@ class TestLiteLLMOCRLoaderDocumentPreparation:
     def test_prepare_base64_payload(self) -> None:
         """Test preparing payload for base64 input."""
         b64_content = "JVBERi0xLjQ="  # Sample base64
-        loader = LiteLLMOCRLoader(base64_content=b64_content)
+        loader = LiteLLMOCRLoader(model="azure-document", base64_content=b64_content)
         payload = loader._prepare_document_payload()
 
         assert payload["type"] == "document_url"
@@ -180,7 +210,7 @@ class TestLiteLLMOCRLoaderDocumentPreparation:
     def test_prepare_base64_with_data_uri(self) -> None:
         """Test preparing payload for base64 with data URI."""
         data_uri = "data:application/pdf;base64,JVBERi0xLjQ="
-        loader = LiteLLMOCRLoader(base64_content=data_uri)
+        loader = LiteLLMOCRLoader(model="azure-document", base64_content=data_uri)
         payload = loader._prepare_document_payload()
 
         assert payload == {"type": "document_url", "document_url": data_uri}
@@ -188,7 +218,7 @@ class TestLiteLLMOCRLoaderDocumentPreparation:
     def test_prepare_bytes_payload(self) -> None:
         """Test preparing payload for bytes input."""
         test_bytes = b"test content"
-        loader = LiteLLMOCRLoader(bytes_content=test_bytes)
+        loader = LiteLLMOCRLoader(model="azure-document", bytes_content=test_bytes)
         payload = loader._prepare_document_payload()
 
         expected_b64 = base64.b64encode(test_bytes).decode("utf-8")
@@ -203,7 +233,7 @@ class TestLiteLLMOCRLoaderDocumentPreparation:
         test_content = b"PDF content here"
         test_file.write_bytes(test_content)
 
-        loader = LiteLLMOCRLoader(file_path=str(test_file))
+        loader = LiteLLMOCRLoader(model="azure-document", file_path=str(test_file))
         payload = loader._prepare_document_payload()
 
         expected_b64 = base64.b64encode(test_content).decode("utf-8")
@@ -213,7 +243,9 @@ class TestLiteLLMOCRLoaderDocumentPreparation:
 
     def test_prepare_file_not_found(self) -> None:
         """Test that missing file raises FileNotFoundError."""
-        loader = LiteLLMOCRLoader(file_path="/nonexistent/file.pdf")
+        loader = LiteLLMOCRLoader(
+            model="azure-document", file_path="/nonexistent/file.pdf"
+        )
 
         with pytest.raises(FileNotFoundError):
             loader._prepare_document_payload()
@@ -226,7 +258,9 @@ class TestLiteLLMOCRLoaderResponseProcessing:
         self, mock_ocr_response: dict[str, Any]
     ) -> None:
         """Test processing response in page mode."""
-        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", mode="page")
+        loader = LiteLLMOCRLoader(
+            model="azure-document", url_path="https://example.com/doc.pdf", mode="page"
+        )
         documents = loader._process_response(mock_ocr_response)
 
         assert len(documents) == 2
@@ -258,7 +292,9 @@ class TestLiteLLMOCRLoaderResponseProcessing:
         self, page: dict[str, Any]
     ) -> None:
         """The proxy sends ``"dimensions": null`` for providers without page sizes."""
-        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", mode="page")
+        loader = LiteLLMOCRLoader(
+            model="azure-document", url_path="https://example.com/doc.pdf", mode="page"
+        )
         documents = loader._process_response({"pages": [page], "model": "ocr"})
 
         assert len(documents) == 1
@@ -273,7 +309,11 @@ class TestLiteLLMOCRLoaderResponseProcessing:
         self, mock_ocr_response: dict[str, Any]
     ) -> None:
         """Test processing response in single mode."""
-        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", mode="single")
+        loader = LiteLLMOCRLoader(
+            model="azure-document",
+            url_path="https://example.com/doc.pdf",
+            mode="single",
+        )
         documents = loader._process_response(mock_ocr_response)
 
         assert len(documents) == 1
@@ -292,7 +332,9 @@ class TestLiteLLMOCRLoaderResponseProcessing:
 
     def test_process_response_missing_pages_field(self) -> None:
         """Test that missing pages field raises ValueError."""
-        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf")
+        loader = LiteLLMOCRLoader(
+            model="azure-document", url_path="https://example.com/doc.pdf"
+        )
 
         with pytest.raises(ValueError, match="missing 'pages' field"):
             loader._process_response({"object": "ocr"})
@@ -317,7 +359,9 @@ class TestLiteLLMOCRLoaderLoad:
         mock_client_class.return_value = mock_client
 
         # Load documents
-        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", mode="page")
+        loader = LiteLLMOCRLoader(
+            model="azure-document", url_path="https://example.com/doc.pdf", mode="page"
+        )
         documents = loader.load()
 
         # Verify results
@@ -378,7 +422,11 @@ class TestLiteLLMOCRLoaderLoad:
 
         # Load should raise RuntimeError
         # Set max_retries=0 to avoid waiting/sleeping during this test
-        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", max_retries=0)
+        loader = LiteLLMOCRLoader(
+            model="azure-document",
+            url_path="https://example.com/doc.pdf",
+            max_retries=0,
+        )
 
         # HTTP errors should contain "LiteLLM OCR request" and status code
         with pytest.raises(RuntimeError, match="LiteLLM OCR request.*Status: 500"):
@@ -397,7 +445,11 @@ class TestLiteLLMOCRLoaderLoad:
 
         # Load should raise RuntimeError
         # Set max_retries=0 to avoid waiting/sleeping during this test
-        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", max_retries=0)
+        loader = LiteLLMOCRLoader(
+            model="azure-document",
+            url_path="https://example.com/doc.pdf",
+            max_retries=0,
+        )
 
         # Connection errors should contain "Failed to connect"
         with pytest.raises(RuntimeError, match="Failed to connect"):
@@ -425,7 +477,11 @@ class TestLiteLLMOCRLoaderAsyncLoad:
         mock_client_class.return_value = mock_client
 
         # Load documents
-        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", mode="single")
+        loader = LiteLLMOCRLoader(
+            model="azure-document",
+            url_path="https://example.com/doc.pdf",
+            mode="single",
+        )
         documents = await loader.aload()
 
         # Verify results
@@ -455,7 +511,9 @@ class TestLiteLLMOCRLoaderLazyLoad:
         mock_client_class.return_value = mock_client
 
         # Lazy load documents
-        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", mode="page")
+        loader = LiteLLMOCRLoader(
+            model="azure-document", url_path="https://example.com/doc.pdf", mode="page"
+        )
         documents = list(loader.lazy_load())
 
         # Verify results
@@ -480,7 +538,11 @@ class TestLiteLLMOCRLoaderResilience:
         mock_client.post.return_value = mock_response
         mock_client_class.return_value = mock_client
 
-        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", timeout=123.0)
+        loader = LiteLLMOCRLoader(
+            model="azure-document",
+            url_path="https://example.com/doc.pdf",
+            timeout=123.0,
+        )
         loader.load()
 
         # Verify timeout
@@ -518,7 +580,11 @@ class TestLiteLLMOCRLoaderResilience:
         ]
         mock_client_class.return_value = mock_client
 
-        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", max_retries=3)
+        loader = LiteLLMOCRLoader(
+            model="azure-document",
+            url_path="https://example.com/doc.pdf",
+            max_retries=3,
+        )
         result = loader.load()
 
         assert len(result) > 0
@@ -541,7 +607,11 @@ class TestLiteLLMOCRLoaderResilience:
         mock_client.post.side_effect = httpx.RequestError("Always failing")
         mock_client_class.return_value = mock_client
 
-        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", max_retries=2)
+        loader = LiteLLMOCRLoader(
+            model="azure-document",
+            url_path="https://example.com/doc.pdf",
+            max_retries=2,
+        )
 
         with pytest.raises(RuntimeError, match="3 attempts made"):
             loader.load()
@@ -569,7 +639,11 @@ class TestLiteLLMOCRLoaderResilience:
         )
         mock_client_class.return_value = mock_client
 
-        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", max_retries=3)
+        loader = LiteLLMOCRLoader(
+            model="azure-document",
+            url_path="https://example.com/doc.pdf",
+            max_retries=3,
+        )
 
         with pytest.raises(RuntimeError, match="Status: 404"):
             loader.load()
@@ -613,7 +687,11 @@ class TestLiteLLMOCRLoaderResilience:
         ]
         mock_client_class.return_value = mock_client
 
-        loader = LiteLLMOCRLoader(url_path="https://example.com/doc.pdf", max_retries=2)
+        loader = LiteLLMOCRLoader(
+            model="azure-document",
+            url_path="https://example.com/doc.pdf",
+            max_retries=2,
+        )
 
         with pytest.raises(RuntimeError, match="Status: 503"):
             loader.load()

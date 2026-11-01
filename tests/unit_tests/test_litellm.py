@@ -3006,7 +3006,7 @@ def test_fields_set_distinguishes_a_chosen_streaming_flag_from_the_default() -> 
 
 @pytest.mark.parametrize(
     "field",
-    ["model", "streaming", "max_retries", "model_kwargs", "disable_streaming"],
+    ["streaming", "max_retries", "model_kwargs", "disable_streaming"],
 )
 def test_an_explicit_none_falls_back_to_the_default(field: str) -> None:
     """A config built from JSON or os.getenv carries nulls for unset values.
@@ -4351,14 +4351,17 @@ def test_a_chat_model_without_a_model_is_refused(kwargs: dict[str, Any]) -> None
 def test_refusing_a_missing_model_does_not_echo_a_credential() -> None:
     """Pydantic prints the input beside a validation error, keys included."""
     with pytest.raises(ValidationError) as caught:
-        ChatLiteLLM(api_key="sk-should-not-appear")
+        ChatLiteLLM(api_key="sk-should-not-appear")  # type: ignore[call-arg]
 
     assert "sk-should-not-appear" not in str(caught.value)
 
 
 def test_model_name_alone_names_the_model() -> None:
-    """``model_name`` wins over ``model`` on every call, so it suffices alone."""
-    llm = ChatLiteLLM(model_name="openai/gpt-x")
+    """``model_name`` wins over ``model`` on every call, so it suffices alone.
+
+    A type checker still asks for ``model``, the field it sees as required.
+    """
+    llm = ChatLiteLLM(model_name="openai/gpt-x")  # type: ignore[call-arg]
 
     assert llm.model == "openai/gpt-x"
     assert llm._default_params["model"] == "openai/gpt-x"

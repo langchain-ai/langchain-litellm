@@ -34,7 +34,7 @@ class LiteLLMOCRLoader(BaseLoader):
         api_key: Optional bearer token for proxy authentication. Falls back to the
             ``LITELLM_OCR_API_KEY`` environment variable; pass ``""`` to send none.
         model: Model name configured in the proxy (e.g., "azure-document").
-            Defaults to "azure-document".
+            Required: the loader cannot know what the proxy defines.
         file_path: Path to a local file to process.
         url_path: URL to a remote document to process.
         base64_content: Base64-encoded document content.
@@ -85,7 +85,7 @@ class LiteLLMOCRLoader(BaseLoader):
         base_url: str | None = None,
         proxy_base_url: str | None = None,
         api_key: str | None = None,
-        model: str = "azure-document",
+        model: str,
         file_path: str | None = None,
         url_path: str | None = None,
         base64_content: str | None = None,

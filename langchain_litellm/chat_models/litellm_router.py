@@ -177,9 +177,19 @@ class ChatLiteLLMRouter(ChatLiteLLM):
     router: Any
 
     def __init__(self, *, router: Any, **kwargs: Any) -> None:
-        """Construct Chat LiteLLM Router."""
-        if "model" not in kwargs and router.model_list:
-            kwargs["model"] = router.model_list[0]["model_name"]
+        """Construct Chat LiteLLM Router.
+
+        An unset ``model`` is the first group in the Router's ``model_list``; with
+        no group there, leaving it unset raises ``ValueError``.
+        """
+        if not kwargs.get("model"):
+            if router.model_list:
+                kwargs["model"] = router.model_list[0]["model_name"]
+            elif not kwargs.get("model_name"):
+                raise ValueError(
+                    f'{type(self).__name__} needs a model: pass model="<model group>", '
+                    "since the Router's model_list names none."
+                )
         super().__init__(router=router, **kwargs)  # type: ignore[call-arg]
         self.router = router
 
