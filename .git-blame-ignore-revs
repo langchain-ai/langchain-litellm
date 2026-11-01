@@ -1,0 +1,9 @@
+# Bulk reformatting commits, skipped by GitHub's blame view and by local
+# `git blame` once `make setup` sets blame.ignoreRevsFile.
+
+# ran make format
+d5e4e524081ce964b19462c094595c71035da2ab
+# chore: format
+085737ab077f09255a70ed889c6bb663d067552b
+# chore: add .gitattributes and renormalize line endings
+d68c0f9a2f897f7cdacc9f01d2fc36daf8a0a422

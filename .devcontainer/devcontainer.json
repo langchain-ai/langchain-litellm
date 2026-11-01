@@ -1,0 +1,35 @@
+{
+  "name": "langchain-litellm",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "containerEnv": {
+    // The uv cache and the workspace are on different filesystems, so uv
+    // cannot hardlink between them.
+    "UV_LINK_MODE": "copy"
+  },
+  // The container's Linux .venv lives in a volume, so it never overwrites the
+  // host's .venv in the shared workspace folder.
+  "mounts": [
+    "source=langchain-litellm-venv-${devcontainerId},target=${containerWorkspaceFolder}/.venv,type=volume"
+  ],
+  // The bind-mounted workspace belongs to the host user, so git needs it marked
+  // safe. No `pre-commit install` here: .git is shared with the host, and the
+  // hook would record this container's Python path. Run `make setup` on one side.
+  "postCreateCommand": "sudo chown vscode .venv && git config --global --add safe.directory ${containerWorkspaceFolder} && uv sync",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "charliermarsh.ruff",
+        "ms-python.python",
+        "ms-python.mypy-type-checker",
+        "EditorConfig.EditorConfig",
+        "tamasfe.even-better-toml",
+        "github.vscode-github-actions"
+      ]
+    }
+  }
+}

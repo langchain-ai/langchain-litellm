@@ -1,0 +1,3 @@
+# Requests a review from the maintainer on every PR. The ruleset does not
+# require code owner approval, so this only routes review requests.
+* @Akshay-Dongare

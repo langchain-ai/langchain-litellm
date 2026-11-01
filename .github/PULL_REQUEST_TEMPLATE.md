@@ -1,25 +1,9 @@
-(Replace this entire block of text)
+Describe the change in one or two sentences. See CONTRIBUTING.md.
 
-Read the full contributing guidelines: https://docs.langchain.com/oss/python/contributing/overview
-If you paste a large clearly AI generated description here your PR may be IGNORED or CLOSED!
+- [ ] Title follows Conventional Commits, e.g. `fix(streaming): ...`
+- [ ] A breaking change puts `!` after the type or scope, e.g. `feat!:`
+- [ ] `make format`, `make lint` and `make test` pass locally
+- [ ] Links its issue with `Fixes #N`, or says why there is none
 
-Thank you for contributing to LangChain! Follow these steps to have your pull request considered as ready for review.
-
-1. PR description:
-
-  - Write 1-2 sentences summarizing the change.
-  - If this PR addresses a specific issue, please include "Fixes #ISSUE_NUMBER" in the description to automatically close the issue when the PR is merged.
-  - If there are any breaking changes, please clearly describe them.
-  - If this PR depends on another PR being merged first, please include "Depends on #PR_NUMBER" in the description.
-
-2. Run `make format`, `make lint` and `make test` from the root of the package(s) you've modified.
-
-  - We will not consider a PR unless these three are passing in CI.
-
-3. How did you verify your code works?
-
-Additional guidelines:
-
-  - We ask that if you use generative AI for your contribution, you include a disclaimer.
-  - PRs should not touch more than one package unless absolutely necessary.
-  - Do not update the `uv.lock` files or add dependencies to `pyproject.toml` files (even optional ones) unless you have explicit permission to do so by a maintainer.
+If you used generative AI for this contribution, say so.
+Do not change `uv.lock` or dependencies without maintainer approval.

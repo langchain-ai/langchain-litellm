@@ -1,0 +1,73 @@
+# `language: unsupported` is pre-commit 4.4.0's name for `language: system`.
+minimum_pre_commit_version: "4.4.0"
+# `make setup` installs both hook types; hooks without `stages` run at commit.
+default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]  # keep Markdown hard line breaks
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-added-large-files
+      - id: detect-private-key
+
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: 0494aa7fa1314e98913a41227d8f0a515b2c1049  # frozen: 0.38.2
+    hooks:
+      - id: check-github-workflows
+      - id: check-dependabot
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: 914e7df21a07ef503a81201c76d2b11c789d3fca  # frozen: v1.7.12
+    hooks:
+      - id: actionlint
+
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: fa412071e4f5d44d44f9e365f4676f9df92456a2  # frozen: v1.30.1
+    hooks:
+      - id: zizmor
+
+  # Tools from uv.lock, so these hooks, the Makefile and CI run the same versions.
+  # --frozen: a hook never rewrites uv.lock. --force-exclude: ruff's excludes hold
+  # even for the paths pre-commit names explicitly.
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run --frozen --group lint ruff check --fix --force-exclude
+        language: unsupported
+        types_or: [python, pyi, jupyter, pyproject]
+        require_serial: true
+      - id: ruff-format
+        name: ruff format
+        entry: uv run --frozen --group lint ruff format --force-exclude
+        language: unsupported
+        types_or: [python, pyi, jupyter, markdown]
+        require_serial: true
+      - id: codespell
+        name: codespell
+        # the whole tree, so it reads the same skip list as `make spell_check`
+        entry: uv run --frozen --group codespell codespell --toml pyproject.toml
+        language: unsupported
+        types: [text]
+        pass_filenames: false
+      - id: uv-lock
+        name: uv lock --check
+        entry: uv lock --check
+        language: unsupported
+        files: ^(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
+      - id: mypy
+        name: mypy
+        entry: uv run --frozen --group typing mypy .
+        language: unsupported
+        types_or: [python, pyi]
+        pass_filenames: false
+        stages: [pre-push]
