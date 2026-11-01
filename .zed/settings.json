@@ -1,0 +1,18 @@
+// Zed runs the ruff installed in .venv once `uv sync` has run, so this file
+// only turns on ruff's fixes, import sorting and formatting at save.
+{
+  "languages": {
+    "Python": {
+      "format_on_save": "on",
+      "code_actions_on_format": {
+        "source.fixAll.ruff": true,
+        "source.organizeImports.ruff": true
+      },
+      "formatter": {
+        "language_server": {
+          "name": "ruff"
+        }
+      }
+    }
+  }
+}

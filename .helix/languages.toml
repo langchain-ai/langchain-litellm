@@ -1,0 +1,10 @@
+# Workspace config, merged over your own languages.toml. Runs the ruff pinned
+# in uv.lock as the language server and formats Python on save. If your Helix
+# does not list "ruff" in Python's language-servers, add it there.
+[language-server.ruff]
+command = "uv"
+args = ["run", "--frozen", "ruff", "server"]
+
+[[language]]
+name = "python"
+auto-format = true
