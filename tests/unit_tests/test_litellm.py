@@ -4268,6 +4268,123 @@ def test_use_responses_api_refuses_a_name_litellm_would_not_bridge(
     completion.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("proxy", "model", "config", "sent"),
+    [
+        ("global", "openai/responses/gpt-4o-mini", {}, "openai/gpt-4o-mini"),
+        ("environment", "openai/responses/gpt-4o-mini", {}, "openai/gpt-4o-mini"),
+        (None, "litellm_proxy/openai/responses/gpt-4o-mini", {}, "openai/gpt-4o-mini"),
+        (
+            None,
+            "openai/team/responses/gpt",
+            {"api_base": "https://gateway.example/v1"},
+            "team/gpt",
+        ),
+        (
+            None,
+            "hosted_vllm/org/responses/model",
+            {"api_base": "https://vllm.example/v1"},
+            "org/model",
+        ),
+    ],
+)
+def test_use_responses_api_refuses_a_name_litellm_would_send_as_another_model(
+    monkeypatch: pytest.MonkeyPatch,
+    proxy: str | None,
+    model: str,
+    config: dict[str, Any],
+    sent: str,
+) -> None:
+    """litellm drops every ``responses/`` from a routed name, and a proxy or an
+    OpenAI-compatible server takes the name it receives as the model."""
+    if proxy == "global":
+        monkeypatch.setattr(litellm, "use_litellm_proxy", True)
+    elif proxy == "environment":
+        monkeypatch.setenv("USE_LITELLM_PROXY", "True")
+    llm = ChatLiteLLM(model=model, api_key="k", use_responses_api=True, **config)
+
+    with (
+        patch.object(llm.client, "completion", side_effect=_Sent) as completion,
+        pytest.raises(ValueError) as exc_info,
+    ):
+        llm.invoke("hi")
+
+    assert str(exc_info.value) == (
+        f"use_responses_api=True, but litellm would send {model!r} to the Responses "
+        f"API as {sent!r}, since it drops every 'responses/' from the name. Disable "
+        "use_responses_api, or serve the model under a name without 'responses/'."
+    )
+    completion.assert_not_called()
+
+
+def test_use_previous_response_id_refuses_a_name_litellm_would_send_as_another_model() -> (
+    None
+):
+    """The refusal names the flag that routed the call."""
+    llm = ChatLiteLLM(
+        model="openai/team/responses/gpt",
+        api_key="k",
+        api_base="https://gateway.example/v1",
+        use_previous_response_id=True,
+    )
+
+    with (
+        patch.object(llm.client, "completion", side_effect=_Sent) as completion,
+        pytest.raises(ValueError) as exc_info,
+    ):
+        llm.invoke("hi")
+
+    assert str(exc_info.value) == (
+        "use_previous_response_id=True, but litellm would send "
+        "'openai/team/responses/gpt' to the Responses API as 'team/gpt', since it "
+        "drops every 'responses/' from the name. Chain a model whose name has no "
+        "'responses/', or drop use_previous_response_id to send the full history."
+    )
+    completion.assert_not_called()
+
+
+@pytest.mark.parametrize("proxy", ["global", "environment", "name"])
+@pytest.mark.parametrize(
+    ("model", "path", "received"),
+    [
+        ("openai/gpt-4o-mini", "/chat/completions", "openai/gpt-4o-mini"),
+        ("responses/gpt-4o-mini", "/responses", "gpt-4o-mini"),
+        ("responses/openai/responses/gpt-4o-mini", "/responses", "openai/gpt-4o-mini"),
+    ],
+)
+def test_behind_a_proxy_the_flag_changes_the_endpoint_not_the_model(
+    monkeypatch: pytest.MonkeyPatch, proxy: str, model: str, path: str, received: str
+) -> None:
+    """The proxy gets the model it gets without the flag, at ``/responses``.
+
+    A name routed already goes out as litellm sends it either way.
+    """
+    sent: list[tuple[str, str]] = []
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        sent.append((request.url.path, json.loads(request.content)["model"]))
+        if request.url.path.endswith("/responses"):
+            body = responses_api_reply(message_item("ok"))
+        else:
+            body = chat_completion_reply("ok")
+        return httpx.Response(200, json=body, request=request)
+
+    serve_requests(monkeypatch, reply)
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://proxy.example")
+    if proxy == "global":
+        monkeypatch.setattr(litellm, "use_litellm_proxy", True)
+    elif proxy == "environment":
+        monkeypatch.setenv("USE_LITELLM_PROXY", "True")
+    else:
+        model = f"litellm_proxy/{model}"
+
+    for use_responses_api in (False, True):
+        llm = ChatLiteLLM(model=model, api_key="k", use_responses_api=use_responses_api)
+        assert llm.invoke("hi").content == "ok"
+
+    assert sent == [(path, received), ("/responses", received)]
+
+
 @pytest.mark.parametrize("name", ["proxy_base_url", "openai_api_base"])
 def test_an_endpoint_under_another_name_warns_and_is_ignored(name: str) -> None:
     """Those names are not ChatLiteLLM's, so the endpoint never reached litellm."""
