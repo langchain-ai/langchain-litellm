@@ -73,6 +73,10 @@ def _deployment_gap(deployment: Mapping[str, Any]) -> str | None:
     if replaced:
         return f"{gap}, since {' and '.join(replaced)}"
     bare = named.removeprefix("chat_completions/").removeprefix("responses/")
+    # A rename must keep the model the provider reads: litellm drops every
+    # 'responses/' in it, and a proxy reads a 'chat_completions/' prefix too.
+    if "responses/" in bare or (provider == "litellm_proxy" and bare != named):
+        return gap
     if _sends_to_responses_api(f"responses/{bare}", provider):
         return f"{gap}; name it '{provider}/responses/{bare}'"
     return gap
@@ -396,7 +400,10 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                 f"group or disable {flag}."
             )
         # Ahead of the deployment checks: under a proxy they name the wrong cause.
-        if self.use_previous_response_id and self._proxy_enabled():
+        if self.use_previous_response_id and (
+            litellm.use_litellm_proxy is True
+            or litellm.get_secret_bool("USE_LITELLM_PROXY") is True
+        ):
             raise ValueError(
                 "use_previous_response_id=True cannot safely chain model "
                 f"group {group!r} because litellm.use_litellm_proxy or "
@@ -419,16 +426,6 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             gap = _deployment_gap(deployment)
             if gap is not None:
                 gaps.setdefault(deployment["model"], gap)
-        if gaps and self._proxy_enabled():
-            # Behind a proxy litellm sends every deployment as 'litellm_proxy/<name>',
-            # so the rename in the gap would reach the proxy as a different model.
-            raise ValueError(
-                f"{flag}=True, but litellm.use_litellm_proxy or USE_LITELLM_PROXY "
-                f"is enabled, so litellm sends the deployments of model group "
-                f"{group!r} through the proxy and ChatLiteLLMRouter cannot tell "
-                "which Responses API answers. Disable proxy routing or disable "
-                f"{flag}."
-            )
         if gaps:
             lines = "".join(f"\n- {model!r}: {gap}" for model, gap in gaps.items())
             # Each line names the rename that fixes it, where a rename can.
@@ -445,13 +442,6 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         if self.use_previous_response_id:
             self._check_one_response_store(sent, group)
         return group
-
-    @staticmethod
-    def _proxy_enabled() -> bool:
-        return (
-            litellm.use_litellm_proxy is True
-            or litellm.get_secret_bool("USE_LITELLM_PROXY") is True
-        )
 
     def _check_one_response_store(self, sent: dict[str, Any], group: str) -> None:
         """Refuse a chained call unless every deployment of ``group`` keeps its
