@@ -428,6 +428,46 @@ async def test_a_deployment_that_asks_for_chat_completions_is_named(
     )
 
 
+@pytest.mark.parametrize(
+    ("flag", "fix"),
+    [
+        pytest.param("use_responses_api", [], id="use_responses_api"),
+        pytest.param(
+            "use_previous_response_id",
+            [
+                (
+                    "Chain only deployments litellm sends to a Responses API, or "
+                    "drop use_previous_response_id to send the full history."
+                )
+            ],
+            id="use_previous_response_id",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_routed_name_that_asks_for_chat_completions_is_named(
+    flag: str, fix: list[str]
+) -> None:
+    """litellm's bridge drops the 'responses/', then answers the name left over
+    Chat Completions."""
+    llm = ChatLiteLLMRouter(
+        router=_router("openai/responses/chat_completions/gpt-4o-mini"),
+        **{flag: True},
+    )
+
+    assert (await _refused(llm, "invoke")).splitlines() == [
+        (
+            f"{flag}=True, but litellm would not send every deployment of model "
+            "group 'g' to a Responses API:"
+        ),
+        (
+            "- 'openai/responses/chat_completions/gpt-4o-mini': its name asks for "
+            "Chat Completions"
+        ),
+        *fix,
+    ]
+
+
 @pytest.mark.asyncio
 async def test_a_deployment_s_own_fallbacks_refuse_the_call() -> None:
     """litellm falls back to them inside the Router's call, and a call cannot clear
