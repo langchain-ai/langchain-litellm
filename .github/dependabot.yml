@@ -41,3 +41,29 @@ updates:
         applies-to: version-updates
         patterns:
           - "*"
+
+  # pre-commit hook revs; `repo: local` hooks come from uv.lock instead
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      pre-commit:
+        applies-to: version-updates
+        patterns:
+          - "*"
+
+  # devcontainer base image and uv image
+  - package-ecosystem: "docker"
+    directory: "/.devcontainer"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      devcontainer:
+        applies-to: version-updates
+        patterns:
+          - "*"

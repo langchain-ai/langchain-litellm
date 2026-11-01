@@ -70,6 +70,27 @@ jobs:
 
       - run: make spell_check
 
+  pre-commit:
+    name: "pre-commit"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+
+      # Commit-stage hooks only; the lint job already runs mypy, the pre-push hook.
+      - run: uv run pre-commit run --all-files --show-diff-on-failure
+
   test:
     name: "Test (Python ${{ matrix.python-version }})"
     runs-on: ubuntu-latest
