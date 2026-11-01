@@ -1645,7 +1645,10 @@ class ChatLiteLLM(BaseChatModel):
     resolved as litellm resolves it, through named credentials, ``base_url``, model
     aliases and the ``azure`` flag. A model litellm cannot bridge raises
     ``ValueError``, as does a ``deployment_id``, which litellm puts in place of the
-    model: name the model ``azure/<deployment>`` instead. Any fallback raises too,
+    model: name the model ``azure/<deployment>`` instead. A name litellm would send
+    as another model raises it as well: litellm drops every ``responses/`` from a
+    routed name, so behind a proxy ``openai/responses/gpt-4o-mini`` would arrive as
+    ``openai/gpt-4o-mini``. Any fallback raises too,
     since litellm sends it under its own name; to keep fallbacks, drop the flag and
     name the model and each fallback ``<provider>/responses/<model>``. ``None`` and
     ``False`` leave the route to litellm, which sends some models, such as
@@ -1880,6 +1883,23 @@ class ChatLiteLLM(BaseChatModel):
             raise ValueError(
                 f"{flag}=True, but litellm cannot send {model!r} to a Responses API. "
                 f"{fix}"
+            )
+        # litellm drops every "responses/" from a routed name. A name routed already
+        # goes out as it would without the flag, so only the rename can change it.
+        _, sent = litellm.main.responses_api_bridge_check(
+            model=routed, custom_llm_provider=provider
+        )
+        if routed != named and sent != named:
+            fix = (
+                "Chain a model whose name has no 'responses/', or drop "
+                "use_previous_response_id to send the full history."
+                if previous_id
+                else "Disable use_responses_api, or serve the model under a name "
+                "without 'responses/'."
+            )
+            raise ValueError(
+                f"{flag}=True, but litellm would send {model!r} to the Responses API "
+                f"as {sent!r}, since it drops every 'responses/' from the name. {fix}"
             )
         return f"{provider}/{routed}"
 
