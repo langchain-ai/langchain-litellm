@@ -4326,3 +4326,12 @@ def test_create_usage_metadata_reports_audio_tokens() -> None:
 
     assert meta["input_token_details"] == {"audio": 60, "cache_read": 0}
     assert meta["output_token_details"] == {"audio": 4, "reasoning": 0}
+
+
+def test_the_default_model_is_not_a_retired_openai_model() -> None:
+    """``ChatLiteLLM()`` with no model must not fall back to a retired model.
+
+    OpenAI retired ``gpt-3.5-turbo`` on 2026-10-23, so a call that relied on
+    the old default failed with a model-not-found error.
+    """
+    assert ChatLiteLLM().model == "gpt-5.6-luna"

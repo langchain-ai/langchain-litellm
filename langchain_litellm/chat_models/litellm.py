@@ -1605,7 +1605,7 @@ class ChatLiteLLM(BaseChatModel):
     """
 
     client: Any = None  #: :meta private:
-    model: str = "gpt-3.5-turbo"
+    model: str = "gpt-5.6-luna"
     """Model name to use."""
     model_name: str | None = None
     stream_options: dict[str, Any] | None = None
