@@ -53,7 +53,8 @@ class LiteLLMEmbeddingsRouter(LiteLLMEmbeddings):
             router: A litellm.Router instance.
             **kwargs: Additional parameters passed to LiteLLMEmbeddings. Each Router
                 deployment owns its endpoint, so a set ``api_base`` or ``base_url``
-                raises ``ValueError``.
+                raises ``ValueError``. An unset ``model`` is the first group in the
+                Router's ``model_list``; with no group there, it raises too.
         """
         if kwargs.get("api_base") is not None or kwargs.get("base_url") is not None:
             raise ValueError(
@@ -62,11 +63,15 @@ class LiteLLMEmbeddingsRouter(LiteLLMEmbeddings):
                 "LiteLLM Router deployment instead."
             )
 
-        if "model" not in kwargs:
+        if not kwargs.get("model"):
             first = next(iter(getattr(router, "model_list", None) or []), None)
             alias = first.get("model_name") if isinstance(first, dict) else None
-            if alias:
-                kwargs["model"] = alias
+            if not alias:
+                raise ValueError(
+                    f'{type(self).__name__} needs a model: pass model="<model group>", '
+                    "since the Router's model_list names none."
+                )
+            kwargs["model"] = alias
         super().__init__(**{**kwargs, "router": router})  # type: ignore[call-arg]
         self.router = router
 

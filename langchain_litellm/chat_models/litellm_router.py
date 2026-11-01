@@ -73,6 +73,10 @@ def _deployment_gap(deployment: Mapping[str, Any]) -> str | None:
     if replaced:
         return f"{gap}, since {' and '.join(replaced)}"
     bare = named.removeprefix("chat_completions/").removeprefix("responses/")
+    # A rename must keep the model the provider reads: litellm drops every
+    # 'responses/' in it, and a proxy reads a 'chat_completions/' prefix too.
+    if "responses/" in bare or (provider == "litellm_proxy" and bare != named):
+        return gap
     if _sends_to_responses_api(f"responses/{bare}", provider):
         return f"{gap}; name it '{provider}/responses/{bare}'"
     return gap
@@ -177,9 +181,19 @@ class ChatLiteLLMRouter(ChatLiteLLM):
     router: Any
 
     def __init__(self, *, router: Any, **kwargs: Any) -> None:
-        """Construct Chat LiteLLM Router."""
-        if "model" not in kwargs and router.model_list:
-            kwargs["model"] = router.model_list[0]["model_name"]
+        """Construct Chat LiteLLM Router.
+
+        An unset ``model`` is the first group in the Router's ``model_list``; with
+        no group there, leaving it unset raises ``ValueError``.
+        """
+        if not kwargs.get("model"):
+            if router.model_list:
+                kwargs["model"] = router.model_list[0]["model_name"]
+            elif not kwargs.get("model_name"):
+                raise ValueError(
+                    f'{type(self).__name__} needs a model: pass model="<model group>", '
+                    "since the Router's model_list names none."
+                )
         super().__init__(router=router, **kwargs)  # type: ignore[call-arg]
         self.router = router
 

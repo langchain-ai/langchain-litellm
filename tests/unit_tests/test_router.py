@@ -1936,3 +1936,21 @@ async def test_router_surfaces_finish_reason_in_response_metadata(method: str) -
 
     assert merged is not None
     assert merged.response_metadata["finish_reason"] == "stop"
+
+
+def test_a_router_with_no_model_list_needs_a_model() -> None:
+    """With no group to take it from, the Router has no model to call."""
+    with pytest.raises(ValueError) as caught:
+        ChatLiteLLMRouter(router=litellm.Router(model_list=[]))
+
+    assert str(caught.value) == (
+        'ChatLiteLLMRouter needs a model: pass model="<model group>", '
+        "since the Router's model_list names none."
+    )
+
+
+def test_a_router_takes_an_unset_model_from_its_first_group() -> None:
+    """``None`` is what a config built from ``os.getenv`` carries for unset."""
+    llm = ChatLiteLLMRouter(router=_router_serving("openai/gpt-x"), model=None)
+
+    assert llm.model == "gpt-4o-mini"

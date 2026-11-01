@@ -3006,7 +3006,7 @@ def test_fields_set_distinguishes_a_chosen_streaming_flag_from_the_default() -> 
 
 @pytest.mark.parametrize(
     "field",
-    ["model", "streaming", "max_retries", "model_kwargs", "disable_streaming"],
+    ["streaming", "max_retries", "model_kwargs", "disable_streaming"],
 )
 def test_an_explicit_none_falls_back_to_the_default(field: str) -> None:
     """A config built from JSON or os.getenv carries nulls for unset values.
@@ -3481,8 +3481,9 @@ def test_constructor_signature_is_not_erased(tmp_path: Path) -> None:
     probe = tmp_path / "probe.py"
     probe.write_text(
         "from langchain_litellm import ChatLiteLLM\n"
-        "ChatLiteLLM(not_a_real_field=1)\n"
-        "ChatLiteLLM(temperature='warm')\n"
+        "ChatLiteLLM(model='m', not_a_real_field=1)\n"
+        "ChatLiteLLM(model='m', temperature='warm')\n"
+        "ChatLiteLLM()\n"
     )
 
     result = subprocess.run(
@@ -3494,6 +3495,7 @@ def test_constructor_signature_is_not_erased(tmp_path: Path) -> None:
 
     assert "call-arg" in result.stdout, result.stdout
     assert "arg-type" in result.stdout, result.stdout
+    assert 'Missing named argument "model"' in result.stdout, result.stdout
 
 
 # ── finish_reason in streamed response_metadata ───────────────────────────────
@@ -4443,3 +4445,49 @@ def test_create_usage_metadata_reports_audio_tokens() -> None:
 
     assert meta["input_token_details"] == {"audio": 60, "cache_read": 0}
     assert meta["output_token_details"] == {"audio": 4, "reasoning": 0}
+
+
+# ── a model is required ───────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"model": None}, {"model": ""}])
+def test_a_chat_model_without_a_model_is_refused(kwargs: dict[str, Any]) -> None:
+    """Any default would be a model its provider eventually retires.
+
+    ``None`` is what a config built from ``os.getenv`` carries for an unset value.
+    """
+    with pytest.raises(ValidationError) as caught:
+        ChatLiteLLM(**kwargs)
+
+    assert caught.value.errors()[0]["msg"] == (
+        'Value error, ChatLiteLLM needs a model: pass model="<provider>/<model>", '
+        "the name litellm routes by."
+    )
+
+
+def test_refusing_a_missing_model_does_not_echo_a_credential() -> None:
+    """Pydantic prints the input beside a validation error, keys included."""
+    with pytest.raises(ValidationError) as caught:
+        ChatLiteLLM(api_key="sk-should-not-appear")  # type: ignore[call-arg]
+
+    assert "sk-should-not-appear" not in str(caught.value)
+
+
+def test_model_name_alone_names_the_model() -> None:
+    """``model_name`` wins over ``model`` on every call, so it suffices alone.
+
+    A type checker still asks for ``model``, the field it sees as required.
+    """
+    llm = ChatLiteLLM(model_name="openai/gpt-x")  # type: ignore[call-arg]
+
+    assert llm.model == "openai/gpt-x"
+    assert llm._default_params["model"] == "openai/gpt-x"
+
+
+def test_a_subclass_can_still_default_its_model() -> None:
+    """Only a missing model is refused, so a subclass that names one keeps it."""
+
+    class _Pinned(ChatLiteLLM):
+        model: str = "openai/pinned"
+
+    assert _Pinned().model == "openai/pinned"

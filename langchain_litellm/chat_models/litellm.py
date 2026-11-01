@@ -82,7 +82,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import TypeBaseModel, is_basemodel_subclass
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.types.utils import Delta
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing_extensions import is_typeddict
 
 from langchain_litellm._version import __version__
@@ -1606,10 +1606,18 @@ class ChatLiteLLM(BaseChatModel):
     raw input as its arguments.
     """
 
+    model_config = ConfigDict(hide_input_in_errors=True)
+    """Keep the caller's input, credentials included, out of validation errors."""
+
     client: Any = None  #: :meta private:
-    model: str = "gpt-3.5-turbo"
-    """Model name to use."""
+    model: str
+    """The model to call, named as litellm routes it: ``"<provider>/<model>"``.
+
+    Required: there is no default, since any model picked here is one its provider
+    will eventually retire. ``model_name`` given alone stands in for it.
+    """
     model_name: str | None = None
+    """Sent in place of ``model`` when set."""
     stream_options: dict[str, Any] | None = None
     """``stream_options`` sent when streaming, ``{"include_usage": True}`` if unset.
 
@@ -2105,6 +2113,17 @@ class ChatLiteLLM(BaseChatModel):
                 continue
             if type(None) not in get_args(field.annotation):
                 del values[name]
+
+        # model_name wins on every call, so it names the model when given alone. A
+        # subclass that declares a default model keeps it.
+        if not values.get("model"):
+            if values.get("model_name"):
+                values["model"] = values["model_name"]
+            elif cls.model_fields["model"].is_required():
+                raise ValueError(
+                    f'{cls.__name__} needs a model: pass model="<provider>/<model>", '
+                    "the name litellm routes by."
+                )
 
         # extra="ignore" would drop these without a word, so say where the endpoint goes.
         for name in _IGNORED_ENDPOINT_NAMES:
