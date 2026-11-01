@@ -73,6 +73,10 @@ def _deployment_gap(deployment: Mapping[str, Any]) -> str | None:
     if replaced:
         return f"{gap}, since {' and '.join(replaced)}"
     bare = named.removeprefix("chat_completions/").removeprefix("responses/")
+    # A rename must keep the model the provider reads: litellm drops every
+    # 'responses/' in it, and a proxy reads a 'chat_completions/' prefix too.
+    if "responses/" in bare or (provider == "litellm_proxy" and bare != named):
+        return gap
     if _sends_to_responses_api(f"responses/{bare}", provider):
         return f"{gap}; name it '{provider}/responses/{bare}'"
     return gap
