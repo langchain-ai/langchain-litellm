@@ -212,7 +212,7 @@ _NON_ROUTING_PARAMS = (
     "guardrailConfig",
     "performanceConfig",
     "requestMetadata",
-    # Names the Bedrock application inference profile that serves the same model.
+    # The Bedrock model or inference profile to call, which never changes the host.
     "model_id",
     # Load balancing between the deployments of one Router group.
     "rpm",
