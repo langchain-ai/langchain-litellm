@@ -84,6 +84,7 @@ lint = [
     "ruff>=0.16.0,<0.18.0",
 ]
 dev = [
+    "pre-commit>=4.4.0,<5.0.0",
     "ipykernel>=6.29.5,<8.0.0",
     "python-dotenv>=1.2.1,<2.0.0",
 ]
@@ -102,9 +103,11 @@ typing = [
 ]
 
 [tool.uv]
-# A plain `uv sync` installs the locked ruff too, so an editor that uses the
-# project environment lints with exactly the ruff `make lint` and CI run.
-default-groups = ["dev", "lint"]
+# uv 0.12.21 and older rewrite the lock back to revision 3; 0.12.22 to 0.13.6 match it.
+required-version = ">=0.12.22"
+# A plain `uv sync` installs every group, so editors and git hooks get the
+# locked ruff, mypy and pytest that `make lint`, `make test` and CI run.
+default-groups = "all"
 # litellm caps filelock below 4.0, but only 4.2.1 fixes filelock's 2026-10 advisories;
 # this reaches the lock, never the wheel. Drop it once litellm allows filelock 4.
 override-dependencies = ["filelock>=4.2.1"]

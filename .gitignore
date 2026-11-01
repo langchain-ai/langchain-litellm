@@ -3,6 +3,20 @@ __pycache__
 .ruff_cache/
 .pytest_cache/
 .mypy_cache/
-.vscode/
 .benchmarks/
 dist/
+
+# Secrets for integration tests; .env.example lists the variable names
+.env
+.env.*
+!.env.example
+
+# Editors: .vscode/ keeps only the two shared files
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+
+# Claude Code: personal settings and worktrees
+.claude/settings.local.json
+.claude/worktrees/
