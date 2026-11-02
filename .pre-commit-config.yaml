@@ -58,6 +58,13 @@ repos:
         language: unsupported
         types: [text]
         pass_filenames: false
+      - id: python-versions
+        name: python versions agree
+        # .python-version, the lowest classifier and the requires-python floor
+        entry: uv run --frozen python scripts/python_versions.py --check
+        language: unsupported
+        files: ^(pyproject\.toml|\.python-version)$
+        pass_filenames: false
       - id: uv-lock
         name: uv lock --check
         entry: uv lock --check

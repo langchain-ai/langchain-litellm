@@ -29,8 +29,9 @@ check:
 test tests:
 	uv run --group test pytest --disable-socket --allow-unix-socket $(TEST_FILE)
 
-# unit tests on every Python CI tests, each in a fresh environment
-PYTHON_VERSIONS ?= 3.11 3.12 3.13 3.14
+# unit tests on every supported Python, each in a fresh environment; pyproject.toml's
+# classifiers are the one list, which CI's matrix reads too
+PYTHON_VERSIONS ?= $(shell uv run --frozen python scripts/python_versions.py --list)
 test_matrix:
 	for v in $(PYTHON_VERSIONS); do \
 		echo "== Python $$v"; \
@@ -91,7 +92,7 @@ help:
 	@echo 'lint_tests                   - lint tests/ only'
 	@echo 'test                         - run unit tests (network disabled)'
 	@echo 'test TEST_FILE=<test_file>   - run the unit tests in one file'
-	@echo 'test_matrix                  - run unit tests on Python 3.11 to 3.14'
+	@echo 'test_matrix                  - run unit tests on every supported Python'
 	@echo 'test_watch                   - rerun unit tests on every change'
 	@echo 'integration_tests            - run integration tests (needs .env)'
 	@echo 'spell_check                  - check spelling with codespell'

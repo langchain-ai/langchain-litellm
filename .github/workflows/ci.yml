@@ -17,6 +17,20 @@ env:
   UV_FROZEN: "true"
 
 jobs:
+  python-versions:
+    name: "Python versions"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      versions: ${{ steps.read.outputs.versions }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # pyproject.toml's classifiers are the one list of supported versions.
+      - id: read
+        run: echo "versions=$(python3 scripts/python_versions.py --matrix)" >> "$GITHUB_OUTPUT"
+
   check-lockfile:
     name: "Check lockfile"
     runs-on: ubuntu-latest
@@ -44,7 +58,7 @@ jobs:
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.11"
+          python-version-file: .python-version
 
       # ruff check, ruff format --diff and mypy, as defined in the Makefile
       - run: make lint
@@ -66,7 +80,7 @@ jobs:
       # codespell reads --toml via tomllib, which is stdlib only from 3.11
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.11"
+          python-version-file: .python-version
 
       - run: make spell_check
 
@@ -86,7 +100,7 @@ jobs:
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.11"
+          python-version-file: .python-version
 
       # Commit-stage hooks only; the lint job already runs mypy, the pre-push hook.
       - run: uv run pre-commit run --all-files --show-diff-on-failure
@@ -95,9 +109,10 @@ jobs:
     name: "Test (Python ${{ matrix.python-version }})"
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    needs: python-versions
     strategy:
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        python-version: ${{ fromJSON(needs.python-versions.outputs.versions) }}
       fail-fast: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -125,9 +140,10 @@ jobs:
     name: "Test dependency floors (Python ${{ matrix.python-version }})"
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    needs: python-versions
     strategy:
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        python-version: ${{ fromJSON(needs.python-versions.outputs.versions) }}
       fail-fast: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

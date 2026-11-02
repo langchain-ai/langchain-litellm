@@ -10,7 +10,7 @@ You need [uv](https://docs.astral.sh/uv/getting-started/installation/) 0.12.22 o
 make setup
 ```
 
-It installs every dependency group into `.venv` on Python 3.11 (from `.python-version`; uv downloads it if needed), installs the pre-commit and pre-push hooks, and makes `git blame` skip the bulk reformat commits.
+It installs every dependency group into `.venv` on the Python `.python-version` names (uv downloads it if needed), installs the pre-commit and pre-push hooks, and makes `git blame` skip the bulk reformat commits.
 
 To skip local setup, open the repo in its devcontainer, or [in a Codespace](https://codespaces.new/langchain-ai/langchain-litellm). The container keeps its own `.venv`. If you commit from inside it, run `make setup` there instead of on your machine.
 
@@ -29,7 +29,7 @@ Every editor below reads `.editorconfig`, and each committed config runs the ruf
 
 ## Tests
 
-- `make test` runs the unit tests offline. CI runs them on Python 3.11 to 3.14, and `make test_matrix` does the same locally.
+- `make test` runs the unit tests offline. CI runs them on every Python version the classifiers in `pyproject.toml` list, and `make test_matrix` does the same locally.
 - Integration tests call real providers. Run `cp .env.example .env`, fill it in, then `make integration_tests`. `.env` is gitignored.
 
 ## Pull requests
@@ -44,7 +44,7 @@ Every editor below reads `.editorconfig`, and each committed config runs the ruf
 - `label-pr.yml` sets the PR's type label from its title, adds `breaking` for `!`, and removes type labels it did not set.
 - Copilot reviews every push.
 - CodeQL blocks a merge on a security alert of high severity or above, or an error-level alert.
-- CI checks the lockfile, runs the pre-commit hooks, lint and type checks, spell check, and unit tests on Python 3.11 to 3.14, once against `uv.lock` and once against the lowest versions `pyproject.toml` allows. A PR that changes `pyproject.toml` also runs the unit tests against the newest litellm release.
+- CI checks the lockfile, runs the pre-commit hooks, lint and type checks, spell check, and unit tests on every supported Python version, once against `uv.lock` and once against the lowest versions `pyproject.toml` allows. A PR that changes `pyproject.toml` also runs the unit tests against the newest litellm release.
 - Dependabot opens weekly grouped `build(deps)` PRs for uv, GitHub Actions, the pre-commit hooks and the devcontainer images, a week after each release. Security updates skip that wait and come in their own PR.
 
 ## Releases

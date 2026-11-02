@@ -19,9 +19,9 @@ Before writing a commit message, PR title, PR description or branch name, or add
 Run from the repo root with uv 0.12.22 or later.
 
 - `make setup` runs once per clone: `uv sync`, the pre-commit and pre-push hooks, and a `git blame` that skips the bulk reformat commits.
-- `uv sync` installs every dependency group into `.venv`, on Python 3.11 from `.python-version`. CI lints on 3.11.
+- `uv sync` installs every dependency group into `.venv`, on the Python `.python-version` names, which CI lints with.
 - `make test` runs the unit tests with network sockets blocked. `make test TEST_FILE=<path>` runs any pytest path.
-- `make test_matrix` runs the unit tests on Python 3.11 to 3.14, as CI's matrix does.
+- `make test_matrix` runs the unit tests on every Python version the classifiers in `pyproject.toml` list, as CI's matrix does.
 - `make lint` runs `ruff check`, `ruff format --diff` and mypy over the whole tree. This is the typecheck.
 - `make format` runs `ruff check --fix --exit-zero` and `ruff format`. It passes even when unfixable lint errors remain, so run `make lint` after it.
 - `make spell_check` runs codespell with the config in `pyproject.toml`.
@@ -40,6 +40,7 @@ Do not update `uv.lock` or add dependencies to `pyproject.toml` without explicit
 - A parameter the caller did not set must be absent from the request, not sent as `None`. Some providers reject the key whatever its value.
 - Unit tests never touch the network. Mock litellm, and pass `mock_response` on each call: the constructor drops it, and the request then reaches the real provider.
 - CI also runs the unit tests with every runtime dependency at the lowest version `pyproject.toml` allows, so code that reads a field only recent litellm releases set must pass there too.
+- The classifiers in `pyproject.toml` are the one list of supported Python versions: CI's matrices and `make test_matrix` read them, and `.python-version` must name the lowest. A pre-commit hook checks that `.python-version`, the lowest classifier and the `requires-python` floor agree.
 - Keep issue and PR numbers out of code comments and docstrings.
 - Update docstrings in the same PR as the behaviour they describe. User-facing guides belong in the LangChain docs repository, not in `README.md`.
 - release-please writes `CHANGELOG.md` and the version numbers. Do not edit them.

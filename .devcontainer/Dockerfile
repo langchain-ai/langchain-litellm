@@ -1,4 +1,4 @@
-# Python 3.11 is the lowest supported version and the one CI lints with.
-FROM mcr.microsoft.com/devcontainers/python:3-3.11-trixie
+# No Python in the image: `uv sync` installs the one .python-version names.
+FROM mcr.microsoft.com/devcontainers/base:2-trixie
 
 COPY --from=ghcr.io/astral-sh/uv:0.13.6 /uv /uvx /bin/

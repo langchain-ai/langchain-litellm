@@ -20,13 +20,28 @@ permissions:
   contents: read
 
 jobs:
+  python-versions:
+    name: "Python versions"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      versions: ${{ steps.read.outputs.versions }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # pyproject.toml's classifiers are the one list of supported versions.
+      - id: read
+        run: echo "versions=$(python3 scripts/python_versions.py --matrix)" >> "$GITHUB_OUTPUT"
+
   test-newest:
     name: "Test newest litellm (Python ${{ matrix.python-version }})"
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    needs: python-versions
     strategy:
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        python-version: ${{ fromJSON(needs.python-versions.outputs.versions) }}
       fail-fast: false
     steps:
       # This job runs a litellm no lock has vetted, so it keeps no token on disk and never
