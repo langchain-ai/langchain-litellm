@@ -64,15 +64,18 @@ jobs:
 
       # A full resolve of pyproject.toml, so it skips pre-releases, yanked releases and any
       # version the range excludes, and keeps the declared extras, as a user's install does.
+      # litellm is the exception: the floor names the first release with opencode_go, which is
+      # a pre-release until 1.109.0 ships.
       - name: Resolve the newest litellm
         id: newest
         env:
           PYTHON_VERSION: ${{ matrix.python-version }}
         run: |
           pin=$(uv pip compile pyproject.toml --python-version "$PYTHON_VERSION" \
-            --prerelease disallow --no-strip-extras --refresh-package litellm \
+            --prerelease disallow --prerelease-package litellm=allow \
+            --no-strip-extras --refresh-package litellm \
             --no-header --no-annotate --quiet \
-            | grep -xE 'litellm(\[[a-z0-9,_-]+\])?==[0-9]+(\.[0-9]+)*(\.post[0-9]+)?')
+            | grep -xE 'litellm(\[[a-z0-9,_-]+\])?==[0-9]+(\.[0-9]+)*((a|b|rc|\.post|\.dev)[0-9]+)*')
           echo "pin=$pin" >> "$GITHUB_OUTPUT"
           echo "::notice title=Newest litellm::$pin on Python $PYTHON_VERSION"
 

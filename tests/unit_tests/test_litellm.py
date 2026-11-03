@@ -725,6 +725,43 @@ def test_unattributable_model_leaves_api_key_unset(_no_provider_env: None) -> No
     assert llm._client_params.get("api_key") is None
 
 
+def test_a_native_provider_prefix_reaches_litellm_unchanged(
+    _no_provider_env: None,
+) -> None:
+    """A provider litellm knows needs no wrapper allowlist or endpoint override.
+
+    The model string, its session and the explicit session header are litellm's
+    inputs, so the wrapper must hand each over exactly as given.
+    """
+    llm = ChatLiteLLM(
+        model="opencode_go/deepseek-v4.1-flash",
+        model_kwargs={"litellm_session_id": "my-conversation-1"},
+        extra_headers={"x-opencode-session": "my-conversation-1"},
+    )
+
+    with patch.object(llm.client, "completion", return_value=_MOCK_OK) as completion:
+        llm.invoke("hi")
+
+    sent = completion.call_args.kwargs
+    assert sent["model"] == "opencode_go/deepseek-v4.1-flash"
+    assert sent["litellm_session_id"] == "my-conversation-1"
+    assert sent["extra_headers"] == {"x-opencode-session": "my-conversation-1"}
+    assert "api_base" not in sent
+
+
+def test_the_litellm_floor_knows_opencode_go() -> None:
+    """Bumping the floor is what makes the native provider prefix work.
+
+    A passthrough test alone passes on a litellm that cannot route the model.
+    """
+    model, provider, _, _ = litellm.get_llm_provider(
+        model="opencode_go/deepseek-v4.1-flash"
+    )
+
+    assert model == "deepseek-v4.1-flash"
+    assert provider == "opencode_go"
+
+
 def test_provider_specific_fields_in_delta() -> None:
     """Test that provider_specific_fields are preserved when converting deltas."""
     mock_delta = {
@@ -4250,12 +4287,13 @@ def test_use_previous_response_id_refuses_a_deployment_id() -> None:
     completion.assert_not_called()
 
 
-def test_use_responses_api_refuses_a_name_litellm_would_not_bridge(
+def test_use_responses_api_follows_a_routed_name_over_the_model_map(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """litellm bridges only a routed name its model map leaves unresolved.
+    """A ``responses/`` name forces the bridge in litellm, even over a chat map entry.
 
-    Resolved to a chat model, the name would go to Chat Completions as the model id.
+    The wrapper asks litellm which route the name takes, so it must send the routed
+    name rather than second-guess the model map.
     """
     monkeypatch.setitem(
         litellm.model_cost,
@@ -4266,13 +4304,10 @@ def test_use_responses_api_refuses_a_name_litellm_would_not_bridge(
         model="openrouter/fake-model", api_key="k", use_responses_api=True
     )
 
-    with (
-        patch.object(llm.client, "completion") as completion,
-        pytest.raises(ValueError, match="cannot send"),
-    ):
+    with patch.object(llm.client, "completion", return_value=_MOCK_OK) as completion:
         llm.invoke("hi")
 
-    completion.assert_not_called()
+    assert completion.call_args.kwargs["model"] == "openrouter/responses/fake-model"
 
 
 @pytest.mark.parametrize(

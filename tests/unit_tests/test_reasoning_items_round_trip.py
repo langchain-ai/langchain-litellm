@@ -508,7 +508,7 @@ def test_an_item_from_elsewhere_stays_behind(
 @pytest.mark.parametrize(
     ("mode", "kept", "sent"),
     [
-        pytest.param("invoke", ["rs_2"], [("rs_2", "gAAAAB-2")], id="invoke"),
+        pytest.param("invoke", ["rs_1", "rs_2"], [], id="invoke"),
         pytest.param("stream", ["rs_1", "rs_2"], [], id="stream"),
     ],
 )
@@ -516,7 +516,7 @@ def test_a_turn_with_several_items_goes_back_without_them(
     monkeypatch: pytest.MonkeyPatch, mode: str, kept: list[str], sent: list[Any]
 ) -> None:
     """litellm puts a turn's items ahead of its text and tool calls, which moves all
-    but a lone item. Unstreamed, litellm itself keeps only the last one."""
+    but a lone item. A turn with several therefore goes back without any."""
     first_item = reasoning_item("rs_1", "Search first.", "gAAAAB-1")
     second_item = reasoning_item("rs_2", "Now the weather.", "gAAAAB-2")
     reply = responses_api_reply(first_item, second_item, message_item("On it."), CALL)

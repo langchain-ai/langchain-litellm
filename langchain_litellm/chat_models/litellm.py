@@ -1617,6 +1617,12 @@ class ChatLiteLLM(BaseChatModel):
     model: str
     """The model to call, named as litellm routes it: ``"<provider>/<model>"``.
 
+    Every provider prefix litellm supports passes through unchanged, so a new
+    litellm provider needs no change here. OpenCode Go, for example, uses
+    ``"opencode_go/<model>"`` with ``OPENCODE_API_KEY`` set; forward a session as
+    ``model_kwargs={"litellm_session_id": ...}`` or
+    ``extra_headers={"x-opencode-session": ...}``.
+
     Required: there is no default, since any model picked here is one its provider
     will eventually retire. ``model_name`` given alone stands in for it.
     """
