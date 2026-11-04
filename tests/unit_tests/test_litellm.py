@@ -9,6 +9,7 @@ import subprocess
 import sys
 import warnings
 from collections import OrderedDict, defaultdict
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -30,7 +31,13 @@ from langchain_core.messages import (
 )
 from langchain_core.runnables import RunnableLambda
 from langchain_core.tools import Tool
-from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function
+from litellm.llms.custom_llm import CustomLLM
+from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
+    Delta,
+    Function,
+    GenericStreamingChunk,
+)
 from pydantic import BaseModel, ValidationError
 
 # first-party
@@ -4543,3 +4550,92 @@ def test_a_subclass_can_still_default_its_model() -> None:
         model: str = "openai/pinned"
 
     assert _Pinned().model == "openai/pinned"
+
+
+# ── providers litellm adds ────────────────────────────────────────────────────
+
+
+_NEW_PROVIDER = "provider_new_to_langchain_litellm"
+
+
+class _NewProvider(CustomLLM):
+    def __init__(self) -> None:
+        super().__init__()
+        self.models: list[str] = []
+
+    def completion(self, *args: Any, **kwargs: Any) -> litellm.ModelResponse:
+        self.models.append(kwargs["model"])
+        return litellm.ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "ok"}}]
+        )
+
+    async def acompletion(self, *args: Any, **kwargs: Any) -> litellm.ModelResponse:
+        return self.completion(**kwargs)
+
+    def streaming(self, *args: Any, **kwargs: Any) -> Iterator[GenericStreamingChunk]:
+        self.models.append(kwargs["model"])
+        yield GenericStreamingChunk(
+            text="ok",
+            is_finished=True,
+            finish_reason="stop",
+            index=0,
+            tool_use=None,
+            usage=None,
+        )
+
+    # litellm iterates the result unawaited, so this is an async generator, not the
+    # coroutine CustomLLM declares.
+    async def astreaming(  # type: ignore[override]
+        self, *args: Any, **kwargs: Any
+    ) -> AsyncIterator[GenericStreamingChunk]:
+        for chunk in self.streaming(**kwargs):
+            yield chunk
+
+
+@pytest.fixture
+def _new_provider(monkeypatch: pytest.MonkeyPatch) -> _NewProvider:
+    """Register a provider with litellm alone, as a litellm release adds one."""
+    provider = _NewProvider()
+    monkeypatch.setattr(
+        litellm,
+        "custom_provider_map",
+        [{"provider": _NEW_PROVIDER, "custom_handler": provider}],
+    )
+    # litellm registers into both lists in place; copies keep that out of other tests.
+    monkeypatch.setattr(litellm, "provider_list", list(litellm.provider_list))
+    monkeypatch.setattr(litellm, "_custom_providers", list(litellm._custom_providers))
+    litellm.utils.custom_llm_setup()
+    return provider
+
+
+@pytest.mark.parametrize("router", [False, True])
+@pytest.mark.parametrize("method", ["invoke", "ainvoke", "stream", "astream"])
+async def test_a_provider_litellm_adds_needs_no_connector_change(
+    _new_provider: _NewProvider, router: bool, method: str
+) -> None:
+    """litellm alone decides which providers exist; every entry point defers to it."""
+    model = f"{_NEW_PROVIDER}/model-x"
+    llm = (
+        ChatLiteLLMRouter(
+            router=litellm.Router(
+                model_list=[{"model_name": "group", "litellm_params": {"model": model}}]
+            ),
+            model="group",
+        )
+        if router
+        else ChatLiteLLM(model=model)
+    )
+
+    message = await whole_reply(llm, method)
+
+    assert message.content == "ok"
+    assert _new_provider.models == ["model-x"]
+
+
+@pytest.mark.parametrize("method", ["invoke", "ainvoke", "stream", "astream"])
+async def test_a_provider_litellm_lacks_raises_litellms_own_error(method: str) -> None:
+    """Adding a provider is litellm's job, so its refusal reaches callers unchanged."""
+    llm = ChatLiteLLM(model=f"{_NEW_PROVIDER}/model-x")
+
+    with pytest.raises(litellm.BadRequestError, match="LLM Provider NOT provided"):
+        await whole_reply(llm, method)
