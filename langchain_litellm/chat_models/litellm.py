@@ -1617,6 +1617,10 @@ class ChatLiteLLM(BaseChatModel):
     model: str
     """The model to call, named as litellm routes it: ``"<provider>/<model>"``.
 
+    Any provider the installed litellm routes works as is. One it lacks raises
+    litellm's own ``BadRequestError``: a new provider takes a newer litellm, not a
+    change here.
+
     Required: there is no default, since any model picked here is one its provider
     will eventually retire. ``model_name`` given alone stands in for it.
     """
