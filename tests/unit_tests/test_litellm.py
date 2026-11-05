@@ -4543,3 +4543,102 @@ def test_a_subclass_can_still_default_its_model() -> None:
         model: str = "openai/pinned"
 
     assert _Pinned().model == "openai/pinned"
+
+
+# ── providers litellm adds ────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("router", [False, True])
+@pytest.mark.parametrize("method", ["invoke", "ainvoke", "stream", "astream"])
+@pytest.mark.parametrize("session_route", ["model_kwargs", "extra_headers"])
+@pytest.mark.parametrize(
+    ("model", "host", "session_header"),
+    [
+        ("fireworks_ai/model-x", "api.fireworks.ai", "x-session-affinity"),
+        pytest.param(
+            "opencode_go/deepseek-v4.1-flash",
+            "opencode.ai",
+            "x-opencode-session",
+            marks=pytest.mark.skipif(
+                "opencode_go" not in litellm.provider_list,
+                reason="this litellm has no opencode_go",
+            ),
+        ),
+    ],
+    ids=["fireworks_ai", "opencode_go"],
+)
+async def test_a_provider_litellm_adds_needs_no_connector_change(
+    monkeypatch: pytest.MonkeyPatch,
+    router: bool,
+    method: str,
+    session_route: str,
+    model: str,
+    host: str,
+    session_header: str,
+) -> None:
+    """litellm alone decides which providers exist and how a session reaches each.
+
+    fireworks_ai stands in for a new provider: the connector never names it, and
+    litellm sends it a session as a header, as it does opencode_go. opencode_go runs
+    on any litellm that ships it, so no floor is raised for it.
+
+    Endpoint overrides in the developer's environment would redirect the requests.
+    """
+    for name in ("FIREWORKS_API_BASE", "OPENCODE_GO_API_BASE"):
+        monkeypatch.delenv(name, raising=False)
+    settings: dict[str, Any] = (
+        {"model_kwargs": {"litellm_session_id": "conversation-1"}}
+        if session_route == "model_kwargs"
+        else {"extra_headers": {session_header: "conversation-1"}}
+    )
+    requests = serve_http(
+        monkeypatch,
+        chat_completion_reply("ok"),
+        chat_completion_events(
+            "ok", {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+        ),
+    )
+    params = {"model": model, "api_key": "k"}
+    llm = (
+        ChatLiteLLMRouter(
+            router=litellm.Router(
+                model_list=[{"model_name": "group", "litellm_params": params}]
+            ),
+            model="group",
+            **settings,
+        )
+        if router
+        else ChatLiteLLM(model=model, api_key="k", **settings)
+    )
+
+    message = await whole_reply(llm, method)
+
+    assert message.content == "ok"
+    assert requests[-1].url.host == host
+    assert requests[-1].headers[session_header] == "conversation-1"
+
+
+@pytest.mark.parametrize("router", [False, True])
+@pytest.mark.parametrize("method", ["invoke", "ainvoke", "stream", "astream"])
+async def test_a_provider_litellm_lacks_is_refused_by_litellm(
+    router: bool, method: str
+) -> None:
+    """Adding a provider is litellm's job, so its refusal reaches callers unchanged.
+
+    Only a wildcard Router gets this far: litellm refuses a named deployment when the
+    Router is built.
+    """
+    model = "provider_new_to_langchain_litellm/model-x"
+    llm = (
+        ChatLiteLLMRouter(
+            router=litellm.Router(
+                model_list=[{"model_name": "*", "litellm_params": {"model": "*"}}]
+            ),
+            model=model,
+        )
+        if router
+        else ChatLiteLLM(model=model)
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="LLM Provider NOT provided"):
+        await whole_reply(llm, method)
