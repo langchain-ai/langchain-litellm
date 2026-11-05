@@ -9,7 +9,6 @@ import subprocess
 import sys
 import warnings
 from collections import OrderedDict, defaultdict
-from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -31,13 +30,7 @@ from langchain_core.messages import (
 )
 from langchain_core.runnables import RunnableLambda
 from langchain_core.tools import Tool
-from litellm.llms.custom_llm import CustomLLM
-from litellm.types.utils import (
-    ChatCompletionDeltaToolCall,
-    Delta,
-    Function,
-    GenericStreamingChunk,
-)
+from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function
 from pydantic import BaseModel, ValidationError
 
 # first-party
@@ -4555,128 +4548,49 @@ def test_a_subclass_can_still_default_its_model() -> None:
 # ── providers litellm adds ────────────────────────────────────────────────────
 
 
-_NEW_PROVIDER = "provider_new_to_langchain_litellm"
-_NEW_MODEL = f"{_NEW_PROVIDER}/model-x"
-
-
-class _NewProvider(CustomLLM):
-    def __init__(self) -> None:
-        super().__init__()
-        self.calls: list[dict[str, Any]] = []
-
-    def completion(self, *args: Any, **kwargs: Any) -> litellm.ModelResponse:
-        self.calls.append(kwargs)
-        return litellm.ModelResponse(
-            choices=[{"message": {"role": "assistant", "content": "ok"}}]
-        )
-
-    async def acompletion(self, *args: Any, **kwargs: Any) -> litellm.ModelResponse:
-        return self.completion(**kwargs)
-
-    def streaming(self, *args: Any, **kwargs: Any) -> Iterator[GenericStreamingChunk]:
-        self.calls.append(kwargs)
-        yield GenericStreamingChunk(
-            text="ok",
-            is_finished=True,
-            finish_reason="stop",
-            index=0,
-            tool_use=None,
-            usage=None,
-        )
-
-    # litellm iterates the result unawaited, so this is an async generator, not the
-    # coroutine CustomLLM declares.
-    async def astreaming(  # type: ignore[override]
-        self, *args: Any, **kwargs: Any
-    ) -> AsyncIterator[GenericStreamingChunk]:
-        for chunk in self.streaming(**kwargs):
-            yield chunk
-
-
-@pytest.fixture
-def _new_provider(monkeypatch: pytest.MonkeyPatch) -> _NewProvider:
-    """Register a provider with litellm alone, as a litellm release adds one."""
-    provider = _NewProvider()
-    monkeypatch.setattr(
-        litellm,
-        "custom_provider_map",
-        [{"provider": _NEW_PROVIDER, "custom_handler": provider}],
-    )
-    # litellm registers into both lists in place; copies keep that out of other tests.
-    monkeypatch.setattr(litellm, "provider_list", list(litellm.provider_list))
-    monkeypatch.setattr(litellm, "_custom_providers", list(litellm._custom_providers))
-    litellm.utils.custom_llm_setup()
-    return provider
-
-
-def _chat_model(model: str, router: bool, **settings: Any) -> ChatLiteLLM:
-    if not router:
-        return ChatLiteLLM(model=model, api_key="k", **settings)
-    params = {"model": model, "api_key": "k"}
-    return ChatLiteLLMRouter(
-        router=litellm.Router(
-            model_list=[{"model_name": "group", "litellm_params": params}]
-        ),
-        model="group",
-        **settings,
-    )
-
-
 @pytest.mark.parametrize("router", [False, True])
 @pytest.mark.parametrize("method", ["invoke", "ainvoke", "stream", "astream"])
-async def test_a_provider_litellm_adds_needs_no_connector_change(
-    _new_provider: _NewProvider, router: bool, method: str
-) -> None:
-    """litellm alone decides which providers exist; every entry point defers to it."""
-    message = await whole_reply(_chat_model(_NEW_MODEL, router), method)
-
-    assert message.content == "ok"
-    assert [call["model"] for call in _new_provider.calls] == ["model-x"]
-
-
-@pytest.mark.parametrize("router", [False, True])
-@pytest.mark.parametrize("method", ["invoke", "ainvoke", "stream", "astream"])
-async def test_a_provider_litellm_adds_gets_the_session_the_caller_set(
-    _new_provider: _NewProvider, router: bool, method: str
-) -> None:
-    """Both routes to a session are litellm's inputs, so each reaches it as given."""
-    llm = _chat_model(
-        _NEW_MODEL,
-        router,
-        model_kwargs={"litellm_session_id": "conversation-1"},
-        extra_headers={"x-session": "conversation-1"},
-    )
-
-    await whole_reply(llm, method)
-
-    call = _new_provider.calls[0]
-    assert call["litellm_params"]["litellm_session_id"] == "conversation-1"
-    assert call["headers"]["x-session"] == "conversation-1"
-
-
-@pytest.mark.skipif(
-    "opencode_go" not in litellm.provider_list,
-    reason="this litellm has no opencode_go",
-)
-@pytest.mark.parametrize("router", [False, True])
-@pytest.mark.parametrize("method", ["invoke", "ainvoke", "stream", "astream"])
+@pytest.mark.parametrize("session_route", ["model_kwargs", "extra_headers"])
 @pytest.mark.parametrize(
-    "session",
+    ("model", "host", "session_header"),
     [
-        {"model_kwargs": {"litellm_session_id": "conversation-1"}},
-        {"extra_headers": {"x-opencode-session": "conversation-1"}},
+        ("fireworks_ai/model-x", "api.fireworks.ai", "x-session-affinity"),
+        pytest.param(
+            "opencode_go/deepseek-v4.1-flash",
+            "opencode.ai",
+            "x-opencode-session",
+            marks=pytest.mark.skipif(
+                "opencode_go" not in litellm.provider_list,
+                reason="this litellm has no opencode_go",
+            ),
+        ),
     ],
-    ids=["litellm_session_id", "x-opencode-session"],
+    ids=["fireworks_ai", "opencode_go"],
 )
-async def test_opencode_go_reaches_opencode_with_the_session_the_caller_set(
-    monkeypatch: pytest.MonkeyPatch, router: bool, method: str, session: dict[str, Any]
+async def test_a_provider_litellm_adds_needs_no_connector_change(
+    monkeypatch: pytest.MonkeyPatch,
+    router: bool,
+    method: str,
+    session_route: str,
+    model: str,
+    host: str,
+    session_header: str,
 ) -> None:
-    """A stand-in cannot show that litellm routes the real provider, so this runs on
-    any litellm that ships it, with no floor raised for it.
+    """litellm alone decides which providers exist and how a session reaches each.
 
-    An endpoint override in the developer's environment would redirect the request.
+    fireworks_ai stands in for a new provider: the connector never names it, and
+    litellm sends it a session as a header, as it does opencode_go. opencode_go runs
+    on any litellm that ships it, so no floor is raised for it.
+
+    Endpoint overrides in the developer's environment would redirect the requests.
     """
-    monkeypatch.delenv("OPENCODE_GO_API_BASE", raising=False)
+    for name in ("FIREWORKS_API_BASE", "OPENCODE_GO_API_BASE"):
+        monkeypatch.delenv(name, raising=False)
+    settings: dict[str, Any] = (
+        {"model_kwargs": {"litellm_session_id": "conversation-1"}}
+        if session_route == "model_kwargs"
+        else {"extra_headers": {session_header: "conversation-1"}}
+    )
     requests = serve_http(
         monkeypatch,
         chat_completion_reply("ok"),
@@ -4684,19 +4598,47 @@ async def test_opencode_go_reaches_opencode_with_the_session_the_caller_set(
             "ok", {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
         ),
     )
-    llm = _chat_model("opencode_go/deepseek-v4.1-flash", router, **session)
+    params = {"model": model, "api_key": "k"}
+    llm = (
+        ChatLiteLLMRouter(
+            router=litellm.Router(
+                model_list=[{"model_name": "group", "litellm_params": params}]
+            ),
+            model="group",
+            **settings,
+        )
+        if router
+        else ChatLiteLLM(model=model, api_key="k", **settings)
+    )
 
     message = await whole_reply(llm, method)
 
     assert message.content == "ok"
-    assert requests[-1].url.host == "opencode.ai"
-    assert requests[-1].headers["x-opencode-session"] == "conversation-1"
+    assert requests[-1].url.host == host
+    assert requests[-1].headers[session_header] == "conversation-1"
 
 
+@pytest.mark.parametrize("router", [False, True])
 @pytest.mark.parametrize("method", ["invoke", "ainvoke", "stream", "astream"])
-async def test_a_provider_litellm_lacks_raises_litellms_own_error(method: str) -> None:
-    """Adding a provider is litellm's job, so its refusal reaches callers unchanged."""
-    llm = ChatLiteLLM(model=_NEW_MODEL)
+async def test_a_provider_litellm_lacks_is_refused_by_litellm(
+    router: bool, method: str
+) -> None:
+    """Adding a provider is litellm's job, so its refusal reaches callers unchanged.
+
+    Only a wildcard Router gets this far: litellm refuses a named deployment when the
+    Router is built.
+    """
+    model = "provider_new_to_langchain_litellm/model-x"
+    llm = (
+        ChatLiteLLMRouter(
+            router=litellm.Router(
+                model_list=[{"model_name": "*", "litellm_params": {"model": "*"}}]
+            ),
+            model=model,
+        )
+        if router
+        else ChatLiteLLM(model=model)
+    )
 
     with pytest.raises(litellm.BadRequestError, match="LLM Provider NOT provided"):
         await whole_reply(llm, method)
