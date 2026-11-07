@@ -9,6 +9,7 @@ import subprocess
 import sys
 import warnings
 from collections import OrderedDict, defaultdict
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -2011,6 +2012,15 @@ _FLAT_FUNCTION_TOOL = {
     "parameters": {"type": "object", "properties": {}},
     "strict": False,
 }
+_WEB_SEARCH_FUNCTION = {
+    "type": "function",
+    "function": {"name": "web_search", "parameters": {"type": "object"}},
+}
+_FILE_SEARCH_TOOL = {"type": "file_search", "vector_store_ids": ["vs_1"]}
+_DOCS_SERVER = {"type": "mcp", "server_label": "docs"}
+_WIKI_SERVER = {"type": "mcp", "server_label": "wiki"}
+_DOCS_MCP_TOOL = {**_DOCS_SERVER, "server_url": "https://example.com/docs"}
+_WIKI_MCP_TOOL = {**_WIKI_SERVER, "server_url": "https://example.com/wiki"}
 
 
 @pytest.mark.parametrize("by_name", [False, True], ids=["dict", "name"])
@@ -2020,8 +2030,19 @@ _FLAT_FUNCTION_TOOL = {
         ([_dummy_tool], "_dummy_tool"),
         ([_dummy_tool, {"type": "web_search"}], "_dummy_tool"),
         ([_FLAT_FUNCTION_TOOL], "lookup"),
+        ([_WEB_SEARCH_FUNCTION, {"type": "web_search"}], "web_search"),
+        (
+            [{**_FLAT_FUNCTION_TOOL, "name": "web_search"}, {"type": "web_search"}],
+            "web_search",
+        ),
     ],
-    ids=["function", "beside-built-in", "flat-function"],
+    ids=[
+        "function",
+        "beside-built-in",
+        "flat-function",
+        "named-like-a-built-in",
+        "flat-named-like-a-built-in",
+    ],
 )
 def test_bind_tools_forces_a_function_bound_in_any_shape(
     tools: list[Any], name: str, by_name: bool
@@ -2041,21 +2062,152 @@ def test_bind_tools_forces_a_function_bound_in_any_shape(
 @pytest.mark.parametrize(
     ("tools", "tool_choice"),
     [
-        ([_dummy_tool, {"type": "web_search"}], {"type": "web_search"}),
+        ([_dummy_tool], {"type": "web_search"}),
         ([_dummy_tool], {"type": "auto"}),
         ([_FLAT_FUNCTION_TOOL], {"type": "function", "name": "lookup"}),
+        ([_dummy_tool], {"type": "function"}),
+        ([{"type": "web_search"}], {}),
+        ([_DOCS_MCP_TOOL], _WIKI_SERVER),
+        (
+            [_dummy_tool, {"type": "web_search"}],
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {"mode": "auto", "tools": [{"type": "web_search"}]},
+            },
+        ),
     ],
-    ids=["built-in", "auto", "flat-function-choice"],
+    ids=[
+        "unbound-built-in",
+        "auto",
+        "flat-function-choice",
+        "function-type-alone",
+        "empty",
+        "another-server",
+        "allowed-tools",
+    ],
 )
 def test_bind_tools_leaves_other_dict_choices_to_litellm(
     tools: list[Any], tool_choice: dict[str, Any]
 ) -> None:
-    """Only a function choice names a tool to check; litellm accepts or refuses the rest."""
+    """Only a function choice is checked and only a choice naming a bound built-in tool
+    narrows the tools; litellm accepts or refuses the rest."""
     llm = ChatLiteLLM(model="gpt-4o-mini", api_key="fake")
 
     bound = llm.bind_tools(tools, tool_choice=tool_choice)
 
     assert bound.kwargs["tool_choice"] == tool_choice  # type: ignore[attr-defined]
+    assert len(bound.kwargs["tools"]) == len(tools)  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("tools", "tool_choice", "sent"),
+    [
+        ([_dummy_tool, {"type": "web_search"}], "web_search", [{"type": "web_search"}]),
+        (
+            [_dummy_tool, {"type": "web_search"}],
+            {"type": "web_search"},
+            [{"type": "web_search"}],
+        ),
+        ([_dummy_tool, _FILE_SEARCH_TOOL], "file_search", [_FILE_SEARCH_TOOL]),
+        ([_DOCS_MCP_TOOL], "mcp", [_DOCS_MCP_TOOL]),
+        ([_DOCS_MCP_TOOL, _WIKI_MCP_TOOL], "mcp", [_DOCS_MCP_TOOL, _WIKI_MCP_TOOL]),
+        ([_dummy_tool, _DOCS_MCP_TOOL], {"type": "mcp"}, [_DOCS_MCP_TOOL]),
+        ([_DOCS_MCP_TOOL, _WIKI_MCP_TOOL], _WIKI_SERVER, [_WIKI_MCP_TOOL]),
+    ],
+    ids=[
+        "name",
+        "dict",
+        "configured-tool",
+        "server-by-type-name",
+        "every-server-by-type-name",
+        "server-by-type-dict",
+        "server-by-label",
+    ],
+)
+def test_bind_tools_forces_a_bound_built_in_tool_by_sending_it_alone(
+    tools: list[Any], tool_choice: str | dict[str, Any], sent: list[dict[str, Any]]
+) -> None:
+    """litellm refuses a choice naming a built-in tool, so only the tools it names go,
+    whole, with "required"."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="fake")
+
+    bound = llm.bind_tools(tools, tool_choice=tool_choice)
+
+    assert bound.kwargs["tools"] == sent  # type: ignore[attr-defined]
+    assert bound.kwargs["tool_choice"] == "required"  # type: ignore[attr-defined]
+
+
+def test_bind_tools_downgrades_a_forced_built_in_tool_beside_thinking() -> None:
+    """Forcing one is a "required" choice, so Claude's manual thinking downgrades it
+    the same way."""
+    llm = ChatLiteLLM(
+        model="anthropic/claude-sonnet-4-20250514",
+        api_key="fake",
+        model_kwargs=_THINKING_KWARGS,
+    )
+
+    bound = llm.bind_tools(
+        [_dummy_tool, {"type": "web_search"}], tool_choice="web_search"
+    )
+
+    assert bound.kwargs["tools"] == [{"type": "web_search"}]  # type: ignore[attr-defined]
+    assert bound.kwargs["tool_choice"] == "auto"  # type: ignore[attr-defined]
+
+
+_FORCED_REPLY = responses_api_reply(message_item("ok"))
+_FORCED_EVENTS = responses_api_events(
+    {
+        "type": "response.created",
+        "response": {**_FORCED_REPLY, "status": "in_progress"},
+    },
+    {
+        "type": "response.output_text.delta",
+        "output_index": 0,
+        "item_id": "msg_1",
+        "content_index": 0,
+        "delta": "ok",
+        "logprobs": [],
+    },
+    {"type": "response.completed", "response": _FORCED_REPLY},
+)
+
+
+@pytest.mark.parametrize(
+    "make_llm",
+    [
+        lambda: ChatLiteLLM(model="gpt-4o-mini", api_key="k", use_responses_api=True),
+        lambda: ChatLiteLLMRouter(
+            router=litellm.Router(
+                model_list=[
+                    {
+                        "model_name": "g",
+                        "litellm_params": {
+                            "model": "openai/responses/gpt-4o-mini",
+                            "api_key": "k",
+                        },
+                    }
+                ]
+            )
+        ),
+    ],
+    ids=["ChatLiteLLM", "ChatLiteLLMRouter"],
+)
+@pytest.mark.parametrize("method", ["invoke", "ainvoke", "stream", "astream"])
+async def test_a_named_built_in_tool_reaches_the_responses_api_alone(
+    monkeypatch: pytest.MonkeyPatch, make_llm: Callable[[], ChatLiteLLM], method: str
+) -> None:
+    """Only that tool goes, with "required", which every litellm sends as is."""
+    requests = serve_http(monkeypatch, _FORCED_REPLY, _FORCED_EVENTS)
+    llm = make_llm().bind_tools(
+        [_dummy_tool, {"type": "web_search"}], tool_choice="web_search"
+    )
+
+    await whole_reply(llm, method)  # type: ignore[arg-type]
+
+    sent = json.loads(requests[0].content)
+    assert requests[0].url.path.endswith("/responses")
+    assert sent["tools"] == [{"type": "web_search"}]
+    assert sent["tool_choice"] == "required"
 
 
 @pytest.mark.parametrize(
@@ -2081,11 +2233,11 @@ def test_bind_tools_keeps_a_keyword_that_a_tool_is_named_after(
     ("tools", "tool_choice"),
     [
         ([_dummy_tool], "nonexistent"),
-        ([_dummy_tool, {"type": "web_search"}], "web_search"),
+        ([_dummy_tool], "web_search"),
     ],
-    ids=["typo", "built-in"],
+    ids=["typo", "unbound-built-in"],
 )
-def test_bind_tools_rejects_a_string_naming_no_bound_function(
+def test_bind_tools_rejects_a_string_naming_no_bound_tool(
     tools: list[Any], tool_choice: str
 ) -> None:
     """Providers read such a string differently, from an error to a silent drop."""
@@ -2128,6 +2280,17 @@ def test_bind_tools_rejects_a_function_choice_naming_no_bound_function(
         llm.bind_tools(
             tools, tool_choice={"type": "function", "function": {"name": name}}
         )
+
+
+def test_bind_tools_chooses_a_named_tool_only_by_its_name() -> None:
+    """A custom tool's type does not choose it, though a built-in tool's type does."""
+    llm = ChatLiteLLM(model="gpt-4o-mini", api_key="fake")
+
+    bound = llm.bind_tools([_CUSTOM_TOOL], tool_choice={"type": "custom"})
+
+    assert bound.kwargs["tool_choice"] == {"type": "custom"}  # type: ignore[attr-defined]
+    with pytest.raises(ValueError, match=re.escape("tool_choice names 'custom'")):
+        llm.bind_tools([_CUSTOM_TOOL], tool_choice="custom")
 
 
 @pytest.mark.parametrize(
