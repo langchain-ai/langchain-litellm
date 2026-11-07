@@ -1071,6 +1071,38 @@ def _refuses_forced_tools(model: str | None, custom_llm_provider: str | None) ->
     return any(AnthropicModelInfo.forced_tool_use_unsupported(n) for n in names)
 
 
+def _force_named_built_in_tools(
+    tool_choice: dict[str, Any] | str | bool | None, tools: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], dict[str, Any] | str | bool | None]:
+    """Return the tools and choice that force the bound built-in tools a choice names.
+
+    litellm refuses a choice such as ``{"type": "web_search"}``, so only the named tools
+    go, with ``"required"``. A choice names one by its type and, for an MCP server, its
+    label. A tool with a name is chosen by that name, so it never counts here, and any
+    other choice comes back as given, beside every tool.
+    """
+    named: dict[str, Any]
+    if isinstance(tool_choice, str):
+        # A tool's name outranks a built-in tool's type.
+        if any(tool.get("function", tool).get("name") == tool_choice for tool in tools):
+            return tools, tool_choice
+        named = {"type": tool_choice}
+    elif isinstance(tool_choice, dict) and "type" in tool_choice:
+        named = tool_choice
+    else:
+        return tools, tool_choice
+
+    chosen = [
+        tool
+        for tool in tools
+        if tool.get("type") != "function"
+        and "name" not in tool
+        and named.items()
+        <= {key: tool[key] for key in ("type", "server_label") if key in tool}.items()
+    ]
+    return (chosen, "required") if chosen else (tools, tool_choice)
+
+
 class ChatLiteLLMException(Exception):
     """Exception raised for errors in the LiteLLM integration."""
 
@@ -2552,9 +2584,10 @@ class ChatLiteLLM(BaseChatModel):
                 models, callables, and BaseTools will be automatically converted to
                 their schema dictionary representation.
             tool_choice: Controls tool-calling behavior. Options are:
-                - str of the form ``"<<tool_name>>"``: calls <<tool_name>>, which
-                must be a bound function tool. The keywords below win over a tool
-                of the same name.
+                - str of the form ``"<<tool_name>>"``: calls <<tool_name>>, a bound
+                function tool or, failing that, a bound built-in tool by its type,
+                such as ``"web_search"``. The keywords below win over a tool of the
+                same name.
                 - ``"auto"``:
                     automatically selects a tool (including no tool).
                 - ``"none"``:
@@ -2563,14 +2596,23 @@ class ChatLiteLLM(BaseChatModel):
                     forces at least one tool to be called.
                 - dict of the form:
                 ``{"type": "function", "function": {"name": <<tool_name>>}}``,
-                which must name a bound function tool; any other dict goes to litellm
-                as is.
+                which must name a bound function tool. A dict matching a bound
+                built-in tool, such as ``{"type": "web_search"}`` or
+                ``{"type": "mcp", "server_label": <<label>>}``, calls it. Any other
+                dict goes to litellm as is.
                 - ``False`` or ``None``: no effect
+
+                litellm refuses a choice naming a built-in tool, so naming one sends
+                only the tools it names, with ``"required"``: the other bound tools sit
+                out that call.
             **kwargs: Any additional parameters to pass to the
                 :class:`~langchain_core.runnables.Runnable` constructor.
         """
 
         formatted_tools = [convert_to_openai_tool(tool) for tool in tools]
+        formatted_tools, tool_choice = _force_named_built_in_tools(
+            tool_choice, formatted_tools
+        )
 
         # Robustly handle tool_choice='any' or True for ALL providers.
         # Many providers (Gemini, Vertex, etc.) via LiteLLM reject "any" but accept "required".
