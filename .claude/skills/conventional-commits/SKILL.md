@@ -20,8 +20,8 @@ description: Use before writing a commit message, PR title, PR description or br
 ## PR descriptions
 
 4. The PR description must parse as a commit body. It becomes the squash commit body, whoever merges can rewrap it, and release-please tries every body line as a footer.
-   - No line starts with a word joined to `(`, such as `foo(` or `` `foo( ``, unless that `(` closes before any other `(` and before the line ends. Code blocks count. Indent code lines.
-   - In unindented text, a call like `foo(x)` has no spaces or nested parens inside, so a rewrap cannot leave `foo(` open at a line end.
+   - No line starts with a word joined to `(`, such as `foo(` or `` `foo( ``, unless that `(` closes before any other `(` and before the line ends. Code blocks count, and indenting their lines does not help: the squash rewraps the description at about 72 columns and drops the indent.
+   - So a call with a space or a nested paren inside, such as `foo(a, b)`, stays out of the description, code blocks included, or the PR gets a `BEGIN_COMMIT_OVERRIDE` block before the merge. A call like `foo(x)` is safe anywhere.
    - No paragraph starts with `<type>:` or `<type>(<scope>):`, which release-please reads as a second commit. Do not repeat the title as a line of the description.
    - Close an open issue with `Fixes #N`. Link an issue that is already closed with `Follow-up to #N`, never `Fixes` or `Refs`, because release-please prints every footer reference as "closes #N".
    - release-please drops a commit it cannot parse, and the release-please job still succeeds. The `release-notes` job then fails on the push to `main`. The fix is a `BEGIN_COMMIT_OVERRIDE` block in the PR description, added before the merge when the description is at risk, or afterwards followed by a re-run of Release.
