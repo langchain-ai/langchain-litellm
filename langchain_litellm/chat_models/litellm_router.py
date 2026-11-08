@@ -130,6 +130,33 @@ def _deployment_metadata(response: Any, router: Any) -> dict[str, Any]:
     return metadata
 
 
+def _merge_token_usage(target: dict[str, Any], source: Mapping[str, Any]) -> None:
+    """Sum `source` into `target`, one level at a time.
+
+    LiteLLM's `Usage` carries nested detail objects (`prompt_tokens_details`,
+    `completion_tokens_details`), so a plain `+=` over the top-level keys adds a dict to a
+    dict on the second response. Numeric leaves are summed and nested objects are merged
+    the same way; a `None` leaf never erases a total another response supplied.
+    """
+    for key, value in source.items():
+        if isinstance(value, Mapping):
+            nested = target.get(key)
+            if not isinstance(nested, dict):
+                nested = {}
+                target[key] = nested
+            _merge_token_usage(nested, value)
+        elif value is None:
+            target.setdefault(key, None)
+        elif isinstance(value, int | float) and isinstance(
+            target.get(key), int | float
+        ):
+            target[key] += value
+        else:
+            # The shapes disagree (a detail object on one response, a number or nothing on
+            # another), so the most recent value wins rather than raising.
+            target[key] = value
+
+
 class ChatLiteLLMRouter(ChatLiteLLM):
     """LiteLLM Router-backed chat model.
 
@@ -961,11 +988,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                     if hasattr(token_usage, "model_dump")
                     else dict(token_usage)
                 )
-                for k, v in usage_items.items():
-                    if k in overall_token_usage and overall_token_usage[k] is not None:
-                        overall_token_usage[k] += v
-                    else:
-                        overall_token_usage[k] = v
+                _merge_token_usage(overall_token_usage, usage_items)
             if system_fingerprint is None:
                 system_fingerprint = output.get("system_fingerprint")
         combined = {"token_usage": overall_token_usage, "model_name": self.model}

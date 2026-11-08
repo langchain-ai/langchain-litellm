@@ -12,6 +12,7 @@ import litellm
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from litellm.types.utils import CredentialItem
+from litellm.utils import Usage
 
 from langchain_litellm._version import __version__
 from langchain_litellm.chat_models import ChatLiteLLMRouter
@@ -1895,6 +1896,111 @@ def test_router_combine_llm_outputs_accepts_a_plain_dict_usage() -> None:
         [{"token_usage": {"total_tokens": 3}, "model": "gpt-4"}]
     )
     assert combined["token_usage"]["total_tokens"] == 3
+
+
+def test_router_combine_llm_outputs_sums_nested_token_details() -> None:
+    """Two responses carrying detail objects sum; `dict += dict` used to raise."""
+    llm = ChatLiteLLMRouter(router=make_router())
+    usage = {
+        "prompt_tokens": 10,
+        "completion_tokens": 4,
+        "total_tokens": 14,
+        "prompt_tokens_details": {"cached_tokens": 5},
+    }
+    combined = llm._combine_llm_outputs(
+        [
+            {"token_usage": usage, "model": "gpt-4"},
+            {"token_usage": usage, "model": "gpt-4"},
+        ]
+    )
+    assert combined["token_usage"]["prompt_tokens"] == 20
+    assert combined["token_usage"]["completion_tokens"] == 8
+    assert combined["token_usage"]["total_tokens"] == 28
+    assert combined["token_usage"]["prompt_tokens_details"] == {"cached_tokens": 10}
+
+
+def test_router_combine_llm_outputs_tolerates_none_details() -> None:
+    """A `None` detail on one response does not erase what another response supplied."""
+    llm = ChatLiteLLMRouter(router=make_router())
+    combined = llm._combine_llm_outputs(
+        [
+            {"token_usage": {"prompt_tokens": 3, "completion_tokens_details": None}},
+            {"token_usage": {"prompt_tokens": 4, "completion_tokens_details": None}},
+        ]
+    )
+    assert combined["token_usage"]["prompt_tokens"] == 7
+    assert combined["token_usage"]["completion_tokens_details"] is None
+
+
+def test_router_combine_llm_outputs_handles_disagreeing_detail_shapes() -> None:
+    """A detail object on one response and a number or `None` on another must not raise."""
+    llm = ChatLiteLLMRouter(router=make_router())
+    combined = llm._combine_llm_outputs(
+        [
+            {"token_usage": {"prompt_tokens": 1, "prompt_tokens_details": None}},
+            {
+                "token_usage": {
+                    "prompt_tokens": 2,
+                    "prompt_tokens_details": {"cached_tokens": 5},
+                }
+            },
+            {"token_usage": {"prompt_tokens": 3, "prompt_tokens_details": 5}},
+        ]
+    )
+    assert combined["token_usage"]["prompt_tokens"] == 6
+    assert combined["token_usage"]["prompt_tokens_details"] == 5
+
+
+def _usage_reply() -> dict[str, Any]:
+    """A whole Chat Completions reply whose `Usage` carries nested token details."""
+    usage = Usage(
+        prompt_tokens=10,
+        completion_tokens=4,
+        total_tokens=14,
+        prompt_tokens_details={"cached_tokens": 5},
+    )
+    return chat_completion_reply("ok", usage=usage.model_dump())
+
+
+def test_router_generate_aggregates_nested_usage() -> None:
+    """The public sync generation path aggregates nested usage instead of raising."""
+    llm = ChatLiteLLMRouter(router=make_router())
+    reply = _usage_reply()
+    with patch.object(llm.router, "completion", return_value=reply):
+        result = llm.generate([[HumanMessage("first")], [HumanMessage("second")]])
+    assert len(result.generations) == 2
+    assert result.llm_output is not None
+    assert result.llm_output["token_usage"]["prompt_tokens"] == 20
+    assert result.llm_output["token_usage"]["completion_tokens"] == 8
+    assert result.llm_output["token_usage"]["total_tokens"] == 28
+    # `Usage.model_dump()` fills every detail key, so only the populated one is asserted.
+    assert (
+        result.llm_output["token_usage"]["prompt_tokens_details"]["cached_tokens"] == 10
+    )
+
+
+@pytest.mark.asyncio
+async def test_router_agenerate_aggregates_nested_usage() -> None:
+    """The public async generation path aggregates nested usage too."""
+    llm = ChatLiteLLMRouter(router=make_router())
+    reply = _usage_reply()
+
+    async def _acompletion(**kwargs: Any) -> Any:
+        return reply
+
+    with patch.object(llm.router, "acompletion", side_effect=_acompletion):
+        result = await llm.agenerate(
+            [[HumanMessage("first")], [HumanMessage("second")]]
+        )
+    assert len(result.generations) == 2
+    assert result.llm_output is not None
+    assert result.llm_output["token_usage"]["prompt_tokens"] == 20
+    assert result.llm_output["token_usage"]["completion_tokens"] == 8
+    assert result.llm_output["token_usage"]["total_tokens"] == 28
+    # `Usage.model_dump()` fills every detail key, so only the populated one is asserted.
+    assert (
+        result.llm_output["token_usage"]["prompt_tokens_details"]["cached_tokens"] == 10
+    )
 
 
 @pytest.mark.parametrize("method", ["stream", "astream"])
