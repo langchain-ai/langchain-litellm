@@ -982,6 +982,113 @@ def test_router_downgrades_a_forced_choice_for_a_deployment_aliased_to_claude(
     assert "incompatible with thinking" in caplog.text
 
 
+def _grouped_router(**options: Any) -> litellm.Router:
+    groups: dict[str, dict[str, Any]] = {
+        "a": {"model": "anthropic/claude-haiku-4-5"},
+        "b": {"model": "openai/gpt-4o-mini"},
+        "c": {"model": "anthropic/claude-sonnet-4-5", **_THINKING},
+        "opus": {"model": "anthropic/claude-opus-5-5"},
+    }
+    return litellm.Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {**params, "api_key": "k"}}
+            for name, params in groups.items()
+        ],
+        **options,
+    )
+
+
+@pytest.mark.parametrize(
+    ("router", "model"),
+    [
+        (lambda: _grouped_router(model_group_alias={"fast": "c"}), "fast"),
+        (
+            lambda: _grouped_router(
+                model_group_alias={"fast": {"model": "c", "hidden": True}}
+            ),
+            "fast",
+        ),
+        (
+            lambda: litellm.Router(
+                model_list=[
+                    {
+                        "model_name": "anthropic/*",
+                        "litellm_params": {
+                            "model": "anthropic/*",
+                            "api_key": "k",
+                            **_THINKING,
+                        },
+                    }
+                ]
+            ),
+            "anthropic/claude-sonnet-4-5",
+        ),
+        (lambda: _grouped_router(fallbacks=[{"a": ["c"]}]), "a"),
+        (lambda: _grouped_router(fallbacks=[{"*": ["c"]}]), "a"),
+        (lambda: _grouped_router(fallbacks=[{"a": [{"model": "c"}]}]), "a"),
+        (lambda: _grouped_router(fallbacks=[{"a": ["b"]}, {"b": ["c"]}]), "a"),
+        (
+            lambda: _grouped_router(
+                model_group_alias={"fast": "c"}, fallbacks=[{"a": ["fast"]}]
+            ),
+            "a",
+        ),
+        (lambda: _grouped_router(context_window_fallbacks=[{"a": ["c"]}]), "a"),
+        (lambda: _grouped_router(content_policy_fallbacks=[{"a": ["c"]}]), "a"),
+    ],
+    ids=[
+        "model-group-alias",
+        "hidden-model-group-alias",
+        "wildcard",
+        "fallback",
+        "generic-fallback",
+        "fallback-entry",
+        "fallback-of-a-fallback",
+        "fallback-to-an-alias",
+        "context-window-fallback",
+        "content-policy-fallback",
+    ],
+)
+def test_router_downgrades_a_forced_choice_for_a_thinking_deployment_a_call_reaches(
+    router: Callable[[], litellm.Router],
+    model: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The Router resolves the called group, and may retry the call on its fallbacks."""
+    llm = ChatLiteLLMRouter(router=router(), model=model)
+
+    with caplog.at_level(
+        logging.WARNING, logger="langchain_litellm.chat_models.litellm"
+    ):
+        bound = llm.bind_tools([_LOOKUP], tool_choice="required")
+
+    assert bound.kwargs["tool_choice"] == "auto"  # type: ignore[attr-defined]
+    assert "incompatible with thinking" in caplog.text
+
+
+def test_router_keeps_a_forced_choice_another_group_falls_back_from() -> None:
+    """litellm follows only the called group's own or generic fallbacks."""
+    llm = ChatLiteLLMRouter(router=_grouped_router(fallbacks=[{"b": ["c"]}]), model="a")
+
+    bound = llm.bind_tools([_LOOKUP], tool_choice="required")
+
+    assert bound.kwargs["tool_choice"] == "required"  # type: ignore[attr-defined]
+
+
+def test_router_checks_a_name_without_a_group_as_a_model_beside_fallbacks() -> None:
+    """No group has the name, so the Router serves it from the deployment of that
+    model before any fallback."""
+    llm = ChatLiteLLMRouter(
+        router=_grouped_router(fallbacks=[{"*": ["b"]}]),
+        model="anthropic/claude-sonnet-4-5",
+        model_kwargs=_THINKING,
+    )
+
+    bound = llm.bind_tools([_LOOKUP], tool_choice="required")
+
+    assert bound.kwargs["tool_choice"] == "auto"  # type: ignore[attr-defined]
+
+
 def test_router_keeps_a_forced_choice_no_claude_deployment_refuses() -> None:
     """Only a Claude deployment with manual thinking refuses the forced tool."""
     router = litellm.Router(
@@ -1077,6 +1184,29 @@ def test_router_downgrades_a_forced_choice_for_a_deployment_that_refuses_it(
         ]
     )
     llm = ChatLiteLLMRouter(router=router, model_name="assistant")
+
+    with caplog.at_level(
+        logging.WARNING, logger="langchain_litellm.chat_models.litellm"
+    ):
+        bound = llm.bind_tools([_LOOKUP], tool_choice="required")
+
+    assert bound.kwargs["tool_choice"] == "auto"  # type: ignore[attr-defined]
+    assert "unsupported by this model" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("options", "model"),
+    [
+        ({"model_group_alias": {"fast": "opus"}}, "fast"),
+        ({"fallbacks": [{"b": ["opus"]}]}, "b"),
+    ],
+    ids=["model-group-alias", "fallback"],
+)
+def test_router_downgrades_a_forced_choice_a_reached_deployment_refuses(
+    options: dict[str, Any], model: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Opus 5.5 refuses any forced tool, however the call reaches it."""
+    llm = ChatLiteLLMRouter(router=_grouped_router(**options), model=model)
 
     with caplog.at_level(
         logging.WARNING, logger="langchain_litellm.chat_models.litellm"
