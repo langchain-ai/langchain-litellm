@@ -19,6 +19,7 @@ from langchain_core.messages import (
     BaseMessage,
 )
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 
 from langchain_litellm.chat_models.litellm import (
     _FALLBACK_SETTINGS,
@@ -230,13 +231,13 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         raise ValueError(f"Model {model_name} not found in model_list.")
 
     def _is_claude_model(self) -> bool:
-        """Answer for the deployment, not the Router alias.
+        """Answer for the deployments a call may reach, not the Router alias.
 
         ``model``/``model_name`` here is the Router's alias, which need not contain
         the provider's model name at all, so the base implementation would miss a
         Claude deployment routed under an unrelated alias.
         """
-        matched = self._group_entries()
+        matched = self._reachable_entries()
         if not matched:
             return super()._is_claude_model()
         # A model group can fan across providers, so any Claude deployment counts.
@@ -532,13 +533,13 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         return deployments
 
     def _litellm_sends_manual_thinking(self, overrides: Mapping[str, Any]) -> bool:
-        """Answer for the Claude deployments the Router may pick.
+        """Answer for the Claude deployments a call may reach.
 
         A deployment or the Router's defaults can set thinking alone. The Router applies
         the caller's params to each deployment, by litellm's own rule where it has one,
         and only then fills gaps from its defaults.
         """
-        matched = self._group_entries()
+        matched = self._reachable_entries()
         if not matched:
             return super()._litellm_sends_manual_thinking(overrides)
         caller = _without_none(
@@ -564,8 +565,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         )
 
     def _model_refuses_forced_tools(self, overrides: Mapping[str, Any]) -> bool:
-        """Answer for the deployments the Router may pick, not the Router alias."""
-        matched = self._group_entries()
+        """Answer for the deployments a call may reach, not the Router alias."""
+        matched = self._reachable_entries()
         if not matched:
             return super()._model_refuses_forced_tools(overrides)
         return any(
@@ -575,14 +576,33 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             for params in (entry.get("litellm_params", {}) for entry in matched)
         )
 
-    def _group_entries(self) -> list[dict[str, Any]]:
-        """The ``model_list`` entries this model's alias routes to."""
-        alias = self.model_name or self.model
-        return [
-            entry
-            for entry in self.router.model_list or []
-            if entry.get("model_name") == alias
-        ]
+    def _reachable_entries(self) -> list[dict[str, Any]]:
+        """The deployments a call may reach: its group's, then those of every group
+        its fallbacks name, theirs included, each group resolved as the Router
+        resolves it, by name, ``model_group_alias`` or wildcard.
+
+        Empty when the Router resolves the called group to none, as for a
+        deployment's own model name, which the base class then reads as a model.
+        """
+        router = self.router
+        groups = [self.model_name or self.model]
+        entries = router.get_model_list(model_name=groups[0]) or []
+        if not entries:
+            return []
+        for group in groups:
+            for key in _FALLBACK_SETTINGS:
+                chain, _ = get_fallback_model_group(
+                    getattr(router, key, None) or [], group
+                )
+                for target in chain or []:
+                    # A fallback that overrides params is a dict with its group as model.
+                    name = (
+                        target.get("model") if isinstance(target, Mapping) else target
+                    )
+                    if isinstance(name, str) and name not in groups:
+                        groups.append(name)
+                        entries.extend(router.get_model_list(model_name=name) or [])
+        return entries
 
     def completion_with_retry(
         self, run_manager: CallbackManagerForLLMRun | None = None, **kwargs: Any
