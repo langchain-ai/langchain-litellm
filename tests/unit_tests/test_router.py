@@ -1072,6 +1072,7 @@ def test_router_downgrades_a_forced_choice_for_a_thinking_deployment_a_call_reac
             ),
             "fast",
         ),
+        (lambda: _grouped_router(fallbacks=[{"a": [{"temperature": 0}]}]), "a"),
         (
             lambda: litellm.Router(
                 model_list=[
@@ -1091,14 +1092,16 @@ def test_router_downgrades_a_forced_choice_for_a_thinking_deployment_a_call_reac
     ids=[
         "chain-of-another-group",
         "chain-of-the-alias-target",
+        "fallback-entry-without-a-model",
         "group-shadowing-a-wildcard",
     ],
 )
 def test_router_keeps_a_forced_choice_for_a_thinking_deployment_no_call_reaches(
     router: Callable[[], litellm.Router], model: str
 ) -> None:
-    """litellm follows only the called name's own or generic chain, and serves a
-    wildcard only to a name no group has."""
+    """litellm follows only the called name's own or generic chain, retries the
+    group itself for an entry naming no model, and serves a wildcard only to a
+    name no group has."""
     llm = ChatLiteLLMRouter(router=router(), model=model)
 
     bound = llm.bind_tools([_LOOKUP], tool_choice="required")
