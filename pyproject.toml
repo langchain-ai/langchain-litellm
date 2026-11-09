@@ -108,9 +108,6 @@ required-version = ">=0.12.22"
 # A plain `uv sync` installs every group, so editors and git hooks get the
 # locked ruff, mypy and pytest that `make lint`, `make test` and CI run.
 default-groups = "all"
-# litellm caps filelock below 4.0, but only 4.2.1 fixes filelock's 2026-10 advisories;
-# this reaches the lock, never the wheel. Drop it once litellm allows filelock 4.
-override-dependencies = ["filelock>=4.2.1"]
 
 [tool.mypy]
 disallow_untyped_defs = "True"
