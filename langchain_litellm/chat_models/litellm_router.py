@@ -599,7 +599,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                     getattr(router, key, None) or [], group
                 )
                 for target in chain or []:
-                    # A fallback that overrides params is a dict with its group as model.
+                    # A fallback that overrides params is a dict with its group as
+                    # model, or with no model to retry this group.
                     name = (
                         target.get("model") if isinstance(target, Mapping) else target
                     )
