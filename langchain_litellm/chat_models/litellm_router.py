@@ -237,7 +237,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         the provider's model name at all, so the base implementation would miss a
         Claude deployment routed under an unrelated alias.
         """
-        matched = self._reachable_entries()
+        matched = self._entries_litellm_may_try()
         if not matched:
             return super()._is_claude_model()
         # A model group can fan across providers, so any Claude deployment counts.
@@ -539,7 +539,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         the caller's params to each deployment, by litellm's own rule where it has one,
         and only then fills gaps from its defaults.
         """
-        matched = self._reachable_entries()
+        matched = self._entries_litellm_may_try()
         if not matched:
             return super()._litellm_sends_manual_thinking(overrides)
         caller = _without_none(
@@ -566,7 +566,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
 
     def _model_refuses_forced_tools(self, overrides: Mapping[str, Any]) -> bool:
         """Answer for the deployments a call may reach, not the Router alias."""
-        matched = self._reachable_entries()
+        matched = self._entries_litellm_may_try()
         if not matched:
             return super()._model_refuses_forced_tools(overrides)
         return any(
@@ -576,10 +576,14 @@ class ChatLiteLLMRouter(ChatLiteLLM):
             for params in (entry.get("litellm_params", {}) for entry in matched)
         )
 
-    def _reachable_entries(self) -> list[dict[str, Any]]:
-        """The deployments a call may reach: its group's, then those of every group
-        its fallbacks name, theirs included, each group resolved as the Router
+    def _entries_litellm_may_try(self) -> list[dict[str, Any]]:
+        """The deployments litellm may try for a call: its group's, then those of each
+        group its fallbacks name, theirs included, every group resolved as the Router
         resolves it, by name, ``model_group_alias`` or wildcard.
+
+        Chains come from litellm's own lookup. Replay's ``_reachable_groups`` counts
+        every chain, since more groups can only turn replay off; here a chain the call
+        never takes would strip the forced choice from every call.
 
         Empty when the Router resolves the called group to none, as for a
         deployment's own model name, which the base class then reads as a model.
