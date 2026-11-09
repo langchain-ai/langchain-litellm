@@ -2605,6 +2605,16 @@ class ChatLiteLLM(BaseChatModel):
                 litellm refuses a choice naming a built-in tool, so naming one sends
                 only the tools it names, with ``"required"``: the other bound tools sit
                 out that call.
+
+                A forced choice becomes ``"auto"``, with a warning, where it would be
+                refused: on a model litellm marks as refusing any forced tool, and on
+                Claude beside manual thinking set before binding, not at invoke time.
+                ``ChatLiteLLMRouter`` also checks the deployments a call reaches
+                through ``model_group_alias``, a wildcard or the Router's own
+                fallbacks, so one refusing fallback makes every call ``"auto"``,
+                including the calls its own group serves. The client cannot see a
+                LiteLLM proxy's deployments, so pass ``"auto"`` to a proxied Claude
+                model with manual thinking.
             **kwargs: Any additional parameters to pass to the
                 :class:`~langchain_core.runnables.Runnable` constructor.
         """
