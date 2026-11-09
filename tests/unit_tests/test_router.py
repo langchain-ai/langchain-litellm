@@ -998,6 +998,13 @@ def _grouped_router(**options: Any) -> litellm.Router:
     )
 
 
+def _thinking_wildcard() -> dict[str, Any]:
+    return {
+        "model_name": "anthropic/*",
+        "litellm_params": {"model": "anthropic/*", "api_key": "k", **_THINKING},
+    }
+
+
 @pytest.mark.parametrize(
     ("router", "model"),
     [
@@ -1009,29 +1016,18 @@ def _grouped_router(**options: Any) -> litellm.Router:
             "fast",
         ),
         (
-            lambda: litellm.Router(
-                model_list=[
-                    {
-                        "model_name": "anthropic/*",
-                        "litellm_params": {
-                            "model": "anthropic/*",
-                            "api_key": "k",
-                            **_THINKING,
-                        },
-                    }
-                ]
-            ),
+            lambda: litellm.Router(model_list=[_thinking_wildcard()]),
             "anthropic/claude-sonnet-4-5",
         ),
-        (lambda: _grouped_router(fallbacks=[{"a": ["c"]}]), "a"),
+        (lambda: _grouped_router(fallbacks=[{"b": ["c"]}]), "b"),
         (lambda: _grouped_router(fallbacks=[{"*": ["c"]}]), "a"),
         (lambda: _grouped_router(fallbacks=[{"a": [{"model": "c"}]}]), "a"),
         (lambda: _grouped_router(fallbacks=[{"a": ["b"]}, {"b": ["c"]}]), "a"),
         (
             lambda: _grouped_router(
-                model_group_alias={"fast": "c"}, fallbacks=[{"a": ["fast"]}]
+                model_group_alias={"fast": "c"}, fallbacks=[{"b": ["fast"]}]
             ),
-            "a",
+            "b",
         ),
         (lambda: _grouped_router(context_window_fallbacks=[{"a": ["c"]}]), "a"),
         (lambda: _grouped_router(content_policy_fallbacks=[{"a": ["c"]}]), "a"),
@@ -1066,9 +1062,44 @@ def test_router_downgrades_a_forced_choice_for_a_thinking_deployment_a_call_reac
     assert "incompatible with thinking" in caplog.text
 
 
-def test_router_keeps_a_forced_choice_another_group_falls_back_from() -> None:
-    """litellm follows only the called group's own or generic fallbacks."""
-    llm = ChatLiteLLMRouter(router=_grouped_router(fallbacks=[{"b": ["c"]}]), model="a")
+@pytest.mark.parametrize(
+    ("router", "model"),
+    [
+        (lambda: _grouped_router(fallbacks=[{"b": ["c"]}]), "a"),
+        (
+            lambda: _grouped_router(
+                model_group_alias={"fast": "b"}, fallbacks=[{"b": ["c"]}]
+            ),
+            "fast",
+        ),
+        (
+            lambda: litellm.Router(
+                model_list=[
+                    {
+                        "model_name": "anthropic/claude-sonnet-4-5",
+                        "litellm_params": {
+                            "model": "anthropic/claude-sonnet-4-5",
+                            "api_key": "k",
+                        },
+                    },
+                    _thinking_wildcard(),
+                ]
+            ),
+            "anthropic/claude-sonnet-4-5",
+        ),
+    ],
+    ids=[
+        "chain-of-another-group",
+        "chain-of-the-alias-target",
+        "group-shadowing-a-wildcard",
+    ],
+)
+def test_router_keeps_a_forced_choice_for_a_thinking_deployment_no_call_reaches(
+    router: Callable[[], litellm.Router], model: str
+) -> None:
+    """litellm follows only the called name's own or generic chain, and serves a
+    wildcard only to a name no group has."""
+    llm = ChatLiteLLMRouter(router=router(), model=model)
 
     bound = llm.bind_tools([_LOOKUP], tool_choice="required")
 
