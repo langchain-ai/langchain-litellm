@@ -2611,8 +2611,10 @@ class ChatLiteLLM(BaseChatModel):
                 Claude beside manual thinking set before binding, not at invoke time.
                 ``ChatLiteLLMRouter`` also checks the deployments a call reaches
                 through ``model_group_alias``, a wildcard or the Router's own
-                fallbacks. The client cannot see a LiteLLM proxy's deployments, so pass
-                ``"auto"`` to a proxied Claude model with manual thinking.
+                fallbacks, so one refusing fallback makes every call ``"auto"``,
+                including the calls its own group serves. The client cannot see a
+                LiteLLM proxy's deployments, so pass ``"auto"`` to a proxied Claude
+                model with manual thinking.
             **kwargs: Any additional parameters to pass to the
                 :class:`~langchain_core.runnables.Runnable` constructor.
         """
