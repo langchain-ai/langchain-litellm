@@ -1,5 +1,7 @@
 """LiteLLM Router chat model integration for LangChain."""
 
+import importlib
+import warnings
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from functools import partial
 from typing import Any
@@ -53,26 +55,51 @@ def _without_none(params: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in params.items() if value is not None}
 
 
+def _litellm_effort_rule() -> (
+    Callable[[Mapping[str, Any], Mapping[str, Any]], dict[str, Any]] | None
+):
+    """litellm's rule for what a call's ``reasoning_effort`` drops from a deployment,
+    on ``litellm.Router`` or in the shaping module of its Rust core, or None."""
+    rule = getattr(
+        litellm.Router, "_deployment_params_with_request_reasoning_override", None
+    )
+    if rule is not None:
+        return rule
+    try:
+        shaping = importlib.import_module("litellm.router_rust.invoke.shaping")
+    except ImportError:
+        return None
+    return getattr(shaping, "deployment_params_with_request_reasoning_override", None)
+
+
 def _deployment_as_sent(
     own: Mapping[str, Any], defaults: Mapping[str, Any], call: Mapping[str, Any]
 ) -> dict[str, Any]:
     """A deployment's params as the Router sends them for a call.
 
     litellm first drops from the deployment what the call's ``reasoning_effort``
-    replaces, where ``litellm.Router`` has that rule. Each Router default that is
-    not None then goes over the deployment's own, and the call's params over both,
-    except the call's model, which names the group. Tools add up, the deployment's
-    own first. A Router default list counts after them, as saved histories' digests
-    do, though litellm sends only the deployment's.
+    replaces. Each Router default that is not None then goes over the deployment's
+    own, and the call's params over both, except the call's model, which names the
+    group. Tools add up, the deployment's own first. A Router default list counts
+    after them, as saved histories' digests do, though litellm sends only the
+    deployment's.
     """
-    replace = getattr(
-        litellm.Router, "_deployment_params_with_request_reasoning_override", None
-    )
+    rule = _litellm_effort_rule()
+    if rule is None and call.get("reasoning_effort") is not None:
+        warnings.warn(
+            "ChatLiteLLMRouter cannot find litellm's rule for what a call's "
+            "reasoning_effort drops from a Router deployment, on litellm.Router or in "
+            "litellm.router_rust.invoke.shaping. It counts the deployment's own "
+            "thinking beside the call's effort instead, which can keep replay off and "
+            "make a forced tool_choice 'auto'. Upgrade langchain-litellm, or install "
+            "an earlier litellm.",
+            stacklevel=1,
+        )
     layered = {
         **_without_none(defaults),
         **{key: value for key, value in call.items() if key != "model"},
     }
-    sent = {**(replace(own, call) if replace else own), **layered}
+    sent = {**(own if rule is None else rule(own, call)), **layered}
     tools = [*(own.get("tools") or []), *(layered.get("tools") or [])]
     if tools:
         sent["tools"] = tools
@@ -558,7 +585,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         caller = _without_none(
             {"max_tokens": self.max_tokens, **self.model_kwargs, **overrides}
         )
-        defaults = self.router.default_litellm_params
+        defaults = getattr(self.router, "default_litellm_params", None) or {}
         return any(
             _is_claude(params.get("model"))
             and _sends_manual_thinking(
