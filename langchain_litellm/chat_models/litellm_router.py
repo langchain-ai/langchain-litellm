@@ -53,6 +53,32 @@ def _without_none(params: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in params.items() if value is not None}
 
 
+def _deployment_as_sent(
+    own: Mapping[str, Any], defaults: Mapping[str, Any], call: Mapping[str, Any]
+) -> dict[str, Any]:
+    """A deployment's params as the Router sends them for a call.
+
+    litellm first drops from the deployment what the call's ``reasoning_effort``
+    replaces, where ``litellm.Router`` has that rule. Each Router default that is
+    not None then goes over the deployment's own, and the call's params over both,
+    except the call's model, which names the group. Tools add up, the deployment's
+    own first. A Router default list counts after them, as saved histories' digests
+    do, though litellm sends only the deployment's.
+    """
+    replace = getattr(
+        litellm.Router, "_deployment_params_with_request_reasoning_override", None
+    )
+    layered = {
+        **_without_none(defaults),
+        **{key: value for key, value in call.items() if key != "model"},
+    }
+    sent = {**(replace(own, call) if replace else own), **layered}
+    tools = [*(own.get("tools") or []), *(layered.get("tools") or [])]
+    if tools:
+        sent["tools"] = tools
+    return sent
+
+
 def _deployment_gap(deployment: Mapping[str, Any]) -> str | None:
     """Why litellm does not send a deployment to a Responses API, or None when it
     does, with the name that fixes it where renaming can.
@@ -263,9 +289,7 @@ class ChatLiteLLMRouter(ChatLiteLLM):
     ) -> str | None:
         """The one endpoint every deployment this request can reach shares.
 
-        Each deployment resolves as a direct call would, layered as the Router
-        layers it: the call's keys over the router's defaults over the deployment's
-        own.
+        Each deployment resolves as a direct call would, layered as the Router sends it.
         """
         groups = self._reachable_groups(params)
         if groups is None:
@@ -510,21 +534,13 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         """Each deployment of the called group, layered as the Router sends it."""
         router = self.router
         defaults = getattr(router, "default_litellm_params", None) or {}
-        call = {key: value for key, value in params.items() if key != "model"}
-        layered = {**{k: v for k, v in defaults.items() if v is not None}, **call}
         deployments = []
         for entry in getattr(router, "model_list", None) or []:
             if entry.get("model_name") != params.get("model"):
                 continue
-            litellm_params = entry.get("litellm_params") or {}
-            deployment = {**litellm_params, **layered}
-            # The Router sends a deployment's own tools ahead of the call's.
-            tools = [
-                *(litellm_params.get("tools") or []),
-                *(layered.get("tools") or []),
-            ]
-            if tools:
-                deployment["tools"] = tools
+            deployment = _deployment_as_sent(
+                entry.get("litellm_params") or {}, defaults, params
+            )
             if not deployment.get("base_model"):
                 deployment["base_model"] = (entry.get("model_info") or {}).get(
                     "base_model"
@@ -533,33 +549,23 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         return deployments
 
     def _litellm_sends_manual_thinking(self, overrides: Mapping[str, Any]) -> bool:
-        """Answer for the Claude deployments a call may reach.
-
-        A deployment or the Router's defaults can set thinking alone. The Router applies
-        the caller's params to each deployment, by litellm's own rule where it has one,
-        and only then fills gaps from its defaults.
-        """
+        """Answer for the Claude deployments a call may reach, each as the Router sends
+        it: a deployment or the Router's defaults can set thinking alone."""
         matched = self._entries_litellm_may_try()
         if not matched:
             return super()._litellm_sends_manual_thinking(overrides)
+        # None means not supplied, so the deployment's value stays.
         caller = _without_none(
             {"max_tokens": self.max_tokens, **self.model_kwargs, **overrides}
         )
-        defaults = _without_none(self.router.default_litellm_params)
-        replace = getattr(
-            litellm.Router, "_deployment_params_with_request_reasoning_override", None
-        )
+        defaults = self.router.default_litellm_params
         return any(
             _is_claude(params.get("model"))
             and _sends_manual_thinking(
                 params["model"],
                 params.get("custom_llm_provider"),
                 params.get("api_base"),
-                {
-                    **_without_none(replace(params, caller) if replace else params),
-                    **defaults,
-                    **caller,
-                },
+                _deployment_as_sent(params, defaults, caller),
             )
             for params in (entry.get("litellm_params", {}) for entry in matched)
         )
