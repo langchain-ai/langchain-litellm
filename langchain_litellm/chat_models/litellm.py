@@ -2786,6 +2786,7 @@ class ChatLiteLLM(BaseChatModel):
             "num_ctx": self.num_ctx,
             "use_responses_api": self.use_responses_api,
             "use_previous_response_id": self.use_previous_response_id,
+            "max_tokens": self.model_kwargs.get("max_tokens", self.max_tokens),
         }
 
     def _get_ls_params(
