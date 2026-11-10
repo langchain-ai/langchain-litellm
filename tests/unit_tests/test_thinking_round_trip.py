@@ -14,6 +14,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import warnings
 from collections.abc import Callable, Mapping
 from typing import Any, cast
 from unittest.mock import Mock
@@ -49,6 +50,7 @@ from langchain_litellm.chat_models.litellm import (
     _signing_endpoint,
     _ThinkingBlockAssembler,
 )
+from tests.utils import NO_EFFORT_RULE, keep_litellm_effort_rule
 
 THOUGHT = ["The user wants the Paris weather. ", "I will call get_weather."]
 SIGNED = {"type": "thinking", "thinking": "".join(THOUGHT), "signature": "sig-1=="}
@@ -2299,26 +2301,15 @@ def test_a_router_group_whose_deployments_differ_in_replay_settings_replays_noth
 
 
 @pytest.mark.parametrize(
-    ("effort_from", "litellm_has_the_rule", "replayed"),
-    [("call", True, True), ("router-default", True, False), ("call", False, False)],
-    ids=["call-effort", "default-effort", "litellm-without-the-rule"],
+    ("effort_from", "replayed"),
+    [("call", True), ("router-default", False)],
+    ids=["call-effort", "default-effort"],
 )
 def test_a_router_drops_deployment_thinking_only_where_litellm_does_for_an_effort(
-    monkeypatch: pytest.MonkeyPatch,
-    effort_from: str,
-    litellm_has_the_rule: bool,
-    replayed: bool,
+    monkeypatch: pytest.MonkeyPatch, effort_from: str, replayed: bool
 ) -> None:
     """litellm drops a deployment's thinking for the call's own reasoning_effort
-    alone, since it fills a default effort in afterwards. Where ``litellm.Router``
-    has no such rule, the view keeps the thinking, which can only turn replay off."""
-    if not litellm_has_the_rule:
-        monkeypatch.setattr(
-            litellm.Router,
-            "_deployment_params_with_request_reasoning_override",
-            None,
-            raising=False,
-        )
+    alone, since it fills a default effort in afterwards."""
     captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
     defaults = {"reasoning_effort": "high"} if effort_from == "router-default" else None
     router = _router_of(
@@ -2330,6 +2321,39 @@ def test_a_router_drops_deployment_thinking_only_where_litellm_does_for_an_effor
     ChatLiteLLMRouter(router=router, model_name="main").invoke(_history(), **call)
 
     assert ("thinking_blocks" in _assistant_sent(captured)) is replayed
+
+
+@pytest.mark.parametrize(
+    ("where", "call", "replayed", "warned"),
+    [
+        ("router", {"reasoning_effort": "high"}, True, False),
+        ("rust-core", {"reasoning_effort": "high"}, True, False),
+        ("nowhere", {"reasoning_effort": "high"}, False, True),
+        ("nowhere", {}, False, False),
+    ],
+    ids=["router", "rust-core", "nowhere", "nowhere-without-an-effort"],
+)
+def test_a_router_finds_litellms_effort_rule_wherever_litellm_keeps_it(
+    monkeypatch: pytest.MonkeyPatch,
+    where: str,
+    call: dict[str, Any],
+    replayed: bool,
+    warned: bool,
+) -> None:
+    """With no rule found, the deployment's thinking counts, which can only turn
+    replay off, and a call that sets an effort warns why."""
+    keep_litellm_effort_rule(monkeypatch, where)
+    captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
+    router = _router_of(
+        [_entry("main", CLAUDE), _entry("main", CLAUDE, thinking=ENABLED)]
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        ChatLiteLLMRouter(router=router, model_name="main").invoke(_history(), **call)
+
+    assert ("thinking_blocks" in _assistant_sent(captured)) is replayed
+    assert (NO_EFFORT_RULE in {str(warning.message) for warning in caught}) is warned
 
 
 @pytest.mark.parametrize("modify_params", [True, False])
