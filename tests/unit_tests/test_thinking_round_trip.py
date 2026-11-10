@@ -2298,6 +2298,31 @@ def test_a_router_group_whose_deployments_differ_in_replay_settings_replays_noth
     assert "thinking_blocks" not in _assistant_sent(captured)
 
 
+@pytest.mark.skipif(
+    not hasattr(litellm.Router, "_deployment_params_with_request_reasoning_override"),
+    reason="this litellm's Router sends a deployment's thinking beside the effort",
+)
+@pytest.mark.parametrize(
+    ("effort_from", "replayed"), [("call", True), ("router-default", False)]
+)
+def test_a_router_drops_deployment_thinking_where_litellm_does_for_an_effort(
+    monkeypatch: pytest.MonkeyPatch, effort_from: str, replayed: bool
+) -> None:
+    """litellm drops a deployment's thinking for the call's own reasoning_effort, and
+    fills a default one in afterwards, so only the call's sends the group alike."""
+    captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
+    defaults = {"reasoning_effort": "high"} if effort_from == "router-default" else None
+    router = _router_of(
+        [_entry("main", CLAUDE), _entry("main", CLAUDE, thinking=ENABLED)],
+        default_litellm_params=defaults,
+    )
+    call: dict[str, Any] = {"reasoning_effort": "high"} if effort_from == "call" else {}
+
+    ChatLiteLLMRouter(router=router, model_name="main").invoke(_history(), **call)
+
+    assert ("thinking_blocks" in _assistant_sent(captured)) is replayed
+
+
 @pytest.mark.parametrize("modify_params", [True, False])
 def test_a_router_applies_litellms_rescue_to_thinking_its_deployment_requests(
     monkeypatch: pytest.MonkeyPatch, modify_params: bool
