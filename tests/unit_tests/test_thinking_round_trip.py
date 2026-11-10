@@ -2340,8 +2340,9 @@ def test_a_router_finds_litellms_effort_rule_wherever_litellm_keeps_it(
     replayed: bool,
     warned: bool,
 ) -> None:
-    """With no rule found, the deployment's thinking counts, which can only turn
-    replay off, and a call that sets an effort warns why."""
+    """The call's effort drops the deployment's thinking wherever litellm keeps that
+    rule. With no rule found, the thinking counts, which can only turn replay off,
+    and a call that sets an effort warns why."""
     keep_litellm_effort_rule(monkeypatch, where)
     captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
     router = _router_of(

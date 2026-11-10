@@ -32,6 +32,7 @@ OPUS_4_7_THINKS_ADAPTIVELY = (
 EFFORT_RULE = "_deployment_params_with_request_reasoning_override"
 RUST_SHAPING = "litellm.router_rust.invoke.shaping"
 RUST_EFFORT_RULE = "deployment_params_with_request_reasoning_override"
+# What ChatLiteLLMRouter warns when litellm keeps the rule in neither place.
 NO_EFFORT_RULE = (
     "ChatLiteLLMRouter cannot find litellm's rule for what a call's reasoning_effort "
     "drops from a Router deployment, on litellm.Router or in "
