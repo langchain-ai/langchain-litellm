@@ -2298,18 +2298,27 @@ def test_a_router_group_whose_deployments_differ_in_replay_settings_replays_noth
     assert "thinking_blocks" not in _assistant_sent(captured)
 
 
-@pytest.mark.skipif(
-    not hasattr(litellm.Router, "_deployment_params_with_request_reasoning_override"),
-    reason="this litellm's Router sends a deployment's thinking beside the effort",
-)
 @pytest.mark.parametrize(
-    ("effort_from", "replayed"), [("call", True), ("router-default", False)]
+    ("effort_from", "litellm_has_the_rule", "replayed"),
+    [("call", True, True), ("router-default", True, False), ("call", False, False)],
+    ids=["call-effort", "default-effort", "litellm-without-the-rule"],
 )
-def test_a_router_drops_deployment_thinking_where_litellm_does_for_an_effort(
-    monkeypatch: pytest.MonkeyPatch, effort_from: str, replayed: bool
+def test_a_router_drops_deployment_thinking_only_where_litellm_does_for_an_effort(
+    monkeypatch: pytest.MonkeyPatch,
+    effort_from: str,
+    litellm_has_the_rule: bool,
+    replayed: bool,
 ) -> None:
-    """litellm drops a deployment's thinking for the call's own reasoning_effort, and
-    fills a default one in afterwards, so only the call's sends the group alike."""
+    """litellm drops a deployment's thinking for the call's own reasoning_effort
+    alone, since it fills a default effort in afterwards. Where ``litellm.Router``
+    has no such rule, the view keeps the thinking, which can only turn replay off."""
+    if not litellm_has_the_rule:
+        monkeypatch.setattr(
+            litellm.Router,
+            "_deployment_params_with_request_reasoning_override",
+            None,
+            raising=False,
+        )
     captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
     defaults = {"reasoning_effort": "high"} if effort_from == "router-default" else None
     router = _router_of(
@@ -2367,6 +2376,35 @@ def test_a_router_digests_its_deployment_tools_ahead_of_the_calls(
     tools = [TIME_TOOL, *call_tools] if sent == "merged" else call_tools
 
     llm.invoke(_history(before=_asked_after(tools=tools)))
+
+    assert ("thinking_blocks" in _assistant_sent(captured)) is replayed
+
+
+@pytest.mark.parametrize(
+    ("defaults", "digested", "replayed"),
+    [
+        (None, [TIME_TOOL], True),
+        ({"tools": [DATE_TOOL]}, [TIME_TOOL, DATE_TOOL], True),
+        ({"tools": [DATE_TOOL]}, [TIME_TOOL], False),
+    ],
+    ids=["deployment-tools", "beside-default-tools", "deployment-tools-alone"],
+)
+def test_a_router_call_without_tools_keeps_the_digest_saved_histories_hold(
+    monkeypatch: pytest.MonkeyPatch,
+    defaults: dict[str, Any] | None,
+    digested: list[dict[str, Any]],
+    replayed: bool,
+) -> None:
+    """A deployment's own tools count once, and a Router default list after them,
+    though litellm sends only the deployment's."""
+    captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
+    router = _router_of(
+        [_entry("main", CLAUDE, tools=[TIME_TOOL])], default_litellm_params=defaults
+    )
+
+    ChatLiteLLMRouter(router=router, model_name="main").invoke(
+        _history(before=_asked_after(tools=digested))
+    )
 
     assert ("thinking_blocks" in _assistant_sent(captured)) is replayed
 
@@ -2699,6 +2737,26 @@ def test_every_entry_point_holds_back_a_turn_signed_with_other_tools(
 
     turn = next(m for m in anthropic_wire[-1]["messages"] if m["role"] == "assistant")
     assert "thinking" not in [block["type"] for block in turn["content"]]
+
+
+@pytest.mark.parametrize("mode", ["invoke", "stream", "ainvoke", "astream"])
+def test_a_call_effort_replays_across_deployments_whose_own_thinking_differs(
+    anthropic_wire: list[dict[str, Any]], mode: str
+) -> None:
+    """Through litellm's real Router: neither deployment's own thinking goes out
+    beside the call's reasoning_effort, so the signed block goes back to either."""
+    own = [{"type": "enabled", "budget_tokens": budget} for budget in (3000, 5000)]
+    router = _router_of([_entry("main", CLAUDE, thinking=thinking) for thinking in own])
+    llm = ChatLiteLLMRouter(router=router, model_name="main", max_retries=1).bind_tools(
+        [WEATHER_TOOL], reasoning_effort="low"
+    )
+
+    reply = _run(llm, mode, [QUESTION])
+    _run(llm, mode, [QUESTION, reply, SUNNY])
+
+    turn = next(m for m in anthropic_wire[-1]["messages"] if m["role"] == "assistant")
+    assert turn["content"][0] == SIGNED
+    assert not any(body.get("thinking") in own for body in anthropic_wire)
 
 
 def _stream_fakes(

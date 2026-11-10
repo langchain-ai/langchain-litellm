@@ -598,6 +598,28 @@ def test_a_router_that_may_answer_elsewhere_keeps_nothing(
     assert "reasoning_items" not in message.additional_kwargs
 
 
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize(
+    ("call", "kept"),
+    [({"reasoning_effort": "high"}, True), ({}, False)],
+    ids=["call-effort", "no-call-effort"],
+)
+def test_a_router_keeps_items_when_the_call_effort_replaces_a_deployment_effort(
+    monkeypatch: pytest.MonkeyPatch, mode: str, call: dict[str, Any], kept: bool
+) -> None:
+    """A deployment's own ``reasoning`` setting is one replay cannot place, unless
+    the call's reasoning_effort replaces it, as litellm's Router does."""
+    serve_http(monkeypatch, REPLY, EVENTS)
+    deployment = {"model": DEPLOYMENT, "api_key": KEY, "reasoning": {"effort": "low"}}
+    llm = ChatLiteLLMRouter(
+        router=_router(deployment).router, model_name="gpt", model_kwargs=call
+    )
+
+    message = _first_turn(llm, mode)
+
+    assert ("reasoning_items" in message.additional_kwargs) is kept
+
+
 def test_an_unmarked_item_never_reaches_a_request_without_an_issuer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
