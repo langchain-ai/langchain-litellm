@@ -4310,6 +4310,221 @@ def test_fallbacks_named_for_the_responses_api_reach_it_without_the_flag(
     assert sent == [("/v1/responses", "gpt-4o-mini"), ("/v1/responses", "gpt-4.1-nano")]
 
 
+@pytest.fixture(params=["base", "router"])
+def max_tokens_cache_setup(
+    request: pytest.FixtureRequest,
+) -> tuple[Any, Any]:
+    cache = InMemoryCache()
+    backend: Any = litellm
+    model_class: type[ChatLiteLLM] = ChatLiteLLM
+    common: dict[str, Any] = {
+        "model": "openai/gpt-4o-mini",
+        "api_key": "fake",
+        "cache": cache,
+    }
+
+    if request.param == "router":
+        backend = make_router()
+        model_class = ChatLiteLLMRouter
+        common = {"router": backend, "cache": cache}
+
+    def make_model(config: dict[str, Any]) -> ChatLiteLLM:
+        return model_class(**common, **config)
+
+    return make_model, backend
+
+
+async def _assert_max_tokens_cache_calls(
+    backend: Any,
+    method: str,
+    requests: list[tuple[Any, dict[str, Any], int | None]],
+) -> None:
+    def reply(**kwargs: Any) -> dict[str, Any]:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": f"limit={kwargs.get('max_tokens')}",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1,
+                "completion_tokens": 1,
+                "total_tokens": 2,
+            },
+        }
+
+    expected_limits = list(dict.fromkeys(limit for _, _, limit in requests))
+    backend_method = "acompletion" if method == "ainvoke" else "completion"
+
+    with patch.object(
+        backend,
+        backend_method,
+        side_effect=reply,
+        new_callable=AsyncMock if method == "ainvoke" else None,
+    ) as completion:
+        # The second pass must retrieve both answers from the cache.
+        for _ in range(2):
+            for model, call_kwargs, expected_limit in requests:
+                result = getattr(model, method)(
+                    "same prompt", mock_response="ok", **call_kwargs
+                )
+                if method == "ainvoke":
+                    result = await result
+
+                assert result.content == f"limit={expected_limit}"
+
+            assert completion.call_count == len(expected_limits)
+
+        assert [
+            call.kwargs.get("max_tokens") for call in completion.call_args_list
+        ] == expected_limits
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["invoke", "ainvoke"])
+@pytest.mark.parametrize(
+    ("first_config", "second_config", "expected_limits"),
+    [
+        pytest.param(
+            {"max_tokens": 5},
+            {"max_tokens": 500},
+            (5, 500),
+            id="different-constructor-limits",
+        ),
+        pytest.param(
+            {},
+            {"max_tokens": None},
+            (None, None),
+            id="unset-and-none",
+        ),
+        pytest.param(
+            {},
+            {"max_tokens": 5},
+            (None, 5),
+            id="unset-and-configured",
+        ),
+        pytest.param(
+            {"model_kwargs": {"max_tokens": 5}},
+            {"model_kwargs": {"max_tokens": 500}},
+            (5, 500),
+            id="different-model-kwargs-limits",
+        ),
+        pytest.param(
+            {"max_tokens": 5, "model_kwargs": {"max_tokens": 500}},
+            {"max_tokens": 5},
+            (500, 5),
+            id="model-kwargs-overrides-field",
+        ),
+        pytest.param(
+            {"max_tokens": 5, "model_kwargs": {"max_tokens": 500}},
+            {"max_tokens": 500},
+            (500, 500),
+            id="same-effective-limit",
+        ),
+        pytest.param(
+            {"max_tokens": 5, "model_kwargs": {"max_tokens": None}},
+            {},
+            (None, None),
+            id="model-kwargs-none-overrides-field",
+        ),
+    ],
+)
+async def test_max_tokens_cache_configuration(
+    max_tokens_cache_setup: tuple[Any, Any],
+    method: str,
+    first_config: dict[str, Any],
+    second_config: dict[str, Any],
+    expected_limits: tuple[int | None, int | None],
+) -> None:
+    make_model, backend = max_tokens_cache_setup
+    first = make_model(first_config)
+    second = make_model(second_config)
+
+    await _assert_max_tokens_cache_calls(
+        backend,
+        method,
+        [
+            (first, {}, expected_limits[0]),
+            (second, {}, expected_limits[1]),
+        ],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["invoke", "ainvoke"])
+@pytest.mark.parametrize(
+    ("first_bind", "first_call", "second_bind", "second_call", "expected_limits"),
+    [
+        pytest.param(
+            {},
+            {"max_tokens": 50},
+            {},
+            {"max_tokens": 100},
+            (50, 100),
+            id="different-call-overrides",
+        ),
+        pytest.param(
+            {},
+            {"max_tokens": 50},
+            {"max_tokens": 50},
+            {},
+            (50, 50),
+            id="direct-and-bound-match",
+        ),
+        pytest.param(
+            {"max_tokens": 50},
+            {"max_tokens": 100},
+            {},
+            {"max_tokens": 100},
+            (100, 100),
+            id="call-overrides-bound-value",
+        ),
+        pytest.param(
+            {},
+            {"max_tokens": None},
+            {"max_tokens": None},
+            {},
+            (None, None),
+            id="direct-and-bound-none",
+        ),
+        pytest.param(
+            {},
+            {},
+            {},
+            {"max_tokens": None},
+            (500, None),
+            id="call-none-overrides-default",
+        ),
+    ],
+)
+async def test_max_tokens_cache_overrides(
+    max_tokens_cache_setup: tuple[Any, Any],
+    method: str,
+    first_bind: dict[str, Any],
+    first_call: dict[str, Any],
+    second_bind: dict[str, Any],
+    second_call: dict[str, Any],
+    expected_limits: tuple[int | None, int | None],
+) -> None:
+    make_model, backend = max_tokens_cache_setup
+    model = make_model({"max_tokens": 5, "model_kwargs": {"max_tokens": 500}})
+    first = model.bind(**first_bind) if first_bind else model
+    second = model.bind(**second_bind) if second_bind else model
+
+    await _assert_max_tokens_cache_calls(
+        backend,
+        method,
+        [
+            (first, first_call, expected_limits[0]),
+            (second, second_call, expected_limits[1]),
+        ],
+    )
+
+
 def test_use_responses_api_keeps_its_own_cache_entries() -> None:
     """A cached Chat Completions reply must not answer a call meant for Responses."""
     cache = InMemoryCache()
