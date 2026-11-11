@@ -23,6 +23,10 @@ updates:
       - dependency-name: "langchain-text-splitters"
       - dependency-name: "langchain-tests"
       - dependency-name: "langchain-model-profiles"
+      # Every released langchain-tests requires syrupy<6, so a syrupy 6 bump cannot
+      # resolve and fails the run. Drop this once a release allows syrupy 6.
+      - dependency-name: "syrupy"
+        versions: [">=6.0.0"]
     groups:
       # All routine version bumps batched into one PR per week
       python-deps:
