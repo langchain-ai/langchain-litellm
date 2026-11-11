@@ -10,6 +10,10 @@ updates:
     cooldown:
       default-days: 7
     versioning-strategy: increase
+    # Lock-only packages too. By default only the ones pyproject.toml names are
+    # bumped, and the rest stay where the last relock left them.
+    allow:
+      - dependency-type: "all"
     ignore:
       - dependency-name: "langchain-core"
       - dependency-name: "langchain"
