@@ -10,10 +10,12 @@ updates:
     cooldown:
       default-days: 7
     versioning-strategy: increase
-    # Lock-only packages too. By default only the ones pyproject.toml names are
-    # bumped, and the rest stay where the last relock left them.
+    # Lock-only pytest plugins too: a stale one breaks a pytest bump. Allowing every
+    # lock-only package overruns Dependabot's 55-minute job, which then opens no PR.
     allow:
-      - dependency-type: "all"
+      - dependency-type: "direct"
+      - dependency-name: "pytest-*"
+        dependency-type: "indirect"
     ignore:
       - dependency-name: "langchain-core"
       - dependency-name: "langchain"
