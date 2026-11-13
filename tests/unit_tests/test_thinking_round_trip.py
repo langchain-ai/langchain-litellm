@@ -14,6 +14,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import warnings
 from collections.abc import Callable, Mapping
 from typing import Any, cast
 from unittest.mock import Mock
@@ -49,6 +50,7 @@ from langchain_litellm.chat_models.litellm import (
     _signing_endpoint,
     _ThinkingBlockAssembler,
 )
+from tests.utils import NO_EFFORT_RULE, keep_litellm_effort_rule
 
 THOUGHT = ["The user wants the Paris weather. ", "I will call get_weather."]
 SIGNED = {"type": "thinking", "thinking": "".join(THOUGHT), "signature": "sig-1=="}
@@ -2298,6 +2300,63 @@ def test_a_router_group_whose_deployments_differ_in_replay_settings_replays_noth
     assert "thinking_blocks" not in _assistant_sent(captured)
 
 
+@pytest.mark.parametrize(
+    ("effort_from", "replayed"),
+    [("call", True), ("router-default", False)],
+    ids=["call-effort", "default-effort"],
+)
+def test_a_router_drops_deployment_thinking_only_where_litellm_does_for_an_effort(
+    monkeypatch: pytest.MonkeyPatch, effort_from: str, replayed: bool
+) -> None:
+    """litellm drops a deployment's thinking for the call's own reasoning_effort
+    alone, since it fills a default effort in afterwards."""
+    captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
+    defaults = {"reasoning_effort": "high"} if effort_from == "router-default" else None
+    router = _router_of(
+        [_entry("main", CLAUDE), _entry("main", CLAUDE, thinking=ENABLED)],
+        default_litellm_params=defaults,
+    )
+    call: dict[str, Any] = {"reasoning_effort": "high"} if effort_from == "call" else {}
+
+    ChatLiteLLMRouter(router=router, model_name="main").invoke(_history(), **call)
+
+    assert ("thinking_blocks" in _assistant_sent(captured)) is replayed
+
+
+@pytest.mark.parametrize(
+    ("where", "call", "replayed", "warned"),
+    [
+        ("router", {"reasoning_effort": "high"}, True, False),
+        ("rust-core", {"reasoning_effort": "high"}, True, False),
+        ("nowhere", {"reasoning_effort": "high"}, False, True),
+        ("nowhere", {}, False, False),
+    ],
+    ids=["router", "rust-core", "nowhere", "nowhere-without-an-effort"],
+)
+def test_a_router_finds_litellms_effort_rule_wherever_litellm_keeps_it(
+    monkeypatch: pytest.MonkeyPatch,
+    where: str,
+    call: dict[str, Any],
+    replayed: bool,
+    warned: bool,
+) -> None:
+    """The call's effort drops the deployment's thinking wherever litellm keeps that
+    rule. With no rule found, the thinking counts, which can only turn replay off,
+    and a call that sets an effort warns why."""
+    keep_litellm_effort_rule(monkeypatch, where)
+    captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
+    router = _router_of(
+        [_entry("main", CLAUDE), _entry("main", CLAUDE, thinking=ENABLED)]
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        ChatLiteLLMRouter(router=router, model_name="main").invoke(_history(), **call)
+
+    assert ("thinking_blocks" in _assistant_sent(captured)) is replayed
+    assert (NO_EFFORT_RULE in {str(warning.message) for warning in caught}) is warned
+
+
 @pytest.mark.parametrize("modify_params", [True, False])
 def test_a_router_applies_litellms_rescue_to_thinking_its_deployment_requests(
     monkeypatch: pytest.MonkeyPatch, modify_params: bool
@@ -2342,6 +2401,35 @@ def test_a_router_digests_its_deployment_tools_ahead_of_the_calls(
     tools = [TIME_TOOL, *call_tools] if sent == "merged" else call_tools
 
     llm.invoke(_history(before=_asked_after(tools=tools)))
+
+    assert ("thinking_blocks" in _assistant_sent(captured)) is replayed
+
+
+@pytest.mark.parametrize(
+    ("defaults", "digested", "replayed"),
+    [
+        (None, [TIME_TOOL], True),
+        ({"tools": [DATE_TOOL]}, [TIME_TOOL, DATE_TOOL], True),
+        ({"tools": [DATE_TOOL]}, [TIME_TOOL], False),
+    ],
+    ids=["deployment-tools", "beside-default-tools", "deployment-tools-alone"],
+)
+def test_a_router_call_without_tools_keeps_the_digest_saved_histories_hold(
+    monkeypatch: pytest.MonkeyPatch,
+    defaults: dict[str, Any] | None,
+    digested: list[dict[str, Any]],
+    replayed: bool,
+) -> None:
+    """A deployment's own tools count once, and a Router default list after them,
+    though litellm sends only the deployment's."""
+    captured = _capture_calls(monkeypatch, ChatLiteLLMRouter)
+    router = _router_of(
+        [_entry("main", CLAUDE, tools=[TIME_TOOL])], default_litellm_params=defaults
+    )
+
+    ChatLiteLLMRouter(router=router, model_name="main").invoke(
+        _history(before=_asked_after(tools=digested))
+    )
 
     assert ("thinking_blocks" in _assistant_sent(captured)) is replayed
 
@@ -2674,6 +2762,26 @@ def test_every_entry_point_holds_back_a_turn_signed_with_other_tools(
 
     turn = next(m for m in anthropic_wire[-1]["messages"] if m["role"] == "assistant")
     assert "thinking" not in [block["type"] for block in turn["content"]]
+
+
+@pytest.mark.parametrize("mode", ["invoke", "stream", "ainvoke", "astream"])
+def test_a_call_effort_replays_across_deployments_whose_own_thinking_differs(
+    anthropic_wire: list[dict[str, Any]], mode: str
+) -> None:
+    """Through litellm's real Router: neither deployment's own thinking goes out
+    beside the call's reasoning_effort, so the signed block goes back to either."""
+    own = [{"type": "enabled", "budget_tokens": budget} for budget in (3000, 5000)]
+    router = _router_of([_entry("main", CLAUDE, thinking=thinking) for thinking in own])
+    llm = ChatLiteLLMRouter(router=router, model_name="main", max_retries=1).bind_tools(
+        [WEATHER_TOOL], reasoning_effort="low"
+    )
+
+    reply = _run(llm, mode, [QUESTION])
+    _run(llm, mode, [QUESTION, reply, SUNNY])
+
+    turn = next(m for m in anthropic_wire[-1]["messages"] if m["role"] == "assistant")
+    assert turn["content"][0] == SIGNED
+    assert not any(body.get("thinking") in own for body in anthropic_wire)
 
 
 def _stream_fakes(

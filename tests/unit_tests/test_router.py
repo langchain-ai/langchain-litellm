@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import warnings
 from collections.abc import Callable
 from typing import Any
 from unittest.mock import patch
@@ -17,11 +18,13 @@ from langchain_litellm._version import __version__
 from langchain_litellm.chat_models import ChatLiteLLMRouter
 from langchain_litellm.chat_models.litellm_router import _deployment_metadata
 from tests.utils import (
+    NO_EFFORT_RULE,
     OPUS_4_7_THINKS_ADAPTIVELY,
     chat_completion_events,
     chat_completion_reply,
     function_call_item,
     gemini_reply,
+    keep_litellm_effort_rule,
     make_router,
     message_item,
     responses_api_events,
@@ -1169,16 +1172,6 @@ def test_router_keeps_a_forced_choice_a_deployment_sends_beside_adaptive_thinkin
     assert bound.kwargs["tool_choice"] == "required"  # type: ignore[attr-defined]
 
 
-# Newer litellm Routers drop a deployment's thinking under a request's reasoning_effort.
-_REQUEST_EFFORT_REPLACES_DEPLOYMENT_THINKING = hasattr(
-    litellm.Router, "_deployment_params_with_request_reasoning_override"
-)
-
-
-@pytest.mark.skipif(
-    not _REQUEST_EFFORT_REPLACES_DEPLOYMENT_THINKING,
-    reason="this litellm's Router sends both",
-)
 def test_router_keeps_a_forced_choice_when_a_request_effort_replaces_thinking() -> None:
     """The deployment's manual thinking is dropped, and effort on Sonnet 4.6 is adaptive."""
     router = _claude_router("anthropic/claude-sonnet-4-6", deployment=_THINKING)
@@ -1187,6 +1180,85 @@ def test_router_keeps_a_forced_choice_when_a_request_effort_replaces_thinking() 
     bound = llm.bind_tools([_LOOKUP], tool_choice="required")
 
     assert bound.kwargs["tool_choice"] == "required"  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("where", "tool_choice", "warned"),
+    [
+        ("router", "required", False),
+        ("rust-core", "required", False),
+        ("nowhere", "auto", True),
+    ],
+)
+def test_router_finds_litellms_effort_rule_wherever_litellm_keeps_it(
+    monkeypatch: pytest.MonkeyPatch, where: str, tool_choice: str, warned: bool
+) -> None:
+    """The call's effort drops the deployment's manual thinking wherever litellm keeps
+    that rule. With no rule found, the thinking counts and a warning says why."""
+    keep_litellm_effort_rule(monkeypatch, where)
+    router = _claude_router("anthropic/claude-sonnet-4-6", deployment=_THINKING)
+    llm = ChatLiteLLMRouter(router=router, model_kwargs={"reasoning_effort": "high"})
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        bound = llm.bind_tools([_LOOKUP], tool_choice="required")
+
+    assert bound.kwargs["tool_choice"] == tool_choice  # type: ignore[attr-defined]
+    assert (NO_EFFORT_RULE in {str(warning.message) for warning in caught}) is warned
+
+
+def test_router_downgrades_for_a_router_without_default_params() -> None:
+    """The downgrade reads a Router's defaults as replay does, where it has them."""
+
+    class Deployments:
+        def __init__(self) -> None:
+            self.model_list = [
+                {
+                    "model_name": "claude",
+                    "litellm_params": {
+                        "model": "anthropic/claude-sonnet-4-5",
+                        "api_key": "k",
+                        **_THINKING,
+                    },
+                }
+            ]
+
+        def get_model_list(self, model_name: str) -> list[dict[str, Any]]:
+            return [e for e in self.model_list if e["model_name"] == model_name]
+
+    bound = ChatLiteLLMRouter(router=Deployments()).bind_tools(
+        [_LOOKUP], tool_choice="required"
+    )
+
+    assert bound.kwargs["tool_choice"] == "auto"  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("defaults", "bind_kwargs"),
+    [
+        (None, {**_THINKING, "reasoning_effort": "high"}),
+        (dict(_THINKING), {"reasoning_effort": "high"}),
+    ],
+    ids=["bound-thinking", "router-default-thinking"],
+)
+def test_router_downgrades_a_forced_choice_for_thinking_a_call_effort_leaves(
+    defaults: dict[str, Any] | None,
+    bind_kwargs: dict[str, Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """litellm drops only the deployment's own thinking for the call's effort, so a
+    bound or default one still goes out beside it, as manual thinking."""
+    router = _claude_router("anthropic/claude-sonnet-4-6", defaults=defaults)
+
+    with caplog.at_level(
+        logging.WARNING, logger="langchain_litellm.chat_models.litellm"
+    ):
+        bound = ChatLiteLLMRouter(router=router).bind_tools(
+            [_LOOKUP], tool_choice="required", **bind_kwargs
+        )
+
+    assert bound.kwargs["tool_choice"] == "auto"  # type: ignore[attr-defined]
+    assert "incompatible with thinking" in caplog.text
 
 
 def test_router_structured_output_stops_forcing_for_a_thinking_deployment() -> None:
