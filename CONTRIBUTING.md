@@ -46,6 +46,7 @@ Every editor below reads `.editorconfig`, and each committed config runs the ruf
 - CodeQL blocks a merge on a security alert of high severity or above, or an error-level alert.
 - CI checks the lockfile, runs the pre-commit hooks, lint and type checks, spell check, and unit tests on every supported Python version, once against `uv.lock` and once against the lowest versions `pyproject.toml` allows. A PR that changes `pyproject.toml` also runs the unit tests against the newest litellm release.
 - A pre-commit hook requires the comment on every pinned action to name its full release, such as `# v6.1.1`. Dependabot then updates the comment with the SHA.
+- `zizmor-online.yml` runs zizmor with a token every week, and on a PR that changes a workflow or the pre-commit config. That adds the audits CI's offline run skips: a pinned action with a published advisory, a SHA that is not the action's own commit, and a comment that does not match its pin.
 - Dependabot opens weekly grouped `build(deps)` PRs for uv, GitHub Actions, the pre-commit hooks and the devcontainer images, a week after each release. The uv PR also bumps the pytest plugins that only `uv.lock` names; no other lock-only package moves without a security update or a relock. Security updates skip that wait and come in their own PR.
 
 ## Releases

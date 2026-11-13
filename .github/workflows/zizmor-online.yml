@@ -1,0 +1,52 @@
+name: "zizmor online"
+
+# CI runs zizmor without a token, which skips the audits that ask GitHub: a pinned action's
+# advisories, whether its SHA is the action's own commit, and whether its comment matches.
+on:
+  schedule:
+    - cron: "41 7 * * 3"
+  workflow_dispatch:
+  # Advisories and tags change upstream, so only a change to a pin or to zizmor runs it here.
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - ".pre-commit-config.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  UV_FROZEN: "true"
+
+jobs:
+  zizmor-online:
+    name: "zizmor online"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Restores the uv cache every CI job shares but never saves it: this job installs one group.
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+          save-cache: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version-file: .python-version
+
+      # Installed in its own step, so the token below reaches pre-commit and zizmor alone.
+      - run: uv sync --only-group dev
+
+      # A read-only token, there to lift GitHub's anonymous rate limit.
+      - run: uv run --no-sync pre-commit run zizmor --all-files
+        env:
+          GH_TOKEN: ${{ github.token }}
