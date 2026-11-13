@@ -46,7 +46,18 @@ jobs:
       # Installed in its own step, so the token below reaches pre-commit and zizmor alone.
       - run: uv sync --only-group dev
 
-      # A read-only token, there to lift GitHub's anonymous rate limit.
-      - run: uv run --no-sync pre-commit run zizmor --all-files
+      # A read-only token, there to lift GitHub's anonymous rate limit. Confirm it took:
+      # without one zizmor falls back to offline mode, and this job would repeat CI's and pass.
+      - name: Run zizmor with its online audits
         env:
           GH_TOKEN: ${{ github.token }}
+        run: |
+          status=0
+          uv run --no-sync pre-commit run zizmor --all-files --verbose \
+            > "$RUNNER_TEMP/zizmor.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/zizmor.log"
+          if grep -q "running in offline mode" "$RUNNER_TEMP/zizmor.log"; then
+            echo "::error::zizmor ran offline, so its online audits did not run."
+            exit 1
+          fi
+          exit "$status"
