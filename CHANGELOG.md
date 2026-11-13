@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.12.0](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.11.2...langchain-litellm==0.12.0) (2026-11-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* ChatLiteLLM, LiteLLMEmbeddings and LiteLLMOCRLoader require a model and no longer default to gpt-3.5-turbo, openai/text-embedding-3-small and azure-document; pass `model` explicitly. ChatLiteLLMRouter and LiteLLMEmbeddingsRouter still take it from the first group in the Router's model_list, and raise when that list is empty.
+* **chat_models:** when the 5m/1h split is reported, input_token_details["cache_creation"] is 0 so the categories do not double count; add ephemeral_5m_input_tokens and ephemeral_1h_input_tokens for the total cache writes.
+
+### Features
+
+* **chat_models:** force a bound built-in tool named in tool_choice ([#423](https://github.com/langchain-ai/langchain-litellm/issues/423)) ([a620446](https://github.com/langchain-ai/langchain-litellm/commit/a620446d5d4d3e2745fcd89eb8aa3fff5c27ea5b)), closes [#306](https://github.com/langchain-ai/langchain-litellm/issues/306)
+* **chat_models:** record the response id and chain calls with use_previous_response_id ([#349](https://github.com/langchain-ai/langchain-litellm/issues/349)) ([b3c9d16](https://github.com/langchain-ai/langchain-litellm/commit/b3c9d16225a3c6fd40424c08ac260cdd559044f8))
+
+
+### Bug Fixes
+
+* **chat_models:** downgrade forced tool choices a model refuses ([#357](https://github.com/langchain-ai/langchain-litellm/issues/357)) ([c3523e6](https://github.com/langchain-ai/langchain-litellm/commit/c3523e660ce9f3791cb4248ffa9349915f703619)), closes [#316](https://github.com/langchain-ai/langchain-litellm/issues/316)
+* **chat_models:** follow Router aliases, wildcards and fallbacks before forcing a tool ([#426](https://github.com/langchain-ai/langchain-litellm/issues/426)) ([f7e8592](https://github.com/langchain-ai/langchain-litellm/commit/f7e8592d1662786a1a1cd9154b83b4b8f8078f3e)), closes [#314](https://github.com/langchain-ai/langchain-litellm/issues/314)
+* **chat_models:** keep thinking replay on for a Bedrock inference profile `model_id` ([#397](https://github.com/langchain-ai/langchain-litellm/issues/397)) ([d84f88a](https://github.com/langchain-ai/langchain-litellm/commit/d84f88a5baab1836e68f19c25555e3513cdb6f9b))
+* **chat_models:** map custom tool calls to tool_calls and back ([#396](https://github.com/langchain-ai/langchain-litellm/issues/396)) ([894a92f](https://github.com/langchain-ai/langchain-litellm/commit/894a92fdf8fcea3c41b69da363eac7c3634dd234)), closes [#250](https://github.com/langchain-ai/langchain-litellm/issues/250)
+* **chat_models:** refuse a Responses API rename that would change the model ([#404](https://github.com/langchain-ai/langchain-litellm/issues/404)) ([dc7bec8](https://github.com/langchain-ai/langchain-litellm/commit/dc7bec8651441c64f75743be1129c90b63c16760)), closes [#402](https://github.com/langchain-ai/langchain-litellm/issues/402)
+* **chat_models:** refuse use_responses_api for a name that asks for Chat Completions ([#405](https://github.com/langchain-ai/langchain-litellm/issues/405)) ([1fc7709](https://github.com/langchain-ai/langchain-litellm/commit/1fc7709d69d54b6f25f87331a3715fc7dba189b4)), closes [#403](https://github.com/langchain-ai/langchain-litellm/issues/403)
+* **chat_models:** refuse use_responses_api when a fallback is set ([#369](https://github.com/langchain-ai/langchain-litellm/issues/369)) ([3e679f5](https://github.com/langchain-ai/langchain-litellm/commit/3e679f5eaca6f414473bf47890733352b33b0460)), closes [#334](https://github.com/langchain-ai/langchain-litellm/issues/334)
+* **chat_models:** reject multiple choices when streaming ([#363](https://github.com/langchain-ai/langchain-litellm/issues/363)) ([bcb28cb](https://github.com/langchain-ai/langchain-litellm/commit/bcb28cb81f29e3f5ee4c46566ed7802f0bc997e3)), closes [#337](https://github.com/langchain-ai/langchain-litellm/issues/337)
+* **chat_models:** report audio token counts in usage_metadata ([#374](https://github.com/langchain-ai/langchain-litellm/issues/374)) ([b124d60](https://github.com/langchain-ai/langchain-litellm/commit/b124d609ff3b40c50309a04119b246a9038e158f)), closes [#371](https://github.com/langchain-ai/langchain-litellm/issues/371)
+* **chat_models:** report the 5m/1h cache-write split in usage_metadata ([#372](https://github.com/langchain-ai/langchain-litellm/issues/372)) ([cf269a4](https://github.com/langchain-ai/langchain-litellm/commit/cf269a4887f05231ec753cd451e04c0670d79300))
+* **chat_models:** report the answering deployment's model in Router metadata ([#370](https://github.com/langchain-ai/langchain-litellm/issues/370)) ([79e2c6a](https://github.com/langchain-ai/langchain-litellm/commit/79e2c6aaed6ec5024816a1c0316b77cb090030ce)), closes [#360](https://github.com/langchain-ai/langchain-litellm/issues/360)
+* **chat_models:** resolve model aliases in the forced tool_choice downgrade ([#354](https://github.com/langchain-ai/langchain-litellm/issues/354)) ([3e467ad](https://github.com/langchain-ai/langchain-litellm/commit/3e467adde608e7ca48dfcbd2949d83171aae0214))
+* **chat_models:** resolve the call before checking Responses API routing ([#368](https://github.com/langchain-ai/langchain-litellm/issues/368)) ([acf3b10](https://github.com/langchain-ai/langchain-litellm/commit/acf3b107ddf3376048e3a7c1eacdc2ee561678fb)), closes [#335](https://github.com/langchain-ai/langchain-litellm/issues/335)
+* **chat_models:** send bare strings in list content as text blocks ([#361](https://github.com/langchain-ai/langchain-litellm/issues/361)) ([021f1e3](https://github.com/langchain-ai/langchain-litellm/commit/021f1e34230fcaf90f56a583b8e68d78b5f8fed8))
+* **chat_models:** suggest a Router rename only when the proxy reads the same model ([#398](https://github.com/langchain-ai/langchain-litellm/issues/398)) ([45899f3](https://github.com/langchain-ai/langchain-litellm/commit/45899f34baa284528d4d6471b1e6b11774c7e97a)), closes [#394](https://github.com/langchain-ai/langchain-litellm/issues/394)
+* keep `stream_options` supplied through `model_kwargs` ([#356](https://github.com/langchain-ai/langchain-litellm/issues/356)) ([a44d07e](https://github.com/langchain-ai/langchain-litellm/commit/a44d07ea71241977730982ca6b5d6a4f1f17475a)), closes [#338](https://github.com/langchain-ai/langchain-litellm/issues/338)
+* require a model instead of defaulting to a hardcoded one ([#401](https://github.com/langchain-ai/langchain-litellm/issues/401)) ([6688a0b](https://github.com/langchain-ai/langchain-litellm/commit/6688a0b107338c9b59fecf40d0ef1032419d55fd)), closes [#400](https://github.com/langchain-ai/langchain-litellm/issues/400)
+
 ## [0.11.2](https://github.com/langchain-ai/langchain-litellm/compare/langchain-litellm==0.11.1...langchain-litellm==0.11.2) (2026-10-25)
 
 
