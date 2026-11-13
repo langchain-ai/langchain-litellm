@@ -42,4 +42,4 @@ description: Use before writing a commit message, PR title, PR description or br
 
 ## Actions
 
-9. Pin any new or updated GitHub Action to a full commit SHA with a version comment, as every existing `uses:` line is.
+9. Pin any new or updated GitHub Action to a full commit SHA with a comment naming its full release, such as `# v6.1.1`, as every existing `uses:` line is. A pre-commit hook rejects a shorter comment such as `# v6`.

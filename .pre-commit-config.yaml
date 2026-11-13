@@ -71,6 +71,13 @@ repos:
         language: unsupported
         files: ^(pyproject\.toml|uv\.lock)$
         pass_filenames: false
+      - id: action-pin-comments
+        name: action pins name a full release
+        # A major-only comment names a tag upstream moves, and Dependabot bumps
+        # such a pin's SHA without its comment.
+        entry: 'uses:\s+\S+@[0-9a-f]{40}(?!\s+#\s*v?\d+\.\d+\.\d+\s*$)'
+        language: pygrep
+        files: ^\.github/workflows/.*\.ya?ml$
       - id: mypy
         name: mypy
         entry: uv run --frozen --group typing mypy .
