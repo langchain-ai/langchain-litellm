@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import functools
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -462,12 +463,16 @@ def _issuer_digest(issuer: str) -> str:
     ).hex()
 
 
-def _responses_api_gap(model: str, provider: str) -> str | None:
+def _responses_api_gap(
+    model: str, provider: str, model_info: Mapping[str, Any] | None = None
+) -> str | None:
     """Why litellm does not send ``model``, as ``get_llm_provider`` names it for
     ``provider``, to that provider's Responses API, or None when it does.
 
     Whether litellm bridges a name hangs on its model map, and a provider without a
     Responses API is answered over its chat API instead, so litellm is asked both.
+    ``model_info`` is a Router deployment's own. litellm 1.109 and later route that
+    deployment by the ``mode`` it sets; earlier ones write the mode into the model map.
     """
     # litellm 1.102 and later answer a name that asks for Chat Completions there, even
     # when told to route every OpenAI call to the Responses API.
@@ -478,9 +483,13 @@ def _responses_api_gap(model: str, provider: str) -> str | None:
     )
     if config is None:
         return f"litellm has no Responses API for provider {provider!r}"
-    bridge, sent = litellm.main.responses_api_bridge_check(
-        model=model, custom_llm_provider=provider
+    check = litellm.main.responses_api_bridge_check
+    # Only a litellm that routes a deployment by its own model_info takes it.
+    takes_model_info = "deployment_model_info" in inspect.signature(check).parameters
+    pinned: dict[str, Any] = (
+        {"deployment_model_info": model_info} if takes_model_info else {}
     )
+    bridge, sent = check(model=model, custom_llm_provider=provider, **pinned)
     if bridge.get("mode") != "responses":
         return "litellm sends it to Chat Completions"
     # The bridge drops 'responses/' before litellm reads the name, so a routed
@@ -1709,8 +1718,9 @@ class ChatLiteLLM(BaseChatModel):
     the ones that issued it, since only there can it be decrypted. Ask for the
     content with ``model_kwargs={"extra_body": {"include":
     ["reasoning.encrypted_content"]}}``, adding ``"store": False`` for stateless
-    turns. litellm keeps only the last item of a reply it does not stream, and calls
-    it routes to the Responses API on its own keep none."""
+    turns. Of a reply it does not stream, litellm before 1.109 keeps only the last
+    item, as later releases still do for every provider but OpenAI. Calls litellm
+    routes to the Responses API on its own keep none."""
     use_previous_response_id: bool = False
     """Chain Responses API calls through the latest stored response.
 
