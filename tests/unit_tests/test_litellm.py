@@ -48,6 +48,7 @@ from langchain_litellm.chat_models.litellm import (
     _stream_cost_metadata,
 )
 from tests.utils import (
+    BRIDGES_EVERY_ROUTED_NAME,
     OPUS_4_7_THINKS_ADAPTIVELY,
     chat_completion_events,
     chat_completion_reply,
@@ -4413,10 +4414,13 @@ def test_use_previous_response_id_refuses_a_deployment_id() -> None:
     completion.assert_not_called()
 
 
+@pytest.mark.skipif(
+    BRIDGES_EVERY_ROUTED_NAME, reason="this litellm bridges every routed name"
+)
 def test_use_responses_api_refuses_a_name_litellm_would_not_bridge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """litellm bridges only a routed name its model map leaves unresolved.
+    """litellm before 1.109 bridges only a routed name its model map leaves unresolved.
 
     Resolved to a chat model, the name would go to Chat Completions as the model id.
     """
@@ -4436,6 +4440,29 @@ def test_use_responses_api_refuses_a_name_litellm_would_not_bridge(
         llm.invoke("hi")
 
     completion.assert_not_called()
+
+
+@pytest.mark.skipif(
+    not BRIDGES_EVERY_ROUTED_NAME, reason="this litellm reads its model map first"
+)
+def test_use_responses_api_sends_a_routed_name_the_model_map_calls_chat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """litellm sends a routed name to the Responses API whatever its model map says
+    of it, so the flag holds and the renamed model goes out."""
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openrouter/responses/fake-model",
+        {"mode": "chat", "litellm_provider": "openrouter"},
+    )
+    llm = ChatLiteLLM(
+        model="openrouter/fake-model", api_key="k", use_responses_api=True
+    )
+
+    with patch.object(llm.client, "completion", return_value=_MOCK_OK) as completion:
+        llm.invoke("hi")
+
+    assert completion.call_args.kwargs["model"] == "openrouter/responses/fake-model"
 
 
 @pytest.mark.parametrize(
