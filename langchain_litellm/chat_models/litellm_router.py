@@ -106,11 +106,14 @@ def _deployment_as_sent(
     return sent
 
 
-def _deployment_gap(deployment: Mapping[str, Any]) -> str | None:
+def _deployment_gap(
+    deployment: Mapping[str, Any], model_info: Mapping[str, Any] | None = None
+) -> str | None:
     """Why litellm does not send a deployment to a Responses API, or None when it
     does, with the name that fixes it where renaming can.
 
-    The deployment is resolved as ``_resolve_deployment`` resolves it.
+    The deployment is resolved as ``_resolve_deployment`` resolves it, and
+    ``model_info`` is its own, whose ``mode`` can pin the API its calls go to.
     """
     resolved, model, provider, replaced = _resolve_deployment(deployment)
     try:
@@ -120,7 +123,7 @@ def _deployment_gap(deployment: Mapping[str, Any]) -> str | None:
     except litellm.BadRequestError:
         # A prompt-management deployment names its model only once the prompt loads.
         return "litellm cannot tell which provider serves it"
-    gap = _responses_api_gap(named, provider)
+    gap = _responses_api_gap(named, provider, model_info)
     if gap is None:
         return None
     # Where litellm replaces the model, renaming the deployment cannot help.
@@ -205,7 +208,8 @@ class ChatLiteLLMRouter(ChatLiteLLM):
     for one only a wildcard deployment serves. A deployment litellm sends there on
     its own, such as
     ``openai/gpt-5-pro``, passes, but its reasoning items do not go back; name it
-    ``openai/responses/gpt-5-pro`` for that.
+    ``openai/responses/gpt-5-pro`` for that. A deployment whose ``model_info`` sets
+    ``mode`` is checked by where litellm then sends it.
 
     ``use_previous_response_id=True`` checks the same way, then also raises unless
     every deployment of the group keeps its replies in one response store: the same
@@ -484,8 +488,9 @@ class ChatLiteLLMRouter(ChatLiteLLM):
                 f"{flag}."
             )
         gaps: dict[str, str] = {}
-        for deployment in deployments:
-            gap = _deployment_gap(deployment)
+        entries = self._group_entries(sent.get("model"))
+        for entry, deployment in zip(entries, deployments, strict=True):
+            gap = _deployment_gap(deployment, entry.get("model_info"))
             if gap is not None:
                 gaps.setdefault(deployment["model"], gap)
         if gaps:
@@ -557,14 +562,20 @@ class ChatLiteLLMRouter(ChatLiteLLM):
         and every one has the same replay settings."""
         return self._deployments(params)[0]
 
+    def _group_entries(self, group: Any) -> list[Mapping[str, Any]]:
+        """The ``model_list`` entries named after ``group``, in the Router's order."""
+        return [
+            entry
+            for entry in getattr(self.router, "model_list", None) or []
+            if entry.get("model_name") == group
+        ]
+
     def _deployments(self, params: dict[str, Any]) -> list[dict[str, Any]]:
-        """Each deployment of the called group, layered as the Router sends it."""
-        router = self.router
-        defaults = getattr(router, "default_litellm_params", None) or {}
+        """Each deployment of the called group, layered as the Router sends it, in
+        the order of ``_group_entries``."""
+        defaults = getattr(self.router, "default_litellm_params", None) or {}
         deployments = []
-        for entry in getattr(router, "model_list", None) or []:
-            if entry.get("model_name") != params.get("model"):
-                continue
+        for entry in self._group_entries(params.get("model")):
             deployment = _deployment_as_sent(
                 entry.get("litellm_params") or {}, defaults, params
             )

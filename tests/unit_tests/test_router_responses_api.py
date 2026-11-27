@@ -17,6 +17,7 @@ from langchain_core.messages import BaseMessage
 
 from langchain_litellm import ChatLiteLLMRouter
 from tests.utils import (
+    ROUTES_A_DEPLOYMENT_BY_ITS_OWN_MODE,
     message_item,
     responses_api_events,
     responses_api_reply,
@@ -150,6 +151,68 @@ def test_a_deployment_litellm_sends_to_a_responses_api_passes(
         ["/openai/responses"],
         ["/openai/v1/responses"],
     )
+
+
+def _pinned(model: str, mode: str, **params: Any) -> dict[str, Any]:
+    """A deployment whose own ``model_info`` pins the API its calls go to."""
+    return {**_deployment({"model": model, **params}), "model_info": {"mode": mode}}
+
+
+def test_a_deployment_pinned_to_the_responses_api_passes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deployment's own ``model_info`` sends a chat model to the Responses API."""
+    # litellm before 1.109 writes the pin into the model map every test shares.
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    requests = serve_http(monkeypatch, REPLY)
+    router = litellm.Router(model_list=[_pinned("openai/gpt-4o-mini", "responses")])
+    llm = ChatLiteLLMRouter(router=router, use_responses_api=True)
+
+    llm.invoke("hi")
+
+    assert [request.url.path for request in requests] == ["/v1/responses"]
+
+
+@pytest.mark.skipif(
+    not ROUTES_A_DEPLOYMENT_BY_ITS_OWN_MODE,
+    reason="this litellm routes by the shared model map alone",
+)
+@pytest.mark.parametrize("method", METHODS)
+@pytest.mark.asyncio
+async def test_a_deployment_pinned_to_chat_completions_is_named(method: str) -> None:
+    """A model that serves both APIs goes where its deployment pins it, so the flag
+    would not hold."""
+    pinned = _pinned(
+        "bedrock_mantle/openai.gpt-5.4", "chat", aws_region_name="us-east-1"
+    )
+    llm = ChatLiteLLMRouter(
+        router=litellm.Router(model_list=[pinned]), use_responses_api=True
+    )
+
+    refusal = await _refused(llm, method)
+
+    assert refusal.splitlines()[1] == (
+        "- 'bedrock_mantle/openai.gpt-5.4': litellm sends it to Chat Completions; "
+        "name it 'bedrock_mantle/responses/openai.gpt-5.4'"
+    )
+
+
+@pytest.mark.skipif(
+    not ROUTES_A_DEPLOYMENT_BY_ITS_OWN_MODE,
+    reason="this litellm routes by the shared model map alone",
+)
+def test_a_pin_litellm_does_not_follow_decides_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """litellm keeps a model that serves only the Responses API there whatever its
+    deployment pins, so litellm is asked rather than the pin read."""
+    requests = serve_http(monkeypatch, REPLY)
+    router = litellm.Router(model_list=[_pinned("openai/gpt-5-pro", "chat")])
+    llm = ChatLiteLLMRouter(router=router, use_responses_api=True)
+
+    llm.invoke("hi")
+
+    assert [request.url.path for request in requests] == ["/v1/responses"]
 
 
 @pytest.mark.parametrize("method", METHODS)

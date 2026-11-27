@@ -1,4 +1,5 @@
 import importlib
+import inspect
 import json
 import sys
 import types
@@ -27,6 +28,30 @@ OPUS_4_7_THINKS_ADAPTIVELY = (
     ).get("thinking")
     or {}
 ).get("type") == "adaptive"
+
+# litellm 1.109 and later route a Router deployment by the mode its own model_info
+# pins. Earlier ones write the pin into the model map every deployment shares.
+ROUTES_A_DEPLOYMENT_BY_ITS_OWN_MODE = (
+    "deployment_model_info"
+    in inspect.signature(litellm.main.responses_api_bridge_check).parameters
+)
+
+
+def _bridges_a_routed_name_its_model_map_calls_chat() -> bool:
+    key = "openrouter/responses/probe-model"
+    litellm.model_cost[key] = {"mode": "chat", "litellm_provider": "openrouter"}
+    try:
+        bridge, _ = litellm.main.responses_api_bridge_check(
+            model="responses/probe-model", custom_llm_provider="openrouter"
+        )
+    finally:
+        del litellm.model_cost[key]
+    return bridge.get("mode") == "responses"
+
+
+# litellm 1.109 and later send a ``responses/`` name to the Responses API whatever
+# the model map says of it. Earlier ones bridge only a name the map leaves unresolved.
+BRIDGES_EVERY_ROUTED_NAME = _bridges_a_routed_name_its_model_map_calls_chat()
 
 # Where litellm keeps its rule for what a call's reasoning_effort drops from a deployment.
 EFFORT_RULE = "_deployment_params_with_request_reasoning_override"
@@ -166,6 +191,27 @@ def reasoning_item(
     if encrypted_content is not None:
         item["encrypted_content"] = encrypted_content
     return item
+
+
+def _keeps_every_unstreamed_reasoning_item() -> bool:
+    reply = responses_api_reply(
+        reasoning_item("rs_1", "First.", "gAAAAB-1"),
+        reasoning_item("rs_2", "Second.", "gAAAAB-2"),
+        message_item("ok"),
+    )
+    with pytest.MonkeyPatch.context() as patch:
+        serve_http(patch, reply)
+        message = litellm.completion(
+            model="openai/responses/gpt-5-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="k",
+        )["choices"][0]["message"]
+    return len(message.get("reasoning_items") or []) == 2
+
+
+# litellm 1.109 and later keep every reasoning item of an OpenAI reply they do not
+# stream. Earlier ones keep only the last, as later ones still do for other providers.
+KEEPS_EVERY_UNSTREAMED_REASONING_ITEM = _keeps_every_unstreamed_reasoning_item()
 
 
 def chat_completion_reply(

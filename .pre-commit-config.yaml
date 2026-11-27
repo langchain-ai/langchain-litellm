@@ -30,7 +30,7 @@ repos:
       - id: actionlint
 
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: c92afdf2c6ca336aaa8f39e2bd8d48f62dbd8e1f  # frozen: v1.31.1
+    rev: 06a39750ec31860bb44f2acf67182c40016cd1e7  # frozen: v1.32.0
     hooks:
       - id: zizmor
 
@@ -71,6 +71,13 @@ repos:
         language: unsupported
         files: ^(pyproject\.toml|uv\.lock)$
         pass_filenames: false
+      - id: action-pin-comments
+        name: action pins name a full release
+        # A major-only comment names a tag upstream moves, and Dependabot bumps
+        # such a pin's SHA without its comment.
+        entry: 'uses:\s+\S+@[0-9a-f]{40}(?!\s+#\s*v?\d+\.\d+\.\d+\s*$)'
+        language: pygrep
+        files: ^\.github/workflows/.*\.ya?ml$
       - id: mypy
         name: mypy
         entry: uv run --frozen --group typing mypy .
