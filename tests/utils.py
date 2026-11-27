@@ -1,5 +1,8 @@
+import importlib
 import inspect
 import json
+import sys
+import types
 from collections.abc import Callable, Sequence
 from typing import Any
 from unittest.mock import MagicMock
@@ -49,6 +52,33 @@ def _bridges_a_routed_name_its_model_map_calls_chat() -> bool:
 # litellm 1.109 and later send a ``responses/`` name to the Responses API whatever
 # the model map says of it. Earlier ones bridge only a name the map leaves unresolved.
 BRIDGES_EVERY_ROUTED_NAME = _bridges_a_routed_name_its_model_map_calls_chat()
+
+# Where litellm keeps its rule for what a call's reasoning_effort drops from a deployment.
+EFFORT_RULE = "_deployment_params_with_request_reasoning_override"
+RUST_SHAPING = "litellm.router_rust.invoke.shaping"
+RUST_EFFORT_RULE = "deployment_params_with_request_reasoning_override"
+# What ChatLiteLLMRouter warns when litellm keeps the rule in neither place.
+NO_EFFORT_RULE = (
+    "ChatLiteLLMRouter cannot find litellm's rule for what a call's reasoning_effort "
+    "drops from a Router deployment, on litellm.Router or in "
+    "litellm.router_rust.invoke.shaping. It counts the deployment's own thinking "
+    "beside the call's effort instead, which can keep replay off and make a forced "
+    "tool_choice 'auto'. Upgrade langchain-litellm, or install an earlier litellm."
+)
+
+
+def keep_litellm_effort_rule(monkeypatch: pytest.MonkeyPatch, where: str) -> None:
+    """Keep this litellm's own reasoning_effort rule where a litellm release keeps it:
+    on ``litellm.Router``, in its Rust core's shaping module, or nowhere."""
+    rule = getattr(Router, EFFORT_RULE, None) or getattr(
+        importlib.import_module(RUST_SHAPING), RUST_EFFORT_RULE
+    )
+    kept = staticmethod(rule) if where == "router" else None
+    monkeypatch.setattr(Router, EFFORT_RULE, kept, raising=False)
+    shaping = types.ModuleType(RUST_SHAPING) if where == "rust-core" else None
+    if shaping is not None:
+        monkeypatch.setattr(shaping, RUST_EFFORT_RULE, rule, raising=False)
+    monkeypatch.setitem(sys.modules, RUST_SHAPING, shaping)
 
 
 def serve_http(
