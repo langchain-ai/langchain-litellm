@@ -1,3 +1,4 @@
+import importlib.util
 import inspect
 import json
 from collections.abc import Callable, Sequence
@@ -50,6 +51,12 @@ def _bridges_a_routed_name_its_model_map_calls_chat() -> bool:
 # the model map says of it. Earlier ones bridge only a name the map leaves unresolved.
 BRIDGES_EVERY_ROUTED_NAME = _bridges_a_routed_name_its_model_map_calls_chat()
 
+# litellm 1.110.2 and later list a chained call's stored input first, and drop the
+# instructions that repeat a system prompt stored there.
+DROPS_STORED_INSTRUCTIONS = (
+    importlib.util.find_spec("litellm.responses.stored_system_prompt") is not None
+)
+
 
 def serve_http(
     monkeypatch: pytest.MonkeyPatch,
@@ -66,10 +73,10 @@ def serve_http(
 
     def _reply(_: object, request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        # Gemini asks to stream in its URL rather than its body.
-        if json.loads(request.content).get("stream") or request.url.path.endswith(
-            ":streamGenerateContent"
-        ):
+        # A GET has no body to parse. Gemini asks to stream in its URL instead.
+        if (
+            request.content and json.loads(request.content).get("stream")
+        ) or request.url.path.endswith(":streamGenerateContent"):
             return httpx.Response(
                 200,
                 content=stream,

@@ -32,6 +32,7 @@ from langchain_core.messages import (
 from langchain_core.runnables import RunnableLambda
 from langchain_core.tools import Tool
 from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function
+from openai.types.responses import ResponseItemList
 from pydantic import BaseModel, ValidationError
 
 # first-party
@@ -49,6 +50,7 @@ from langchain_litellm.chat_models.litellm import (
 )
 from tests.utils import (
     BRIDGES_EVERY_ROUTED_NAME,
+    DROPS_STORED_INSTRUCTIONS,
     OPUS_4_7_THINKS_ADAPTIVELY,
     chat_completion_events,
     chat_completion_reply,
@@ -1009,6 +1011,38 @@ def test_use_previous_response_id_flag_off_keeps_history() -> None:
     assert chained_id is None
 
 
+def _chaining_llm(kind: str) -> ChatLiteLLM:
+    """A model, or a Router over one OpenAI deployment, that chains its calls."""
+    if kind == "model":
+        return ChatLiteLLM(
+            model="gpt-4o-mini", api_key="k", use_previous_response_id=True
+        )
+    return ChatLiteLLMRouter(
+        router=litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-mini",
+                    "litellm_params": {
+                        "model": "openai/responses/gpt-4o-mini",
+                        "api_key": "k",
+                    },
+                }
+            ]
+        ),
+        use_previous_response_id=True,
+    )
+
+
+def _posted_to_responses(requests: list[httpx.Request]) -> dict[str, Any]:
+    """The body of the one POST to the Responses API, beside any GET litellm sends."""
+    (posted,) = [
+        request
+        for request in requests
+        if request.method == "POST" and request.url.path.endswith("/responses")
+    ]
+    return json.loads(posted.content)
+
+
 @pytest.mark.parametrize("kind", ["model", "router"])
 @pytest.mark.parametrize(
     "system", [SystemMessage("Rules"), ChatMessage(role="system", content="Rules")]
@@ -1018,27 +1052,8 @@ def test_use_previous_response_id_resends_system_instructions(
 ) -> None:
     """The chained request carries the system message as instructions."""
     requests = serve_http(monkeypatch, responses_api_reply(message_item("Fine.")))
-    if kind == "model":
-        llm = ChatLiteLLM(
-            model="gpt-4o-mini", api_key="k", use_previous_response_id=True
-        )
-    else:
-        llm = ChatLiteLLMRouter(
-            router=litellm.Router(
-                model_list=[
-                    {
-                        "model_name": "gpt-4o-mini",
-                        "litellm_params": {
-                            "model": "openai/responses/gpt-4o-mini",
-                            "api_key": "k",
-                        },
-                    }
-                ]
-            ),
-            use_previous_response_id=True,
-        )
 
-    llm.invoke(
+    _chaining_llm(kind).invoke(
         [
             system,
             HumanMessage("Earlier"),
@@ -1047,8 +1062,63 @@ def test_use_previous_response_id_resends_system_instructions(
         ]
     )
 
-    payload = json.loads(requests[0].content)
+    payload = _posted_to_responses(requests)
     assert payload["instructions"] == "Rules"
+    assert payload["previous_response_id"] == "resp_previous"
+    assert [item["role"] for item in payload["input"]] == ["user"]
+
+
+@pytest.mark.skipif(
+    not DROPS_STORED_INSTRUCTIONS, reason="this litellm never lists a chain's input"
+)
+@pytest.mark.parametrize("kind", ["model", "router"])
+def test_use_previous_response_id_omits_a_system_prompt_the_chain_stored(
+    monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """The chained request repeats no system prompt the chain stored as input."""
+    stored = {
+        "object": "list",
+        "data": [
+            {
+                "id": "msg_1",
+                "type": "message",
+                "role": "system",
+                "content": [{"type": "input_text", "text": "Rules"}],
+            },
+            {
+                "id": "msg_2",
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Earlier"}],
+            },
+        ],
+        "first_id": "msg_1",
+        "last_id": "msg_2",
+        "has_more": False,
+    }
+    ResponseItemList.model_validate(stored)
+    requests: list[httpx.Request] = []
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json=stored, request=request)
+        body = responses_api_reply(message_item("Fine."))
+        return httpx.Response(200, json=body, request=request)
+
+    serve_requests(monkeypatch, reply)
+
+    _chaining_llm(kind).invoke(
+        [
+            SystemMessage("Rules"),
+            HumanMessage("Earlier"),
+            AIMessage("A", response_metadata={"id": "resp_previous"}),
+            HumanMessage("Now"),
+        ]
+    )
+
+    payload = _posted_to_responses(requests)
+    assert "instructions" not in payload
     assert payload["previous_response_id"] == "resp_previous"
     assert [item["role"] for item in payload["input"]] == ["user"]
 
